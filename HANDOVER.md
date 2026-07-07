@@ -1,6 +1,17 @@
 # Continuum — Session Handover
 
+**Current version:** v0.2.7-alpha
+
 Paste this whole block at the start of a new Perplexity Computer session to resume work seamlessly.
+
+---
+
+## Standing operating rules (project-wide, across all Torii repos)
+
+1. Each Torii app lives in a fully separate GitHub repo (`torii-quest`, `torii-continuum`, `torii-de`, `torii-base`, `torii-suite`); files carry ONLY that repo's project name — Continuum files say "continuum", Quest files say "quest", DE files say "de". Never cross-name.
+2. Bump the version on EVERY change without exception — including doc-only changes, comment tweaks, filename renames, and typo fixes. There is no "too small to bump" change.
+3. Push everything to GitHub immediately via a PR that lands on `main`. No local-only work.
+4. Never publish device names, hostnames, or local machine identifiers to GitHub (commits, PR titles, PR bodies, code, docs). Use generic terms like "your local machine".
 
 ---
 
