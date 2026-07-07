@@ -1,6 +1,6 @@
 # Continuum — Session Handover
 
-**Current version:** v0.2.8-alpha
+**Current version:** v0.2.9-alpha
 
 Paste this whole block at the start of a new Perplexity Computer session to resume work seamlessly.
 

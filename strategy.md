@@ -2,7 +2,7 @@
 
 Living document. This will change as we learn.
 
-Source-of-truth split: this file (`strategy.md`) owns Continuum's vision, core principles, decision rules, and architecture direction. `continuum-todo.md` owns the active task queue. `HANDOVER.md` and `README.md` are the developer entry points.
+Source-of-truth split: this file (`strategy.md`) owns Continuum's vision, core principles, decision rules, and architecture direction. `continuum-todo.md` owns the active task queue. `torii-continuum-handoff.md` and `README.md` are the developer entry points.
 
 Continuum is a **separate app** from Torii Quest. Quest is the game; Continuum is the sovereign dashboard, project engine, and personal AI layer. They share a Space Brain (Perplexity Space `Torii`) and a namespace (`torii-*`), but they are two repos, two versioning cadences, two live surfaces:
 

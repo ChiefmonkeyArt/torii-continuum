@@ -4,7 +4,7 @@
 
 > This file is the **active task list and source of truth for Torii Continuum**. Update it whenever Continuum tasks are added, changed, completed, removed, or reprioritised.
 
-> Continuum docs (this repo): `strategy.md`, `continuum-todo.md`, `HANDOVER.md`, `README.md`.
+> Continuum docs (this repo): `strategy.md`, `continuum-todo.md`, `torii-continuum-handoff.md`, `README.md`.
 > Quest tasks live in the `torii-quest` repo (`quest-todo.md`), not here. Do not merge queues.
 
 > Older reports (`torii-v-*.md`, Nostr Arena docs, legacy snapshots) that still live in the Quest repo are **archival only**. Do not use them as task queues.

@@ -259,7 +259,7 @@ or `ollama`) so the Console can surface which model actually answered.
 
 ---
 
-## 10. HTTP API reference (v0.2.8-alpha)
+## 10. HTTP API reference (v0.2.9-alpha)
 
 All endpoints under `/api/` except the auth pair are admin-gated. Send
 `Authorization: Bearer <session-token>` obtained from `/api/auth/verify`.
