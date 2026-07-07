@@ -1,6 +1,6 @@
-/** Dashboard — the existing continuum oversight surface, now an internal page.
+/** Dashboard — the Continuum project-oversight surface, now an internal page.
  *  Kept intentionally light: it summarises the projects you have and links
- *  to the full read-only Torii Quest dashboard already at continuum.pplx.app.
+ *  out to each sibling app's own dashboard.
  */
 import { h, clear, timeAgo } from './util.js';
 import { listProjects, milestonesFor, todosFor, sessionsFor } from '../data/store.js';
@@ -81,10 +81,10 @@ export function renderDashboard(mount) {
 
   mount.appendChild(h('div', { style: 'height: 16px' }));
 
-  // Link back to the read-only Torii-Quest static dashboard
+  // Link out to the sibling Torii Quest project (separate repo + app)
   mount.appendChild(h('div', { class: 'card' }, [
-    h('h3', { text: 'Torii Quest oversight (static)' }),
-    h('p', { class: 'muted', text: 'The read-only, build-time snapshot of Torii Quest — the original continuum surface, kept for release oversight.' }),
+    h('h3', { text: 'Torii Quest (sibling app)' }),
+    h('p', { class: 'muted', text: 'Torii Quest is a separate repo and app — the arena shooter. Its own build-time oversight dashboard lives on its own site.' }),
     h('a', { href: 'https://torii-quest.pplx.app', target: '_blank', rel: 'noopener noreferrer' }, ['Open torii-quest.pplx.app ↗']),
   ]));
 }

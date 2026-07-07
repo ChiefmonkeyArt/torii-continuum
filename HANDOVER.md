@@ -1,6 +1,6 @@
 # Continuum — Session Handover
 
-**Current version:** v0.2.7-alpha
+**Current version:** v0.2.8-alpha
 
 Paste this whole block at the start of a new Perplexity Computer session to resume work seamlessly.
 
@@ -135,8 +135,8 @@ cd /home/user/workspace/torii-continuum && \
 
 ## Related projects (for cross-linking)
 
-- `ChiefmonkeyArt/torii-quest` — the Three.js/Rapier arena shooter. Live at `quest-torii.pplx.app` (site_id `93507979-679f-4aac-949d-20a4a33d7352`).
-- `/home/user/workspace/torii-quest/src/engine/dashboard/continuumData.js` — legacy source of the bronze/amber aesthetic that was ported here.
+- `ChiefmonkeyArt/torii-quest` — the Three.js/Rapier arena shooter. Live at `torii-quest.pplx.app`. Separate repo, separate publish chain, separate release cadence.
+- `torii-quest`'s dashboard source module (renamed to `toriiQuestDashboardData.js` in Quest v0.2.351) — the legacy source of the bronze/amber aesthetic that was ported here.
 
 ## Space context
 

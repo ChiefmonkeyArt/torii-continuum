@@ -101,11 +101,11 @@ export function seedFiles() {
     projectSlug: slug, path, kind, size,
   });
   return [
-    f('torii-quest', 'src/engine/dashboard/continuumData.js', 'js', 62_400),
+    f('torii-quest', 'src/engine/dashboard/toriiQuestDashboardData.js', 'js', 62_400),
     f('torii-quest', 'src/world/zoneRuntime.js', 'js', 21_100),
     f('torii-quest', 'GATEWAY_PROTOCOL.md', 'md', 8_900),
     f('torii-quest', 'MVP_PLAYTEST_CHECKLIST.md', 'md', 12_300),
-    f('torii-quest', 'tools/build-continuum.mjs', 'mjs', 4_800),
+    f('torii-quest', 'tools/build-torii-quest-dashboard.mjs', 'mjs', 4_800),
 
     f('continuum', 'src/main.js', 'js', 1_800),
     f('continuum', 'src/data/schema.js', 'js', 1_900),
