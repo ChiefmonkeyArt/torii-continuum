@@ -158,7 +158,7 @@ cd /home/user/workspace/torii-continuum && \
 - Local-first + nostr from day one.
 - Optimize for efficiency, security, file size, and speed.
 - Terminology: never say "scrape/crawl"; prefer "collect/gather/read".
-- Uses ZorinOS + Comet on iMac; also has a Mac in `<devices>` for browser tasks.
+- Uses ZorinOS + Comet on their primary local machine; a secondary local machine is available in `<devices>` for browser tasks.
 
 ## Resume checklist for the new session
 

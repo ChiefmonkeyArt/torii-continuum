@@ -1,6 +1,6 @@
 {
   "name": "torii-continuum-agent",
-  "version": "0.2.9-alpha",
+  "version": "0.2.10-alpha",
   "description": "Torii Continuum agent daemon — sovereign personal AI + project engine. VPS-only in v1; NIP-07 login; Cashu-paid Routstr model layer; no key material on the box.",
   "type": "module",
   "private": true,

@@ -63,7 +63,7 @@ CONT-AGENT-1 is the current active slice. Later slices are named and reserved to
 
 Turn Continuum from a read-only mockup dashboard into a sovereign personal AI + project engine.
 
-- **VPS-only.** Linux and Mac clients come later as thin frontends. No iMac dependency in v1.
+- **VPS-only.** Linux and Mac clients come later as thin frontends. No local-machine dependency in v1.
 - **No key material on the VPS.** Signing lives in the browser via Plebeian Signer (NIP-07).
 - **No plaintext Nostr write path.** The `nostr.draft` skill only emits NIP-17 gift-wrapped envelopes. The plaintext code path is absent, not disabled.
 - **Model layer = Routstr.** OpenAI-compatible client paying per-request in Cashu against pinned providers. Per-skill model pinning; fallback ladder present but off by default.
