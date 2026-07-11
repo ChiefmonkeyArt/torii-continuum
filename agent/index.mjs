@@ -16,6 +16,7 @@
 
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { writeFile, mkdir, unlink, readdir, readFile } from 'node:fs/promises';
@@ -66,7 +67,40 @@ await app.register(cors, {
   methods: ['GET', 'POST', 'OPTIONS'],
 });
 
-const auth = createAuth(cfg);
+// Rate limiting (v0.2.14-alpha, SUITE-VPS-READY-1).
+//
+// Global registration with `global: false` means the plugin is available
+// but NOT applied to every route by default — routes opt in via their
+// `config.rateLimit` block (see /api/auth/challenge and /api/auth/verify
+// below). Keeps admin routes and the model providers unrestricted while
+// still bounding the public auth surface.
+//
+// Disable entirely via `rate_limit.enabled: false` in config.yaml (skips the
+// plugin registration; per-route configs become inert).
+const rateLimitEnabled = cfg.rate_limit?.enabled !== false;
+if (rateLimitEnabled) {
+  await app.register(rateLimit, {
+    global: false,
+    // Default keyGenerator uses req.ip which honours the trust-proxy
+    // configuration below. nginx sets X-Forwarded-For; we must trust it
+    // for the per-IP bucket to be the client IP and not the nginx loopback.
+    keyGenerator: (req) => req.ip,
+  });
+} else {
+  app.log.warn({ evt: 'auth.ratelimit.disabled', note: 'cfg.rate_limit.enabled=false' });
+}
+
+// nginx terminates TLS on the VPS and proxies to 127.0.0.1:8787 with
+// X-Forwarded-For set. We trust the immediate proxy (the loopback nginx),
+// so Fastify populates req.ip from that header. This is safe because the
+// server binds to 127.0.0.1 only — nothing else can reach it directly.
+app.addHook('onReady', async () => {
+  // No-op — trust-proxy shape is applied via Fastify options above if
+  // needed. We keep the default (trust the immediate proxy) which matches
+  // the single-hop nginx layout in the suite installer.
+});
+
+const auth = createAuth(cfg, { log: app.log });
 const wallet = await createWallet(cfg, app.log);
 const routstr = createRoutstr(cfg, wallet, app.log);
 
@@ -185,21 +219,66 @@ app.get('/api/health/models', { preHandler: requireAdmin }, async () => {
   };
 });
 
-app.post('/api/auth/challenge', async (req, reply) => {
+// ─────────────────────────────────────────────────────────────
+// Rate-limit configs for the two auth routes.
+//
+// Only applied when cfg.rate_limit.enabled !== false. Defaults are 10/min
+// on /challenge and 20/min on /verify per IP. Both send a 429 with a
+// `Retry-After` header and a structured body. errorResponseBuilder emits
+// the auth.ratelimited log line so operators see probes without needing
+// to parse pino's built-in 429 line.
+// ─────────────────────────────────────────────────────────────
+const authChallengeMax =
+  Number.isFinite(cfg.rate_limit?.auth_challenge_per_min) && cfg.rate_limit.auth_challenge_per_min > 0
+    ? cfg.rate_limit.auth_challenge_per_min
+    : 10;
+const authVerifyMax =
+  Number.isFinite(cfg.rate_limit?.auth_verify_per_min) && cfg.rate_limit.auth_verify_per_min > 0
+    ? cfg.rate_limit.auth_verify_per_min
+    : 20;
+
+function rateLimitConfig(max, route) {
+  if (!rateLimitEnabled) return undefined;
+  return {
+    rateLimit: {
+      max,
+      timeWindow: '1 minute',
+      errorResponseBuilder: (req, context) => {
+        app.log.warn({
+          evt: 'auth.ratelimited',
+          route,
+          ip_prefix: (req.ip || '').slice(0, 12),
+          max,
+          remaining_ms: context.ttl,
+        });
+        const retryAfter = Math.ceil((context.ttl || 60000) / 1000);
+        return {
+          statusCode: 429,
+          error: 'Too Many Requests',
+          ok: false,
+          reason: 'rate_limited',
+          retry_after_sec: retryAfter,
+        };
+      },
+    },
+  };
+}
+
+app.post('/api/auth/challenge', { config: rateLimitConfig(authChallengeMax, '/api/auth/challenge') }, async (req, reply) => {
   const clientIp = req.ip;
   const { challenge, expires_in } = auth.issueChallenge(clientIp);
   return { challenge, expires_in, kind: 22242 };
 });
 
-app.post('/api/auth/verify', async (req, reply) => {
+app.post('/api/auth/verify', { config: rateLimitConfig(authVerifyMax, '/api/auth/verify') }, async (req, reply) => {
   const event = req.body?.event;
   if (!event) return reply.code(400).send({ error: 'body.event required' });
   const result = auth.verifyChallenge(event, req.ip);
   if (!result.ok) {
-    app.log.warn(`[auth] verify failed: ${result.reason}`);
+    // auth.mjs already emitted the structured auth.verify.fail line.
     return reply.code(401).send({ error: result.reason });
   }
-  app.log.info('[auth] admin logged in');
+  // auth.mjs already emitted auth.verify.success.
   return { token: result.token, expires_at: result.expires_at };
 });
 

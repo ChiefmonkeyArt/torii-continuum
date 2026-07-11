@@ -84,6 +84,15 @@ export function loadConfig(path) {
   cfg.logging.cost_log ??= 'memory/costs.jsonl';
   cfg.logging.audit_log ??= 'memory/audit.jsonl';
 
+  // Rate-limit defaults (v0.2.14-alpha, SUITE-VPS-READY-1). Absent block =
+  // enabled with sensible defaults. Existing v0.5.0-alpha installs get these
+  // without any config file edits.
+  cfg.rate_limit ??= {};
+  cfg.rate_limit.enabled ??= true;
+  cfg.rate_limit.auth_challenge_per_min ??= 10;
+  cfg.rate_limit.auth_verify_per_min ??= 20;
+  cfg.rate_limit.max_challenges ??= 1000;
+
   return Object.freeze(cfg);
 }
 

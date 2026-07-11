@@ -285,3 +285,40 @@ logging:
   # Session log (auth events only — challenge issued, verify pass/fail, token exchange).
   # No PII, no message bodies.
   audit_log: "memory/audit.jsonl"
+
+
+# ─────────────────────────────────────────────────────────────
+# Rate limit (v0.2.14-alpha — SUITE-VPS-READY-1)
+# ─────────────────────────────────────────────────────────────
+#
+# Public auth surface is behind @fastify/rate-limit per IP. Defaults are
+# generous enough that legitimate sign-in (1 challenge + 1 verify) never
+# trips them, and tight enough to make a signature-verify flood cost the
+# attacker CPU-they-don't-have.
+#
+# Log lines (all prefixed `[auth]`, one JSON per line):
+#   auth.challenge.issued     ip_prefix, challenge_prefix, pending
+#   auth.challenge.evicted    count, remaining, max
+#   auth.verify.success       ip_prefix, pubkey_prefix
+#   auth.verify.fail          ip_prefix, reason (expired|notfound|badsig|notadmin|malformed_event|wrong_kind)
+#   auth.ratelimited          ip_prefix, route, max, remaining_ms
+#
+# Setting enabled: false disables the plugin entirely (dev/localhost only).
+#
+rate_limit:
+  enabled: true
+
+  # Max requests per minute per IP for POST /api/auth/challenge.
+  # 10/min = one legitimate sign-in every 6 seconds. Anything above is a bot.
+  auth_challenge_per_min: 10
+
+  # Max requests per minute per IP for POST /api/auth/verify.
+  # 20/min = slightly higher than /challenge because retries + clock skew
+  # can add a few even in a legitimate flow.
+  auth_verify_per_min: 20
+
+  # Hard ceiling on the pending challenges Map (belt-and-braces alongside
+  # the rate limiter). If size would exceed this, oldest challenges by
+  # expiresAt are evicted before insertion. 1000 covers ~3 challenges/sec
+  # sustained at the 5-min TTL before eviction becomes lossy.
+  max_challenges: 1000

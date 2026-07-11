@@ -23,6 +23,16 @@
  * We deliberately do NOT store session state server-side. Tokens are
  * self-verifying HMAC tokens (like JWT-but-simpler). Revoke by rotating
  * session_secret.
+ *
+ * Hardening (v0.2.14-alpha, SUITE-VPS-READY-1):
+ *   - The challenges Map is bounded by cfg.rate_limit.max_challenges (default
+ *     1000). If size would exceed the cap, the oldest entries by expiresAt
+ *     are evicted before insertion. Belt-and-braces alongside
+ *     @fastify/rate-limit — even a misconfigured limiter cannot OOM the
+ *     process by flooding /api/auth/challenge.
+ *   - Every auth event emits a single-line JSON record prefixed `[auth]`
+ *     via the pino logger. Prefix-only for pubkeys/challenges/IPs; never the
+ *     full value. See README §rate-limit for the taxonomy.
  */
 
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -31,13 +41,35 @@ import { nip19 } from 'nostr-tools';
 
 const CHALLENGE_TTL_SEC = 5 * 60;
 const CHALLENGE_KIND = 22242;
+const DEFAULT_MAX_CHALLENGES = 1000;
+
+// Prefix helpers — never log full pubkeys, full challenges, or full IPs.
+function prefix(str, n = 8) {
+  if (typeof str !== 'string' || !str) return '';
+  return str.slice(0, n);
+}
 
 /**
  * @param {object} cfg  frozen loadConfig() result
- * @param {object} deps optional deps for testing: { now }
+ * @param {object} deps optional deps for testing: { now, log }
  */
 export function createAuth(cfg, deps = {}) {
   const now = deps.now || (() => Math.floor(Date.now() / 1000));
+  // Logger indirection — tests pass their own; index.mjs passes app.log.
+  // Falls back to a console-based shim so unit-style usage without a
+  // Fastify app still emits the JSON lines.
+  const log =
+    deps.log ||
+    {
+      info: (o) => console.log(`[auth] ${typeof o === 'string' ? o : JSON.stringify(o)}`),
+      warn: (o) => console.warn(`[auth] ${typeof o === 'string' ? o : JSON.stringify(o)}`),
+      error: (o) => console.error(`[auth] ${typeof o === 'string' ? o : JSON.stringify(o)}`),
+    };
+  const maxChallenges =
+    Number.isFinite(cfg?.rate_limit?.max_challenges) && cfg.rate_limit.max_challenges > 0
+      ? cfg.rate_limit.max_challenges
+      : DEFAULT_MAX_CHALLENGES;
+
   const challenges = new Map(); // challenge → { expiresAt, ip }
 
   // Decode admin npub to hex once at boot.
@@ -47,6 +79,7 @@ export function createAuth(cfg, deps = {}) {
     if (decoded.type !== 'npub') throw new Error('not an npub');
     adminHex = decoded.data;
   } catch (e) {
+    // Boot-time failure: use console.error (logger may not exist yet in some code paths).
     console.error(`[auth] admin_npub decode failed: ${e.message}`);
     process.exit(1);
   }
@@ -58,10 +91,48 @@ export function createAuth(cfg, deps = {}) {
     }
   }
 
+  /**
+   * Enforce the MAX_CHALLENGES ceiling. Called from issueChallenge()
+   * BEFORE the new entry is inserted. Evicts oldest-by-expiresAt until the
+   * map has room. Emits one `auth.challenge.evicted` line per call if
+   * anything was evicted.
+   */
+  function enforceCap() {
+    if (challenges.size < maxChallenges) return;
+    // Collect entries sorted by expiresAt ascending (oldest first). We do NOT
+    // rely on insertion order because gc() may have deleted middle entries.
+    const entries = [];
+    for (const [k, v] of challenges) entries.push({ k, exp: v.expiresAt });
+    entries.sort((a, b) => a.exp - b.exp);
+    // Evict enough to leave room for one new insert.
+    let evicted = 0;
+    const target = maxChallenges - 1;
+    for (const e of entries) {
+      if (challenges.size <= target) break;
+      challenges.delete(e.k);
+      evicted++;
+    }
+    if (evicted > 0) {
+      log.warn({
+        evt: 'auth.challenge.evicted',
+        count: evicted,
+        remaining: challenges.size,
+        max: maxChallenges,
+      });
+    }
+  }
+
   function issueChallenge(clientIp) {
     gc();
+    enforceCap();
     const challenge = randomBytes(24).toString('hex');
     challenges.set(challenge, { expiresAt: now() + CHALLENGE_TTL_SEC, ip: clientIp });
+    log.info({
+      evt: 'auth.challenge.issued',
+      ip_prefix: prefix(clientIp || '', 12),
+      challenge_prefix: prefix(challenge),
+      pending: challenges.size,
+    });
     return { challenge, expires_in: CHALLENGE_TTL_SEC };
   }
 
@@ -69,19 +140,50 @@ export function createAuth(cfg, deps = {}) {
    * @returns { ok: true, token, expiresAt } | { ok: false, reason }
    */
   function verifyChallenge(event, clientIp) {
-    if (!event || typeof event !== 'object') return { ok: false, reason: 'no event' };
-    if (event.kind !== CHALLENGE_KIND) return { ok: false, reason: 'wrong kind (expected 22242)' };
-    if (event.pubkey !== adminHex) return { ok: false, reason: 'pubkey is not admin npub' };
+    if (!event || typeof event !== 'object') {
+      log.warn({ evt: 'auth.verify.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'malformed_event' });
+      return { ok: false, reason: 'no event' };
+    }
+    if (event.kind !== CHALLENGE_KIND) {
+      log.warn({ evt: 'auth.verify.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'wrong_kind' });
+      return { ok: false, reason: 'wrong kind (expected 22242)' };
+    }
+    if (event.pubkey !== adminHex) {
+      log.warn({
+        evt: 'auth.verify.fail',
+        ip_prefix: prefix(clientIp || '', 12),
+        pubkey_prefix: prefix(event.pubkey || ''),
+        reason: 'notadmin',
+      });
+      return { ok: false, reason: 'pubkey is not admin npub' };
+    }
 
     // Find the challenge tag
     const tag = (event.tags || []).find((t) => Array.isArray(t) && t[0] === 'challenge');
-    if (!tag || !tag[1]) return { ok: false, reason: 'missing challenge tag' };
+    if (!tag || !tag[1]) {
+      log.warn({ evt: 'auth.verify.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'malformed_event' });
+      return { ok: false, reason: 'missing challenge tag' };
+    }
     const challenge = tag[1];
 
     const entry = challenges.get(challenge);
-    if (!entry) return { ok: false, reason: 'unknown or expired challenge' };
+    if (!entry) {
+      log.warn({
+        evt: 'auth.verify.fail',
+        ip_prefix: prefix(clientIp || '', 12),
+        challenge_prefix: prefix(challenge),
+        reason: 'notfound',
+      });
+      return { ok: false, reason: 'unknown or expired challenge' };
+    }
     if (entry.expiresAt < now()) {
       challenges.delete(challenge);
+      log.warn({
+        evt: 'auth.verify.fail',
+        ip_prefix: prefix(clientIp || '', 12),
+        challenge_prefix: prefix(challenge),
+        reason: 'expired',
+      });
       return { ok: false, reason: 'expired challenge' };
     }
     if (entry.ip && clientIp && entry.ip !== clientIp) {
@@ -91,6 +193,12 @@ export function createAuth(cfg, deps = {}) {
 
     // Verify event content also carries the same challenge (defence-in-depth).
     if (event.content && event.content !== challenge) {
+      log.warn({
+        evt: 'auth.verify.fail',
+        ip_prefix: prefix(clientIp || '', 12),
+        challenge_prefix: prefix(challenge),
+        reason: 'malformed_event',
+      });
       return { ok: false, reason: 'content/tag mismatch' };
     }
 
@@ -98,15 +206,43 @@ export function createAuth(cfg, deps = {}) {
     let sigOk = false;
     try {
       const computedId = getEventHash(event);
-      if (computedId !== event.id) return { ok: false, reason: 'id mismatch' };
+      if (computedId !== event.id) {
+        log.warn({
+          evt: 'auth.verify.fail',
+          ip_prefix: prefix(clientIp || '', 12),
+          challenge_prefix: prefix(challenge),
+          reason: 'malformed_event',
+        });
+        return { ok: false, reason: 'id mismatch' };
+      }
       sigOk = verifyEvent(event);
     } catch (e) {
+      log.warn({
+        evt: 'auth.verify.fail',
+        ip_prefix: prefix(clientIp || '', 12),
+        challenge_prefix: prefix(challenge),
+        reason: 'badsig',
+      });
       return { ok: false, reason: `sig verify threw: ${e.message}` };
     }
-    if (!sigOk) return { ok: false, reason: 'bad signature' };
+    if (!sigOk) {
+      log.warn({
+        evt: 'auth.verify.fail',
+        ip_prefix: prefix(clientIp || '', 12),
+        challenge_prefix: prefix(challenge),
+        reason: 'badsig',
+      });
+      return { ok: false, reason: 'bad signature' };
+    }
 
     // All checks passed. Consume the challenge.
     challenges.delete(challenge);
+
+    log.info({
+      evt: 'auth.verify.success',
+      ip_prefix: prefix(clientIp || '', 12),
+      pubkey_prefix: prefix(event.pubkey),
+    });
 
     const token = issueSessionToken();
     return { ok: true, token: token.token, expires_at: token.expiresAt };
@@ -153,5 +289,7 @@ export function createAuth(cfg, deps = {}) {
     verifyChallenge,
     verifySessionToken,
     _adminHex: adminHex, // exposed for tests
+    _challenges: challenges, // exposed for tests (read-only usage)
+    _maxChallenges: maxChallenges, // exposed for tests
   };
 }

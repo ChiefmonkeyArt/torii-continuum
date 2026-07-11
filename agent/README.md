@@ -259,15 +259,41 @@ or `ollama`) so the Console can surface which model actually answered.
 
 ---
 
-## 10. HTTP API reference (v0.2.13-alpha)
+## 10. HTTP API reference (v0.2.14-alpha)
 
 All endpoints under `/api/` except the auth pair are admin-gated. Send
 `Authorization: Bearer <session-token>` obtained from `/api/auth/verify`.
 
 **Public:**
 - `GET /api/health`
-- `POST /api/auth/challenge`
-- `POST /api/auth/verify`
+- `POST /api/auth/challenge` — rate-limited (default 10 req/min/IP)
+- `POST /api/auth/verify` — rate-limited (default 20 req/min/IP)
+
+Rate limits are per client IP (nginx passes `X-Forwarded-For` to the
+loopback-bound agent). Tune or disable in `config.yaml` §`rate_limit`:
+```yaml
+rate_limit:
+  enabled: true              # false to skip the plugin entirely (dev only)
+  auth_challenge_per_min: 10
+  auth_verify_per_min: 20
+  max_challenges: 1000       # hard cap on pending challenges Map
+```
+
+429 response shape:
+```json
+{ "statusCode": 429, "error": "Too Many Requests",
+  "ok": false, "reason": "rate_limited", "retry_after_sec": 60 }
+```
+The response also carries a `Retry-After` header.
+
+Structured `[auth]` log lines (one JSON per line, in `journalctl -u torii-continuum-agent.service`):
+- `auth.challenge.issued` — `ip_prefix`, `challenge_prefix`, `pending`
+- `auth.challenge.evicted` — `count`, `remaining`, `max` (fires when the challenges Map overflows)
+- `auth.verify.success` — `ip_prefix`, `pubkey_prefix`
+- `auth.verify.fail` — `ip_prefix`, `reason` (`expired` / `notfound` / `badsig` / `notadmin` / `malformed_event` / `wrong_kind`)
+- `auth.ratelimited` — `ip_prefix`, `route`, `max`, `remaining_ms`
+
+Only prefixes are logged; never full pubkeys, full challenges, or full IPs.
 
 **Wallet + chat (admin):**
 - `GET /api/wallet/balance`

@@ -1,10 +1,10 @@
 # Continuum — Session Handover
 
-**Current version:** v0.2.13-alpha
+**Current version:** v0.2.14-alpha
 
 Paste this whole block at the start of a new Perplexity Computer session to resume work seamlessly.
 
-**Active focus:** Base-path awareness + Ollama fallback landed in v0.2.6. Docs hygiene sweep across v0.2.7 → v0.2.12. **v0.2.13 shipped CONT-HEALTH-1**: dashboard now has a live Provider card polling `/api/health/models` every 20s (Routstr enabled state + Ollama reachable/unreachable/disabled). Bonus fix: `/api/health*` responses now derive version from `agent/package.json` at boot instead of a hardcoded string. Next code slice: **real Cashu wallet health probe** — `torii doctor` today only pings the mint URL; we want a signed wallet-info call so it verifies the mint's public key and reports actual balance. Would land as a new row in the same Provider card (Wallet: Live · X sats · mint verified) and a new `/api/health/wallet` endpoint.
+**Active focus:** Base-path awareness + Ollama fallback landed in v0.2.6. Docs hygiene sweep across v0.2.7 → v0.2.12. **v0.2.13 shipped CONT-HEALTH-1**: dashboard now has a live Provider card polling `/api/health/models` every 20s (Routstr enabled state + Ollama reachable/unreachable/disabled). **v0.2.14 shipped SUITE-VPS-READY-1 rate-limit slice** — the public auth surface is now behind `@fastify/rate-limit@9` per-IP (defaults 10 challenge/min, 20 verify/min) with 429 + `Retry-After`; the in-memory challenges Map is capped at `max_challenges` (default 1000) with LRU-by-expiry eviction and structured `[auth]` JSON logs (`auth.challenge.issued|evicted`, `auth.verify.success|fail`, `auth.ratelimited`). All prefix-only, never full pubkeys/challenges/IPs. Config knobs live under `rate_limit:` in `agent/config.example.yaml`. Next code slice: **real Cashu wallet health probe (CONT-HEALTH-2)** — `torii doctor` today only pings the mint URL; we want a signed wallet-info call so it verifies the mint's public key and reports actual balance. Would land as a new row in the same Provider card (Wallet: Live · X sats · mint verified) and a new `/api/health/wallet` endpoint.
 
 ---
 
@@ -129,7 +129,8 @@ cd /home/user/workspace/torii-continuum && \
 - Branch: `main`
 - Remote: `https://git-agent-proxy.perplexity.ai/ChiefmonkeyArt/torii-continuum.git`
 - Recent commits (top of `main`):
-  - `<pending>` release: v0.2.13-alpha — CONT-HEALTH-1 dashboard provider card (#9)
+  - v0.2.13-alpha released — CONT-HEALTH-1 dashboard provider card (#9)
+  - `<pending>` release: v0.2.14-alpha — SUITE-VPS-READY-1 rate-limit slice (rate-limit auth surface + bounded challenges Map + structured [auth] logs)
   - `043ad7c` release: v0.2.12-alpha — finish Space-scoped file naming migration (#8)
   - `8ceb3cd` release: v0.2.11-alpha — refresh torii-continuum-handoff.md (#7)
   - `13f1769` release: v0.2.10-alpha — scrub local-machine class mentions from docs (#6)
