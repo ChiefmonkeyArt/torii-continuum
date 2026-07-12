@@ -119,3 +119,21 @@ See `torii-continuum-v0.2.0-cont-agent-1-report.md` for the full slice narration
 - Amber/gold torii favicon on warm bronze tile.
 - Bronze/amber aesthetic to match continuum.pplx.app.
 - Continuum app builder MVP.
+
+---
+
+## v0.2.15-alpha - Onboarding preview v0.1.0 landed
+
+Five-panel graphic-novel onboarding sequence added under
+`preview-assets/onboarding-v0.1.0/`. Painterly backdrops, live
+Three.js Chiefmonkey render with per-step camera framing and
+animation cross-fade, frosted-glass bottom-sheet on mobile.
+
+Self-hosted Draco decoder at `three-libs/draco/` (756 KB) so the
+character render has zero third-party runtime CDN dependency.
+
+Tarball + sha256 attached under `preview-assets/releases/` for scp
+deploy to chiefmonkey.art:/var/www/torii/continuum/onboarding-preview/.
+
+Design review only - not built into the production app. Real
+integration lands in v0.9.0-alpha.
