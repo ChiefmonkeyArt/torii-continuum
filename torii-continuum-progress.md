@@ -9,6 +9,30 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.19-alpha - onboarding preview v0.1.5-preview (opaque materials fix)
+
+Root cause found for the 19/19 flagged clips. Chiefmonkey6.glb ships with
+`alphaMode:BLEND` on the skinned meshes. Torii Quest patches this on load
+(`src/napNpc.js` v0.2.111): sets `transparent=false`, `depthWrite=true`,
+`alphaTest=0` and `frustumCulled=false`. Without those overrides, the
+transparent pipeline draws faces out of order and the mesh appears to
+disintegrate - which is exactly what the operator saw on every clip.
+
+The v0.1.4 inspector didn't have this patch. v0.1.5 adopts the exact same
+block from `napNpc.js`. Character now renders opaque and intact across all
+clips.
+
+Onboarding preview `VERSION` bumped to `0.1.5-preview`. Tarball at
+`preview-assets/releases/torii-continuum-onboarding-preview-v0.1.5.tar.gz`
+(sha256 `b3e3a084ef6630bab5199acfec0bb8d688b789eb9309a9388ef30cba84e6ce12`).
+
+QA: Playwright at 1440x900, Hit_Reaction_to_Waist clip - character renders
+whole, no arm shredding, no floating cuffs, tail visible, hands connect to
+wrists.
+
+Next: operator re-audits the 19 clips against the corrected renderer to see
+which (if any) clips still have real animation issues vs. the material bug.
+
 ## v0.2.18-alpha - onboarding preview v0.1.4-preview (clip inspector)
 
 New `/inspect/` diagnostic page for auditing all 19 GLB animation clips one by
