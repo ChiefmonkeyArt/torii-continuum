@@ -9,6 +9,20 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.20-alpha - onboarding preview v0.1.6-preview (main page opaque fix)
+
+v0.1.5 patched only `/inspect/inspector.js`. Operator confirmed the main
+`/onboarding-preview/` page still showed the broken character - that page
+uses `character.js`, which had the same missing opaque-material patch.
+
+Same 4-line fix now applied there:
+- `material.transparent = false`
+- `material.depthWrite = true`
+- `material.alphaTest = 0`
+- `mesh.frustumCulled = false`
+
+VERSION 0.1.6-preview. sha256 09457399e0ea040390ebc9c73a877a50f0b856674ff10f933bdcb501b5a1f93a.
+
 ## v0.2.19-alpha - onboarding preview v0.1.5-preview (opaque materials fix)
 
 Root cause found for the 19/19 flagged clips. Chiefmonkey6.glb ships with

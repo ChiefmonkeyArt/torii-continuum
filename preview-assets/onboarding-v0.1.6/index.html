@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>continuum · onboarding</title>
+  <!-- Fontshare CDN: dev-time only, acceptable per standing rule for local mockups.
+       TODO before shipped Continuum: self-host these three font families (Cabinet Grotesk,
+       Satoshi, JetBrains Mono) to remove this third-party CDN dependency in production. -->
+  <link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@500,700&f[]=satoshi@400,500,700&f[]=jetbrains-mono@400,500&display=swap">
+  <link rel="stylesheet" href="./shared.css">
+  <!-- Desktop-only gate: onboarding sets up a self-hosted Torii + configures a
+       desktop-only game, so a small-screen or coarse-pointer experience is
+       intentionally blocked. This runs BEFORE any scripts to avoid loading
+       Three.js / GLB on mobile at all. -->
+  <script>
+    (function () {
+      var narrow = window.matchMedia('(max-width: 899px)').matches;
+      var coarse = window.matchMedia('(pointer: coarse)').matches;
+      if (narrow || coarse) {
+        document.documentElement.setAttribute('data-desktop-only', 'blocked');
+      }
+    })();
+  </script>
+</head>
+<body>
+  <!-- Desktop-only splash. Shown when [data-desktop-only="blocked"] is set
+       on <html>. Everything else on the page is display:none in that state. -->
+  <div class="desktop-only-gate" role="alertdialog" aria-labelledby="dogTitle">
+    <div class="desktop-only-inner">
+      <div class="desktop-only-brand">continuum<span class="dot">.</span></div>
+      <h1 id="dogTitle" class="desktop-only-title">Continuum onboarding is desktop-only.</h1>
+      <p class="desktop-only-lede">Setting up your Torii and stepping into the world both need a keyboard and a bigger screen. Open this link on a laptop or desktop to begin.</p>
+      <div class="desktop-only-url">chiefmonkey.art/onboarding-preview</div>
+      <p class="desktop-only-footnote">Once you're set up, the day-to-day console will work on any device.</p>
+    </div>
+  </div>
+  <!-- Backdrop layer: five scenes cross-fade -->
+  <div class="stage" id="stage">
+    <div class="scene scene-1 active" style="background-image:url('./scenes/01-approach.png')"></div>
+    <div class="scene scene-2" style="background-image:url('./scenes/02-preparation.png')"></div>
+    <div class="scene scene-3" style="background-image:url('./scenes/03-connection.png')"></div>
+    <div class="scene scene-4" style="background-image:url('./scenes/04-introduction.png')"></div>
+    <div class="scene scene-5" style="background-image:url('./scenes/05-departure.png')"></div>
+    <div class="scene-tint"></div>
+    <div class="vignette"></div>
+    <!-- Chiefmonkey: live Three.js render, positioned as per step -->
+    <canvas id="character" aria-hidden="true"></canvas>
+  </div>
+
+  <!-- Top bar: brand + step dots + skip -->
+  <header class="top-bar">
+    <div class="brand">continuum<span class="dot">.</span></div>
+    <nav class="step-dots" role="tablist" aria-label="Onboarding progress">
+      <button class="step-dot active" data-step="1" aria-current="step" aria-label="Step 1 of 5">
+        <span class="step-dot-num">1</span>
+        <span class="step-dot-label">Verify</span>
+      </button>
+      <button class="step-dot" data-step="2" aria-label="Step 2 of 5">
+        <span class="step-dot-num">2</span>
+        <span class="step-dot-label">Wallet</span>
+      </button>
+      <button class="step-dot" data-step="3" aria-label="Step 3 of 5">
+        <span class="step-dot-num">3</span>
+        <span class="step-dot-label">Routstr</span>
+      </button>
+      <button class="step-dot" data-step="4" aria-label="Step 4 of 5">
+        <span class="step-dot-num">4</span>
+        <span class="step-dot-label">Welcome</span>
+      </button>
+      <button class="step-dot" data-step="5" aria-label="Step 5 of 5">
+        <span class="step-dot-num">5</span>
+        <span class="step-dot-label">Recovery kit</span>
+      </button>
+    </nav>
+    <button class="skip-btn" id="skipBtn">Skip &rsaquo;</button>
+  </header>
+
+  <!-- Panel deck: five panels, current one visible, others staged -->
+  <section class="panel-deck" id="panelDeck">
+    <!-- ═══════════════════════════ STEP 1 ═══════════════════════════ -->
+    <article class="panel panel-current" data-panel="1">
+      <div class="panel-eyebrow">Step 1 · Verify</div>
+      <h1 class="panel-title">Prove you're the operator.</h1>
+      <p class="panel-lede">This Torii belongs to whoever holds the admin npub. Sign a one-time challenge with your Nostr signer to unlock the console.</p>
+      <div class="panel-target">
+        <div class="target-label">Admin npub for chiefmonkey.art</div>
+        <div class="target-value">
+          <span class="npub-mono">npub1a3um269aaf3u5cy37kuykrrrnsg2pyv7za06pxjduv25lq5sdujs2qmdj6</span>
+        </div>
+      </div>
+      <div class="panel-actions">
+        <button class="btn-primary" data-advance>
+          <span>Sign with Plebeian</span>
+          <span class="arrow">&rarr;</span>
+        </button>
+        <button class="btn-ghost">Use a different signer</button>
+      </div>
+      <p class="panel-footnote">Your keys never leave your device. We only see the signature.</p>
+    </article>
+
+    <!-- ═══════════════════════════ STEP 2 ═══════════════════════════ -->
+    <article class="panel" data-panel="2">
+      <div class="panel-eyebrow">Step 2 · Wallet</div>
+      <h1 class="panel-title">Connect a Lightning wallet.</h1>
+      <p class="panel-lede">Your wallet powers everything downstream — Routstr, marketplace, project funding, tips. Choose one path to get moving.</p>
+      <div class="wallet-choices">
+        <label class="choice-card" data-selected>
+          <input type="radio" name="wallet" value="nwc" checked />
+          <div class="choice-icon">&#9889;</div>
+          <div class="choice-body">
+            <div class="choice-title">Paste NWC string</div>
+            <div class="choice-hint">Nostr Wallet Connect — Alby, Mutiny, Zeus, any NWC-compatible wallet</div>
+          </div>
+        </label>
+        <label class="choice-card">
+          <input type="radio" name="wallet" value="lnbits" />
+          <div class="choice-icon">&#128274;</div>
+          <div class="choice-body">
+            <div class="choice-title">Import LNbits admin key</div>
+            <div class="choice-hint">Self-hosted or LNbits.com — full custody, admin-level access</div>
+          </div>
+        </label>
+        <label class="choice-card">
+          <input type="radio" name="wallet" value="local" />
+          <div class="choice-icon">&#127968;</div>
+          <div class="choice-body">
+            <div class="choice-title">Spin up a local wallet</div>
+            <div class="choice-hint">We provision a wallet on your Torii — no external service, funds live here</div>
+          </div>
+        </label>
+      </div>
+      <div class="panel-actions">
+        <button class="btn-primary" data-advance>
+          <span>Connect wallet</span>
+          <span class="arrow">&rarr;</span>
+        </button>
+      </div>
+      <p class="panel-footnote">You can change or add wallets later from admin. This one is your default.</p>
+    </article>
+
+    <!-- ═══════════════════════════ STEP 3 ═══════════════════════════ -->
+    <article class="panel" data-panel="3">
+      <div class="panel-eyebrow">Step 3 · Routstr</div>
+      <h1 class="panel-title">Plug into the network of minds.</h1>
+      <p class="panel-lede">Routstr routes your prompts to the best model for each task — GPT, Claude, Llama, whichever suits. Paid per token. Your wallet pays.</p>
+      <div class="wallet-choices">
+        <label class="choice-card" data-selected>
+          <input type="radio" name="routstr" value="key" checked />
+          <div class="choice-icon">&#128273;</div>
+          <div class="choice-body">
+            <div class="choice-title">Paste your Routstr key</div>
+            <div class="choice-hint">Already have one? Paste it in. We connect and stream a &pound;0.001 test prompt.</div>
+          </div>
+        </label>
+        <label class="choice-card">
+          <input type="radio" name="routstr" value="pick" />
+          <div class="choice-icon">&#127916;</div>
+          <div class="choice-body">
+            <div class="choice-title">Pick a default model</div>
+            <div class="choice-hint">Choose GPT-5.5, Claude Opus, Gemini 3 Pro, or a Llama fallback. We provision a key.</div>
+          </div>
+        </label>
+        <label class="choice-card">
+          <input type="radio" name="routstr" value="local" />
+          <div class="choice-icon">&#128421;</div>
+          <div class="choice-body">
+            <div class="choice-title">Local Ollama only</div>
+            <div class="choice-hint">Use only your own Ollama instance. Free, private, slower. Route to network later.</div>
+          </div>
+        </label>
+      </div>
+      <div class="panel-actions">
+        <button class="btn-primary" data-advance>
+          <span>Connect to Routstr</span>
+          <span class="arrow">&rarr;</span>
+        </button>
+      </div>
+      <p class="panel-footnote">Your wallet approves each session. Set a budget cap in admin later.</p>
+    </article>
+
+    <!-- ═══════════════════════════ STEP 4 ═══════════════════════════ -->
+    <article class="panel" data-panel="4">
+      <div class="panel-eyebrow">Step 4 · Welcome</div>
+      <h1 class="panel-title panel-title-quote">"I'm Chiefmonkey. Welcome home, operator."</h1>
+      <p class="panel-lede">Your Torii is yours. Your gateway is open. Before you step through — one question, so your first screen already has something on it.</p>
+      <div class="welcome-field">
+        <label class="welcome-label" for="firstBuild">What do you want to build first?</label>
+        <input
+          class="welcome-input"
+          id="firstBuild"
+          type="text"
+          placeholder="A bot that trades bitcoin news headlines&hellip;"
+          autocomplete="off"
+          spellcheck="false" />
+        <div class="welcome-hint">This becomes your first project card. You can rename or delete it any time.</div>
+      </div>
+      <div class="panel-actions">
+        <button class="btn-primary" data-advance>
+          <span>Seed this project</span>
+          <span class="arrow">&rarr;</span>
+        </button>
+        <button class="btn-ghost" data-advance>Skip — I'll start blank</button>
+      </div>
+    </article>
+
+    <!-- ═══════════════════════════ STEP 5 ═══════════════════════════ -->
+    <article class="panel" data-panel="5">
+      <div class="panel-eyebrow">Step 5 · Recovery kit</div>
+      <h1 class="panel-title">Take your keys. Then step through.</h1>
+      <p class="panel-lede">A one-page bundle of everything that makes this Torii yours. Save it somewhere only you can reach.</p>
+      <div class="kit-preview">
+        <div class="kit-row">
+          <span class="kit-key">Admin npub</span>
+          <span class="kit-val">npub1a3um269&hellip;5sdujs2qmdj6</span>
+        </div>
+        <div class="kit-row">
+          <span class="kit-key">NWC endpoint</span>
+          <span class="kit-val">nostr+walletconnect://&hellip;</span>
+        </div>
+        <div class="kit-row">
+          <span class="kit-key">Routstr key</span>
+          <span class="kit-val">rst_&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;7a3f</span>
+        </div>
+        <div class="kit-row">
+          <span class="kit-key">Homepage</span>
+          <span class="kit-val">chiefmonkey.art &rarr; Quest</span>
+        </div>
+        <div class="kit-row">
+          <span class="kit-key">Continuum URL</span>
+          <span class="kit-val">chiefmonkey.art/continuum</span>
+        </div>
+      </div>
+      <div class="panel-actions kit-actions">
+        <button class="btn-primary" data-advance>
+          <span>Download recovery kit</span>
+          <span class="arrow">&darr;</span>
+        </button>
+        <button class="btn-ghost" data-advance>Show as QR</button>
+      </div>
+      <p class="panel-footnote">Also emailed to any address you add in admin. Losing this means losing your Torii.</p>
+    </article>
+
+    <!-- ═══════════════════════════ FINAL CURTAIN ═══════════════════════════ -->
+    <article class="panel panel-curtain" data-panel="6">
+      <div class="curtain-glow"></div>
+      <h1 class="curtain-title">Your Torii is open.</h1>
+      <p class="curtain-lede">Stepping through&hellip;</p>
+      <div class="curtain-spinner"></div>
+    </article>
+  </section>
+
+  <!-- Nav arrows (subtle, bottom-right) -->
+  <div class="nav-arrows">
+    <button class="nav-btn nav-back" id="navBack" aria-label="Previous step">&larr;</button>
+    <button class="nav-btn nav-forward" id="navForward" aria-label="Next step">&rarr;</button>
+  </div>
+
+  <!-- Three.js: self-hosted, no third-party CDN (privacy standing rule) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./three-libs/three/three.module.js",
+      "three/addons/": "./three-libs/three/addons/"
+    }
+  }
+  </script>
+  <!-- Guard: only load Three.js + deck scripts on desktop. Small screens or
+       coarse pointers see the desktop-only gate above and no runtime scripts. -->
+  <script>
+    (function () {
+      if (document.documentElement.getAttribute('data-desktop-only') === 'blocked') return;
+      var m = document.createElement('script'); m.type = 'module'; m.src = './character.js';
+      var d = document.createElement('script'); d.src = './deck.js';
+      document.body.appendChild(m);
+      document.body.appendChild(d);
+    })();
+  </script>
+</body>
+</html>
