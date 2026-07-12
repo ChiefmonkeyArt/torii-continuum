@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Continuum torii">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#211814"/>
+      <stop offset="1" stop-color="#14100d"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbbf3a"/>
+      <stop offset="0.55" stop-color="#f0a72a"/>
+      <stop offset="1" stop-color="#c46a12"/>
+    </linearGradient>
+    <linearGradient id="plaque" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a1f18"/>
+      <stop offset="1" stop-color="#1a120d"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded bronze tile -->
+  <rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="url(#bg)"/>
+  <!-- torii gate, centered, amber -->
+  <g fill="url(#amber)" stroke="#7a3e0d" stroke-width="0.4">
+    <!-- kasagi: curved upward sweep at the ends -->
+    <path d="M4 15 Q10 6 18 9 L46 9 Q54 6 60 15 L58 20 L6 20 Z"/>
+    <!-- shimaki (second lintel) -->
+    <path d="M8 20 L56 20 L52 27 L12 27 Z"/>
+    <!-- daiwa rings on pillar tops -->
+    <rect x="12" y="27" width="10" height="3" rx="0.5"/>
+    <rect x="42" y="27" width="10" height="3" rx="0.5"/>
+    <!-- nuki (crossbeam, protrudes) -->
+    <rect x="4" y="34" width="56" height="5" rx="1"/>
+    <!-- kusabi wedges (tiny) -->
+    <path d="M14 32 L20 32 L19 34 L15 34 Z"/>
+    <path d="M44 32 L50 32 L49 34 L45 34 Z"/>
+    <path d="M15 39 L19 39 L20 41 L14 41 Z"/>
+    <path d="M45 39 L49 39 L50 41 L44 41 Z"/>
+    <!-- gakuzuka (central strut) -->
+    <rect x="30" y="27" width="4" height="8"/>
+    <!-- pillars (hashira), slight inward incline -->
+    <path d="M14 30 L22 30 L23 56 L13 56 Z"/>
+    <path d="M42 30 L50 30 L51 56 L41 56 Z"/>
+  </g>
+  <!-- plaque (shingaku) on the gakuzuka -->
+  <rect x="26" y="28" width="12" height="7" rx="1" fill="url(#plaque)" stroke="#fbbf3a" stroke-width="0.4"/>
+  <!-- nemaki bands at pillar bases -->
+  <rect x="13" y="52" width="10" height="4" rx="0.6" fill="url(#plaque)"/>
+  <rect x="41" y="52" width="10" height="4" rx="0.6" fill="url(#plaque)"/>
+</svg>

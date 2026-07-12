@@ -60,16 +60,22 @@ async function req(method, path, body) {
   const base = agentUrl();
   if (!base) return { ok: false, reason: 'offline', offline: true };
 
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = {};
   const tok = getStoredToken();
   if (tok) headers.Authorization = `Bearer ${tok}`;
+
+  let bodyStr;
+  if (body !== undefined && body !== null) {
+    bodyStr = JSON.stringify(body);
+    headers['Content-Type'] = 'application/json';
+  }
 
   let res;
   try {
     res = await fetch(`${base}${path}`, {
       method,
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: bodyStr,
       credentials: 'include',
     });
   } catch (e) {

@@ -1,0 +1,8 @@
+---
+- name: 04-frontend — Build Vite SPA and deploy static files
+  hosts: continuum
+  gather_facts: true
+  become: true
+
+  roles:
+    - continuum_frontend

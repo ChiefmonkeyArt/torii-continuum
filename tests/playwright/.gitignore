@@ -1,0 +1,7 @@
+node_modules/
+test-results/
+*.webm
+*.png
+*.zip
+*.log
+tests/playwright/test-results.json

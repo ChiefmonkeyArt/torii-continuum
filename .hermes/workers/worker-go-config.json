@@ -1,0 +1,70 @@
+{
+  "profile": {
+    "worker_id": "worker-go-config",
+    "name": "Go Configuration Specialist",
+    "type": "devops/backend",
+    "primary_skills": [
+      "Go",
+      "YAML parsing",
+      "Configuration management",
+      "System integration",
+      "File operations",
+      "Environment variables",
+      "System administration"
+    ],
+    "specialization": "Configuration file handling and system-level operations",
+    "task_types": [
+      "Configuration file management",
+      "Environment setup",
+      "System integration",
+      "Deployment configuration",
+      "Service configuration",
+      "Secrets management"
+    ],
+    "preferred_projects": [
+      "continuum-agent"
+    ],
+    "capacity": {
+      "parallel_tasks": 1,
+      "max_daily_hours": 8
+    },
+    "working_hours": {
+      "timezone": "UTC",
+      "start": "09:00",
+      "end": "17:00",
+      "breaks": [
+        {"start": "12:00", "end": "13:00"}
+      ]
+    },
+    "communication": {
+      "standup_time": "10:00 UTC",
+      "update_frequency": "as_needed",
+      "reporting_format": "markdown"
+    },
+    "task_preferences": {
+      "priority_order": ["High", "Medium", "Low"],
+      "when_multiple_same_priority": "oldest_first",
+      "estimation_unit": "story_points",
+      "avoid_tasks": ["frontend_ui", "user_interface_design", "client_side_javascript"]
+    },
+    "tools": {
+      "ide": "VS Code with Go extension",
+      "version_control": "git",
+      "testing_framework": "go test",
+      "build_system": "Go build",
+      "package_manager": "go modules"
+    },
+    "dependencies": [
+      "gopkg.in/yaml.v3",
+      "viper",
+      "cobra",
+      "logrus",
+      "envconfig"
+    ],
+    "availability": {
+      "start_date": "2026-07-07",
+      "status": "active",
+      "note": "Focus on bootstrap configuration management"
+    }
+  }
+}

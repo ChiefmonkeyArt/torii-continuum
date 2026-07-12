@@ -1,0 +1,71 @@
+{
+  "profile": {
+    "worker_id": "worker-rust-agent",
+    "name": "Rust Agent Developer",
+    "type": "backend",
+    "primary_skills": [
+      "Rust",
+      "Actix Web",
+      "Nostr protocol",
+      "Database operations",
+      "API design",
+      "Authentication",
+      "Cryptography (rustcrypto)"
+    ],
+    "specialization": "Backend API endpoints and business logic",
+    "task_types": [
+      "API route implementation",
+      "Request handling and validation",
+      "Authentication/authorization",
+      "Database query design",
+      "Business logic implementation",
+      "Security middleware"
+    ],
+    "preferred_projects": [
+      "continuum-agent"
+    ],
+    "capacity": {
+      "parallel_tasks": 2,
+      "max_daily_hours": 8
+    },
+    "working_hours": {
+      "timezone": "UTC",
+      "start": "09:00",
+      "end": "17:00",
+      "breaks": [
+        {"start": "12:00", "end": "13:00"}
+      ]
+    },
+    "communication": {
+      "standup_time": "10:00 UTC",
+      "update_frequency": "as_needed",
+      "reporting_format": "markdown"
+    },
+    "task_preferences": {
+      "priority_order": ["High", "Medium", "Low"],
+      "when_multiple_same_priority": "oldest_first",
+      "estimation_unit": "story_points",
+      "avoid_tasks": ["frontend_ui", "css_styling", "browser_testing"]
+    },
+    "tools": {
+      "ide": "VS Code with rust-analyzer",
+      "version_control": "git",
+      "testing_framework": "cargo test",
+      "build_system": "Cargo",
+      "package_manager": "cargo"
+    },
+    "dependencies": [
+      "tokio",
+      "actix-web",
+      "serde",
+      "nostr",
+      "sqlx",
+      "uuid"
+    ],
+    "availability": {
+      "start_date": "2026-07-07",
+      "status": "active",
+      "note": "Starting with pubkey registration endpoint"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+---
+- name: restart continuum-agent
+  systemd:
+    name: continuum-agent
+    state: restarted
+    daemon_reload: true
+
+- name: reload systemd
+  systemd:
+    daemon_reload: true

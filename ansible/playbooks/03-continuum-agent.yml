@@ -1,0 +1,9 @@
+---
+- name: 03-continuum-agent — Clone repo, render config, deploy systemd, start agent
+  hosts: continuum
+  gather_facts: true
+  become: true
+
+  roles:
+    - identity
+    - continuum_agent

@@ -1,0 +1,412 @@
+{
+  "config": {
+    "argv": [
+      "/usr/bin/node",
+      "/home/c03rad0r/repos/torii-continuum/tests/playwright/node_modules/.bin/playwright",
+      "test",
+      "--config=playwright.config.ts",
+      "--grep",
+      "L01|Z01|AA01"
+    ],
+    "configFile": "/home/c03rad0r/repos/torii-continuum/tests/playwright/playwright.config.ts",
+    "rootDir": "/home/c03rad0r/repos/torii-continuum/tests/playwright",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/home/c03rad0r/repos/torii-continuum/tests/playwright/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "/home/c03rad0r/repos/torii-continuum/tests/playwright",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list",
+        null
+      ],
+      [
+        "json",
+        {
+          "outputFile": "test-results.json"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.61.1",
+    "workers": 1,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "auth-flow.spec.ts",
+      "file": "auth-flow.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Z — Sign-out & Edge Cases",
+          "file": "auth-flow.spec.ts",
+          "line": 337,
+          "column": 6,
+          "specs": [
+            {
+              "title": "Z01: Sign out from sidebar clears token and switches UI",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 11284,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-07T10:02:36.515Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "/home/c03rad0r/repos/torii-continuum/tests/playwright/test-results/auth-flow-Z-—-Sign-out-Edg-b3152-lears-token-and-switches-UI-chromium/test-finished-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "/home/c03rad0r/repos/torii-continuum/tests/playwright/test-results/auth-flow-Z-—-Sign-out-Edg-b3152-lears-token-and-switches-UI-chromium/video.webm"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "df6b40174562c70df515-ae8566584cae84b56cb0",
+              "file": "auth-flow.spec.ts",
+              "line": 338,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "comprehensive.spec.ts",
+      "file": "comprehensive.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "L — Agent API",
+          "file": "comprehensive.spec.ts",
+          "line": 620,
+          "column": 6,
+          "specs": [
+            {
+              "title": "L01: Health endpoint responds",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 833,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-07T10:02:52.629Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "ee7a9684fd9fecf71bb2-8393cf73ddc5e104b14f",
+              "file": "comprehensive.spec.ts",
+              "line": 621,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "deep-coverage.spec.ts",
+      "file": "deep-coverage.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "AA — Data Layer",
+          "file": "deep-coverage.spec.ts",
+          "line": 65,
+          "column": 6,
+          "specs": [
+            {
+              "title": "AA01: slugify converts spaces to hyphens and lowercases",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 3574,
+                      "error": {
+                        "message": "Error: page.evaluate: SyntaxError: Failed to execute 'querySelector' on 'Document': 'button:has-text(\"New project\")' is not a valid selector.\n    at eval (eval at evaluate (:303:30), <anonymous>:3:28)\n    at UtilityScript.evaluate (<anonymous>:305:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)",
+                        "stack": "Error: page.evaluate: SyntaxError: Failed to execute 'querySelector' on 'Document': 'button:has-text(\"New project\")' is not a valid selector.\n    at eval (eval at evaluate (:303:30), <anonymous>:3:28)\n    at UtilityScript.evaluate (<anonymous>:305:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)\n    at eval (eval at evaluate (:303:30), <anonymous>:3:28)\n    at UtilityScript.evaluate (<anonymous>:305:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)\n    at /home/c03rad0r/repos/torii-continuum/tests/playwright/deep-coverage.spec.ts:69:29",
+                        "location": {
+                          "file": "eval at evaluate (:303:30), <anonymous>",
+                          "column": 28,
+                          "line": 3
+                        }
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "eval at evaluate (:303:30), <anonymous>",
+                            "column": 28,
+                            "line": 3
+                          },
+                          "message": "Error: page.evaluate: SyntaxError: Failed to execute 'querySelector' on 'Document': 'button:has-text(\"New project\")' is not a valid selector.\n    at eval (eval at evaluate (:303:30), <anonymous>:3:28)\n    at UtilityScript.evaluate (<anonymous>:305:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)\n    at eval (eval at evaluate (:303:30), <anonymous>:3:28)\n    at UtilityScript.evaluate (<anonymous>:305:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)\n    at /home/c03rad0r/repos/torii-continuum/tests/playwright/deep-coverage.spec.ts:69:29"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-07T10:02:53.643Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "/home/c03rad0r/repos/torii-continuum/tests/playwright/test-results/deep-coverage-AA-—-Data-La-5541e-s-to-hyphens-and-lowercases-chromium/test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "/home/c03rad0r/repos/torii-continuum/tests/playwright/test-results/deep-coverage-AA-—-Data-La-5541e-s-to-hyphens-and-lowercases-chromium/video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/home/c03rad0r/repos/torii-continuum/tests/playwright/test-results/deep-coverage-AA-—-Data-La-5541e-s-to-hyphens-and-lowercases-chromium/error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "/home/c03rad0r/repos/torii-continuum/tests/playwright/test-results/deep-coverage-AA-—-Data-La-5541e-s-to-hyphens-and-lowercases-chromium/trace.zip"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "eval at evaluate (:303:30), <anonymous>",
+                        "column": 28,
+                        "line": 3
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "9ad6128e37f81270f6c7-f77f16c3f3f330327509",
+              "file": "deep-coverage.spec.ts",
+              "line": 67,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "login-fix.spec.ts",
+      "file": "login-fix.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "L — API-level login fix verification",
+          "file": "login-fix.spec.ts",
+          "line": 28,
+          "column": 6,
+          "specs": [
+            {
+              "title": "L01: challenge with Content-Type + empty body returns 400 (expected error)",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 6968,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-07T10:03:00.768Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "/home/c03rad0r/repos/torii-continuum/tests/playwright/test-results/login-fix-L-—-API-level-lo-22cf6-returns-400-expected-error--chromium/test-finished-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "/home/c03rad0r/repos/torii-continuum/tests/playwright/test-results/login-fix-L-—-API-level-lo-22cf6-returns-400-expected-error--chromium/video.webm"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "4996d34117f46debeb34-161ccd541b62d5e710f4",
+              "file": "login-fix.spec.ts",
+              "line": 29,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "untested-areas.spec.ts",
+      "file": "untested-areas.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "BL — Marketplace Advanced",
+          "file": "untested-areas.spec.ts",
+          "line": 699,
+          "column": 6,
+          "specs": [
+            {
+              "title": "BL01: Marketplace renders task list",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 5614,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-07T10:03:08.405Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "/home/c03rad0r/repos/torii-continuum/tests/playwright/test-results/untested-areas-BL-—-Market-40e37-rketplace-renders-task-list-chromium/test-finished-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "/home/c03rad0r/repos/torii-continuum/tests/playwright/test-results/untested-areas-BL-—-Market-40e37-rketplace-renders-task-list-chromium/video.webm"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "582dcc47fb1b5aef54ba-4fda00c2da97fc8b93f7",
+              "file": "untested-areas.spec.ts",
+              "line": 701,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-07-07T10:02:32.140Z",
+    "duration": 42328.195,
+    "expected": 4,
+    "skipped": 0,
+    "unexpected": 1,
+    "flaky": 0
+  }
+}

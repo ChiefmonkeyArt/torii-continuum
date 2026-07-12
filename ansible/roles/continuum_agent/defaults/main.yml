@@ -1,0 +1,4 @@
+---
+continuum_port: 8787
+continuum_repo_url: "https://github.com/ChiefmonkeyArt/torii-continuum.git"
+continuum_repo_branch: "main"

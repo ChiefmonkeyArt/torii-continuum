@@ -17,6 +17,7 @@ import { renderProjectHome } from './views/projectHome.js';
 import { renderMarketplace } from './views/marketplace.js';
 import { renderRoutstr } from './views/routstr.js';
 import { renderDashboard } from './views/dashboard.js';
+import { renderSetup } from './views/setup.js';
 
 function setLandingMode(on) {
   const app = document.getElementById('app');
@@ -34,6 +35,7 @@ function boot() {
 
   // Routes
   route('/', () => { setLandingMode(true); renderLanding(mainContent()); });
+  route('/setup', () => { setLandingMode(true); renderSetup(mainContent()); });
   route('/projects', () => { setLandingMode(false); renderProjects(mainContent()); renderSidebar(); });
   route('/projects/:slug', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug); renderSidebar(); });
   route('/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent()); renderSidebar(); });
@@ -42,6 +44,9 @@ function boot() {
 
   startRouter();
   mountChat(root);
+
+  // Check if agent is in setup mode — redirect to setup wizard
+  checkSetupMode();
 
   // Re-render sidebar when session changes so the login/logout button stays honest
   document.addEventListener('continuum:session-changed', () => {
@@ -59,4 +64,30 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', boot);
 } else {
   boot();
+}
+
+/**
+ * Check if the agent is in first-run setup mode.
+ * If so, redirect to the setup wizard.
+ */
+async function checkSetupMode() {
+  try {
+    // Import isAgentConfigured inline — same logic as agent.js
+    let agentBase = '';
+    if (window.__CONTINUUM_AGENT_URL__) agentBase = window.__CONTINUUM_AGENT_URL__.replace(/\/$/, '');
+    else if (import.meta.env?.VITE_AGENT_URL) agentBase = import.meta.env.VITE_AGENT_URL.replace(/\/$/, '');
+    else return; // No agent configured (demo mode) — skip
+
+    const resp = await fetch(`${agentBase}/api/setup/status`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.setup_mode === true) {
+      // Redirect to setup wizard if not already there
+      if (!window.location.hash.includes('/setup')) {
+        window.location.hash = '#/setup';
+      }
+    }
+  } catch (_e) {
+    // Agent unreachable — silently continue (normal for demo build)
+  }
 }

@@ -1,0 +1,8 @@
+---
+caddy_version: "2.9.1"
+caddy_arch: "linux_amd64"
+caddy_download_url: "https://github.com/caddyserver/caddy/releases/download/v{{ caddy_version }}/caddy_{{ caddy_version }}_{{ caddy_arch }}.tar.gz"
+caddy_binary_path: /usr/bin/caddy
+caddy_config_dir: /etc/caddy
+caddy_data_dir: /var/lib/caddy
+caddy_user: caddy

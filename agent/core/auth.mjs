@@ -72,15 +72,27 @@ export function createAuth(cfg, deps = {}) {
 
   const challenges = new Map(); // challenge → { expiresAt, ip }
 
-  // Decode admin npub to hex once at boot.
-  let adminHex;
-  try {
-    const decoded = nip19.decode(cfg.admin_npub);
-    if (decoded.type !== 'npub') throw new Error('not an npub');
-    adminHex = decoded.data;
-  } catch (e) {
-    // Boot-time failure: use console.error (logger may not exist yet in some code paths).
-    console.error(`[auth] admin_npub decode failed: ${e.message}`);
+  // Decode admin npubs to hex once at boot.
+  const adminHexes = [];
+  const adminHexToNpubMap = new Map(); // hex → npub mapping for response
+  for (const npub of cfg.admin_npubs) {
+    try {
+      const decoded = nip19.decode(npub);
+      if (decoded.type !== 'npub') throw new Error(`not an npub: ${npub}`);
+      const hex = decoded.data;
+      if (adminHexes.includes(hex)) {
+        log.warn(`[auth] duplicate admin npub detected: ${npub} and ${adminHexToNpubMap.get(hex)}`);
+      }
+      adminHexes.push(hex);
+      adminHexToNpubMap.set(hex, npub);
+    } catch (e) {
+      // Boot-time failure: use console.error (logger may not exist yet in some code paths).
+      console.error(`[auth] admin_npubs decode failed for ${npub}: ${e.message}`);
+      process.exit(1);
+    }
+  }
+  if (adminHexes.length === 0 && !cfg.setup_mode) {
+    console.error('[auth] no valid admin npubs found');
     process.exit(1);
   }
 
@@ -148,14 +160,14 @@ export function createAuth(cfg, deps = {}) {
       log.warn({ evt: 'auth.verify.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'wrong_kind' });
       return { ok: false, reason: 'wrong kind (expected 22242)' };
     }
-    if (event.pubkey !== adminHex) {
+    if (!adminHexes.includes(event.pubkey)) {
       log.warn({
         evt: 'auth.verify.fail',
         ip_prefix: prefix(clientIp || '', 12),
         pubkey_prefix: prefix(event.pubkey || ''),
         reason: 'notadmin',
       });
-      return { ok: false, reason: 'pubkey is not admin npub' };
+      return { ok: false, reason: 'pubkey is not an admin npub' };
     }
 
     // Find the challenge tag
@@ -244,14 +256,14 @@ export function createAuth(cfg, deps = {}) {
       pubkey_prefix: prefix(event.pubkey),
     });
 
-    const token = issueSessionToken();
+    const token = issueSessionToken(event.pubkey);
     return { ok: true, token: token.token, expires_at: token.expiresAt };
   }
 
-  function issueSessionToken() {
+  function issueSessionToken(hex) {
     const iat = now();
     const exp = iat + cfg.session_ttl_sec;
-    const payload = `${iat}.${exp}.${adminHex}`;
+    const payload = `${iat}.${exp}.${hex}`;
     const sig = createHmac('sha256', cfg.session_secret).update(payload).digest('hex');
     return { token: `${payload}.${sig}`, expiresAt: exp };
   }
@@ -268,7 +280,7 @@ export function createAuth(cfg, deps = {}) {
     const exp = parseInt(expStr, 10);
     if (!Number.isFinite(iat) || !Number.isFinite(exp)) return { ok: false, reason: 'bad timestamps' };
     if (exp < now()) return { ok: false, reason: 'expired' };
-    if (pk !== adminHex) return { ok: false, reason: 'not admin pubkey' };
+    if (!adminHexes.includes(pk)) return { ok: false, reason: 'not an admin pubkey' };
 
     const expected = createHmac('sha256', cfg.session_secret)
       .update(`${iat}.${exp}.${pk}`)
@@ -281,14 +293,31 @@ export function createAuth(cfg, deps = {}) {
     }
     if (!match) return { ok: false, reason: 'bad signature' };
 
-    return { ok: true, npub: cfg.admin_npub, exp };
+    return { ok: true, npub: adminHexToNpubMap.get(pk), exp };
   }
 
   return {
     issueChallenge,
     verifyChallenge,
     verifySessionToken,
-    _adminHex: adminHex, // exposed for tests
+    issueSessionTokenForPubkey(hex) {
+      return issueSessionToken(hex);
+    },
+    /**
+     * Dynamically register an admin pubkey (used by setup flow after
+     * browser-generated key is verified). Adds to both adminHexes and the
+     * hex→npub map so subsequent verifySessionToken() calls succeed without
+     * a restart.
+     */
+    registerAdminPubkey(hex, npub) {
+      if (!adminHexes.includes(hex)) {
+        adminHexes.push(hex);
+      }
+      if (!adminHexToNpubMap.has(hex)) {
+        adminHexToNpubMap.set(hex, npub);
+      }
+    },
+    _adminHexes: adminHexes, // exposed for tests
     _challenges: challenges, // exposed for tests (read-only usage)
     _maxChallenges: maxChallenges, // exposed for tests
   };

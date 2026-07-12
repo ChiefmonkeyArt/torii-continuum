@@ -1,0 +1,110 @@
+---
+# config.yaml.j2 — Continuum agent configuration template
+# Rendered by Ansible. Synced to upstream config.example.yaml v0.2.6-alpha.
+
+# Setup mode: first-run onboarding via browser keygen wizard.
+# When true, admin_npubs may be empty — the wizard generates and stores
+# the admin npub on first browser visit (authenticated by setup_token).
+# When false, admin_npubs must contain a valid npub (traditional install).
+setup_mode: {{ continuum_setup_mode | default(true) }}
+setup_token: "{{ continuum_setup_token | default('') }}"
+
+{% if continuum_admin_npub_resolved | default('') | length > 0 %}
+admin_npubs:
+  - "{{ continuum_admin_npub_resolved }}"
+{% else %}
+admin_npubs: []
+{% endif %}
+
+session_secret: "{{ continuum_session_secret_resolved }}"
+session_ttl_sec: 86400
+
+server:
+  host: "127.0.0.1"
+  port: {{ continuum_port }}
+  cors_origins:
+    - "https://{{ continuum_domain }}"
+    - "http://localhost:5180"
+    - "http://127.0.0.1:5180"
+
+cashu:
+  mints:
+{% for mint in continuum_cashu_mints %}
+    - "{{ mint }}"
+{% endfor %}
+  low_balance_warn_sats: {{ continuum_low_balance_warn_sats }}
+  hard_floor_sats: {{ continuum_hard_floor_sats }}
+
+routstr:
+  endpoint: "{{ continuum_routstr_endpoint }}"
+  models:
+    chat: "{{ continuum_routstr_models.chat }}"
+    coding: "{{ continuum_routstr_models.coding }}"
+    summarise: "{{ continuum_routstr_models.summarise }}"
+    routing: "{{ continuum_routstr_models.routing }}"
+    embed: "auto"
+  fallback:
+    enabled: false
+    coding:
+      - "deepseek-coder-v2"
+      - "qwen-2.5-coder-32b"
+      - "qwen-2.5-coder-7b"
+    chat:
+      - "deepseek-chat-v3"
+      - "llama-3.1-70b-instruct"
+      - "llama-3.1-8b-instruct"
+  limits:
+    max_tokens_out: {{ continuum_routstr_limits.max_tokens_out }}
+    max_sats_per_request: {{ continuum_routstr_limits.max_sats_per_request }}
+
+ollama:
+  enabled: {{ continuum_ollama_enabled }}
+  endpoint: "{{ continuum_ollama_endpoint }}"
+  model: "{{ continuum_ollama_model }}"
+  models:
+    chat: "{{ continuum_ollama_models.chat }}"
+    reflect: "{{ continuum_ollama_models.reflect }}"
+  temperature: 0.4
+  timeout_ms: 60000
+
+model_router:
+  strategy: "{{ continuum_model_router_strategy }}"
+
+skills:
+  chat:
+    enabled: true
+    read_paths:
+      - "memory/notes/"
+      - "memory/sessions/"
+  brain_read:
+    enabled: false
+  brain_write:
+    enabled: false
+  todo_patch:
+    enabled: false
+  nostr_draft:
+    enabled: false
+
+character:
+  character_md: "CHARACTER.md"
+  sources_md: "SOURCES.md"
+  require_unlock: false
+  refuse_on_root_mismatch: false
+
+reflect:
+  schedule: ""
+  limit_per_pass: 10
+
+destructive:
+  cooldown_sec: 60
+  required_signatures: 2
+
+panic_key:
+  enabled: false
+  nudge_on_first_unlock: true
+
+logging:
+  destination: "stdout"
+  level: "info"
+  cost_log: "memory/costs.jsonl"
+  audit_log: "memory/audit.jsonl"

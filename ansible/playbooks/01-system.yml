@@ -1,0 +1,8 @@
+---
+- name: 01-system — Create user, install Node.js, prepare directories
+  hosts: continuum
+  gather_facts: true
+  become: true
+
+  roles:
+    - system

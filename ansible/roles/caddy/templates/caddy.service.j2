@@ -1,0 +1,21 @@
+[Unit]
+Description=Caddy web server
+Documentation=https://caddyserver.com/docs/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User={{ caddy_user }}
+Group={{ caddy_user }}
+ExecStart={{ caddy_binary_path }} run --config {{ caddy_config_dir }}/Caddyfile
+ExecReload={{ caddy_binary_path }} reload --config {{ caddy_config_dir }}/Caddyfile
+TimeoutStopSec=5
+LimitNOFILE=1048576
+LimitNPROC=512
+PrivateTmp=true
+ProtectSystem=full
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

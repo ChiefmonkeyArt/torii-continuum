@@ -1,0 +1,22 @@
+[Unit]
+Description=Continuum Agent (Fastify)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ continuum_user }}
+Group={{ continuum_user }}
+WorkingDirectory={{ continuum_install_dir }}
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/env node index.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths={{ continuum_install_dir }}
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,8 +1,33 @@
-node_modules
-dist
+# Dependencies
+.venv/
+node_modules/
+
+# Playwright test artifacts
+playwright-results/
+test-results/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Environment files
 .env
 .env.local
+.env.*.local
+
+# Logs + Vite
 *.log
 .vite
 
@@ -11,3 +36,4 @@ agent/config.yaml
 ops/ansible/group_vars/vault.yml
 ops/ansible/group_vars/all.yml
 ops/ansible/inventory.yml
+dist/

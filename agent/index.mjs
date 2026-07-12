@@ -22,6 +22,7 @@ import { dirname, join } from 'node:path';
 import { writeFile, mkdir, unlink, readdir, readFile } from 'node:fs/promises';
 import { loadConfig } from './core/config.mjs';
 import { createAuth } from './core/auth.mjs';
+import { registerSetupRoutes } from './core/setup.mjs';
 import { createWallet } from './core/wallet.mjs';
 import { createRoutstr } from './core/routstr.mjs';
 import { createOllama } from './core/ollama.mjs';
@@ -101,6 +102,10 @@ app.addHook('onReady', async () => {
 });
 
 const auth = createAuth(cfg, { log: app.log });
+
+// Setup mode endpoints (first-run key registration)
+registerSetupRoutes(app, cfg, auth, resolve(__dirname, 'config.yaml'));
+
 const wallet = await createWallet(cfg, app.log);
 const routstr = createRoutstr(cfg, wallet, app.log);
 
@@ -510,7 +515,7 @@ const host = cfg.server.host;
 try {
   await app.listen({ port, host });
   app.log.info(`torii-continuum-agent listening on http://${host}:${port}`);
-  app.log.info(`admin npub: ${cfg.admin_npub.slice(0, 12)}...`);
+  app.log.info(`admin npubs: ${cfg.admin_npubs.map((n) => n.slice(0, 12)).join(', ')}`);
   app.log.info(`cashu mints: ${wallet.mints.join(', ') || '(none)'}`);
   app.log.info(`routstr endpoint: ${cfg.routstr.endpoint}`);
   app.log.info(`ollama: enabled=${cfg.ollama?.enabled === true} endpoint=${cfg.ollama?.endpoint || '(default)'}`);

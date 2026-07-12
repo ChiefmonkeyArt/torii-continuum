@@ -44,7 +44,7 @@ export async function startLogin() {
       title: 'Login unavailable in demo',
       subtitle: 'This build of Continuum runs without an agent backend. Live login (chat, wallet, Routstr) is available when you self-host the agent.',
       body: h('div', {}, [
-        h('p', { class: 'muted', text: 'See agent/README.md in the repo for VPS bring-up. Once your agent is reachable, this button will connect via NIP-07 (Plebeian Signer).' }),
+        h('p', { class: 'muted', text: 'See agent/README.md in the repo for VPS bring-up. Once your agent is reachable, this button will connect via NIP-07 (browser signer).' }),
         h('div', { style: 'display:flex; gap: 8px; justify-content: flex-end; margin-top: 12px;' }, [
           h('button', { class: 'primary', onClick: () => loginModalHandle?.close() }, ['OK']),
         ]),
@@ -58,13 +58,15 @@ export async function startLogin() {
   if (!hasSigner()) {
     openModal({
       title: 'NIP-07 signer not found',
-      subtitle: 'Continuum uses Plebeian Signer (or another NIP-07 browser extension) to sign the login challenge. No key material touches the agent — you sign in your browser, the agent verifies the signature.',
+      subtitle: 'Continuum uses a NIP-07 browser extension to sign the login challenge. No key material touches the agent — you sign in your browser, the agent verifies the signature.',
       body: h('div', {}, [
         h('p', { class: 'muted' }, [
-          'Install Plebeian Signer: ',
-          h('a', { href: 'https://chromewebstore.google.com/detail/plebeian-signer-nostr-ide/ijbiankmnehjephbkfdgphckcdgbgoho', target: '_blank', rel: 'noopener' }, ['Chrome']),
+          'Install a signer: ',
+          h('a', { href: 'https://chromewebstore.google.com/detail/plebeian-signer-nostr-ide/ijbiankmnehjephbkfdgphckcdgbgoho', target: '_blank', rel: 'noopener' }, ['Plebeian Signer (Chrome)']),
           ' · ',
-          h('a', { href: 'https://addons.mozilla.org/en-US/firefox/addon/plebeian-signer/', target: '_blank', rel: 'noopener' }, ['Firefox']),
+          h('a', { href: 'https://addons.mozilla.org/en-US/firefox/addon/nos2x-fox/', target: '_blank', rel: 'noopener' }, ['nos2x-fox (Firefox)']),
+          ' · ',
+          h('a', { href: 'https://addons.mozilla.org/en-US/firefox/addon/plebeian-signer/', target: '_blank', rel: 'noopener' }, ['Plebeian Signer (Firefox)']),
         ]),
         h('div', { style: 'display:flex; gap: 8px; justify-content: flex-end; margin-top: 12px;' }, [
           h('button', { class: 'primary', onClick: () => loginModalHandle?.close() }, ['OK']),
@@ -85,7 +87,7 @@ export async function startLogin() {
 
   loginModalHandle = openModal({
     title: 'Login with Nostr',
-    subtitle: 'Your agent will send a challenge; Plebeian Signer will sign it in your browser. Your nsec never leaves the extension.',
+    subtitle: 'Your agent will send a challenge; your NIP-07 signer will sign it in your browser. Your nsec never leaves the extension.',
     body,
     onClose: () => { loginModalHandle = null; },
   });
@@ -106,7 +108,7 @@ export async function startLogin() {
   const { challenge } = chal.data;
 
   // 2. Sign in browser
-  setStatus('Waiting for Plebeian Signer to sign the challenge…');
+  setStatus('Waiting for signer to sign the challenge…');
   let signed;
   try {
     signed = await window.nostr.signEvent({

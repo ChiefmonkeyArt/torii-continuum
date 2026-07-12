@@ -1,0 +1,12 @@
+---
+- name: deploy — Full Continuum one-click install (run all playbooks in order)
+  hosts: continuum
+  gather_facts: true
+  become: true
+
+  roles:
+    - system
+    - identity
+    - continuum_agent
+    - continuum_frontend
+    - caddy

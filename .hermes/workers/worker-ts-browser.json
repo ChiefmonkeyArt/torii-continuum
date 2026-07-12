@@ -1,0 +1,62 @@
+{
+  "profile": {
+    "worker_id": "worker-ts-browser",
+    "name": "TypeScript Browser Specialist",
+    "type": "frontend",
+    "primary_skills": [
+      "TypeScript",
+      "Svelte",
+      "Web Crypto API",
+      "IndexedDB",
+      "Nostr tools (nostr-tools)",
+      "State Management",
+      "UI/UX Implementation"
+    ],
+    "specialization": "Frontend browser cryptography and state management",
+    "task_types": [
+      "UI component implementation",
+      "Cryptographic operations",
+      "Browser storage management",
+      "NIP-07 shim implementation",
+      "State store development"
+    ],
+    "preferred_projects": [
+      "continuum-ui"
+    ],
+    "capacity": {
+      "parallel_tasks": 3,
+      "max_daily_hours": 8
+    },
+    "working_hours": {
+      "timezone": "UTC",
+      "start": "09:00",
+      "end": "17:00",
+      "breaks": [
+        {"start": "12:00", "end": "13:00"}
+      ]
+    },
+    "communication": {
+      "standup_time": "10:00 UTC",
+      "update_frequency": "as_needed",
+      "reporting_format": "markdown"
+    },
+    "task_preferences": {
+      "priority_order": ["High", "Medium", "Low"],
+      "when_multiple_same_priority": "oldest_first",
+      "estimation_unit": "story_points",
+      "avoid_tasks": ["server_configuration", "database_migrations"]
+    },
+    "tools": {
+      "ide": "VS Code",
+      "version_control": "git",
+      "testing_framework": "vitest + playwright",
+      "build_system": "vite",
+      "package_manager": "npm"
+    },
+    "availability": {
+      "start_date": "2026-07-07",
+      "status": "active",
+      "note": "Ready to start immediately on browser keygen tasks"
+    }
+  }
+}

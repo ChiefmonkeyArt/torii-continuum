@@ -8,10 +8,14 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "cd tests/playwright && npx playwright test --config=playwright.config.ts",
+    "test:vitest": "vitest run"
   },
   "devDependencies": {
     "vite": "^5.4.21",
     "vitest": "^2.1.9"
+  },
+  "dependencies": {
+    "nostr-tools": "^2.23.9"
   }
 }

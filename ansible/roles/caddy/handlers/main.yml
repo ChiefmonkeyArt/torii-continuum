@@ -1,0 +1,16 @@
+---
+- name: reload caddy
+  systemd:
+    name: caddy
+    state: reloaded
+
+- name: reload systemd
+  systemd:
+    daemon_reload: true
+
+- name: reload docker caddy
+  shell: |
+    CONTAINER=$(docker ps --format '{{ '{{' }} .Names {{ '}}' }}' | grep -i caddy | head -1)
+    if [ -n "$CONTAINER" ]; then
+      docker exec "$CONTAINER" caddy reload --config /etc/caddy/Caddyfile
+    fi

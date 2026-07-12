@@ -1,0 +1,107 @@
+---
+# Identity role — validate user-provided npub, generate session secret
+# The user provides their npub (from Plebeian Signer) at install time.
+# No nsec ever touches the VPS. No keypair generation.
+#
+# In setup_mode (default: true), admin_npub is OPTIONAL. The browser
+# keygen wizard handles onboarding on first run, authenticated by a
+# one-time setup_token generated below.
+
+- name: Validate admin npub is provided (skip in setup mode)
+  fail:
+    msg: >
+      CONTINUUM_ADMIN_NPUB is required when setup_mode is false. Set it before running the installer:
+        export CONTINUUM_ADMIN_NPUB="npub1..."
+      Get your npub from Plebeian Signer (or any NIP-07 signer extension).
+      If you don't have one yet, install Plebeian Signer first:
+        Firefox: https://addons.mozilla.org/en-US/firefox/addon/plebeian-signer/
+        Chrome:  https://chromewebstore.google.com/detail/ijbiankmnehjephbkfdgphckcdgbgoho
+      Alternatively, leave setup_mode=true (default) and use the browser onboarding wizard.
+  when:
+    - continuum_admin_npub | length == 0
+    - not (continuum_setup_mode | default(true) | bool)
+
+- name: Validate npub format (skip if no npub in setup mode)
+  shell: |
+    python3 -c "
+    import sys
+    npub = '{{ continuum_admin_npub }}'
+    if not npub.startswith('npub1'):
+        print('ERROR: must start with npub1', file=sys.stderr)
+        sys.exit(1)
+    if len(npub) < 60 or len(npub) > 65:
+        print('ERROR: npub should be 60-65 chars, got ' + str(len(npub)), file=sys.stderr)
+        sys.exit(1)
+    print('valid')
+    "
+  register: npub_validation
+  changed_when: false
+  failed_when: npub_validation.stdout != 'valid'
+  when: continuum_admin_npub | length > 0
+
+- name: Set admin npub fact
+  set_fact:
+    continuum_admin_npub_resolved: "{{ continuum_admin_npub }}"
+
+- name: Generate session secret (always auto-generated, internal use)
+  shell: "python3 -c \"import secrets; print(secrets.token_hex(32))\""
+  register: generated_session_secret
+  changed_when: false
+
+- name: Set session secret fact
+  set_fact:
+    continuum_session_secret_resolved: "{{ generated_session_secret.stdout }}"
+
+- name: Generate setup token for first-run mode
+  set_fact:
+    continuum_setup_token: "{{ lookup('password', '/dev/null length=32 chars=hexdigits') }}"
+  when: continuum_setup_mode | default(true) | bool
+
+- name: Create identity directory
+  file:
+    path: "{{ continuum_identity_dir }}"
+    state: directory
+    owner: "{{ continuum_user }}"
+    group: "{{ continuum_user }}"
+    mode: "0700"
+
+- name: Save npub to disk (public key only — no secret material)
+  copy:
+    content: "{{ continuum_admin_npub_resolved }}"
+    dest: "{{ continuum_identity_dir }}/admin.npub"
+    owner: "{{ continuum_user }}"
+    group: "{{ continuum_user }}"
+    mode: "0644"
+  when: continuum_admin_npub_resolved | length > 0
+
+- name: Save session secret (mode 0600)
+  copy:
+    content: "{{ continuum_session_secret_resolved }}"
+    dest: "{{ continuum_identity_dir }}/session_secret"
+    owner: "{{ continuum_user }}"
+    group: "{{ continuum_user }}"
+    mode: "0600"
+
+- name: Display install summary
+  debug:
+    msg:
+      - "========================================================"
+      - "  CONTINUUM IDENTITY CONFIGURED"
+      - "========================================================"
+      - "Admin npub: {{ continuum_admin_npub_resolved }}"
+      - ""
+      - "  Only this npub can log in (via Plebeian Signer)."
+      - "  No nsec on this server — signing happens in browser."
+      - "  To change admin: edit config.yaml admin_npub + restart."
+      - "========================================================"
+  when: continuum_admin_npub_resolved | length > 0
+
+- name: Display setup instructions
+  debug:
+    msg:
+      - "═══════════════════════════════════════════════════"
+      - "  Continuum deployed in setup mode!"
+      - "  1. Open https://{{ continuum_domain }} in your browser"
+      - "  2. Enter this setup token: {{ continuum_setup_token }}"
+      - "═══════════════════════════════════════════════════"
+  when: continuum_setup_mode | default(true) | bool

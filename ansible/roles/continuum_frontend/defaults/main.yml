@@ -1,0 +1,6 @@
+---
+continuum_frontend_dir: "/home/continuum/agent/frontend"
+continuum_agent_domain: "agent.{{ base_domain | default('example.com') }}"
+continuum_repo_url: "https://github.com/ChiefmonkeyArt/torii-continuum.git"
+continuum_repo_branch: "main"
+caddy_user: caddy

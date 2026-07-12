@@ -46,12 +46,32 @@ export function loadConfig(path) {
   // Validate invariants
   const errors = [];
 
-  if (!cfg.admin_npub || typeof cfg.admin_npub !== 'string' || !cfg.admin_npub.startsWith('npub1')) {
-    errors.push('admin_npub must be set to a valid npub1... string');
+  // Normalize admin npubs: accept both admin_npubs (array) and admin_npub (string, legacy)
+  const adminNpubs = [];
+  if (Array.isArray(cfg.admin_npubs)) {
+    for (const npub of cfg.admin_npubs) {
+      if (typeof npub !== 'string' || !npub.startsWith('npub1')) {
+        errors.push(`admin_npubs contains invalid npub: ${npub}`);
+      } else if (npub.includes('REPLACE')) {
+        errors.push('admin_npubs contains the example placeholder — replace it with your real npub');
+      } else {
+        adminNpubs.push(npub);
+      }
+    }
+  } else if (cfg.admin_npub && typeof cfg.admin_npub === 'string') {
+    if (!cfg.admin_npub.startsWith('npub1')) {
+      errors.push('admin_npub must be a valid npub1... string');
+    } else if (cfg.admin_npub.includes('REPLACE')) {
+      errors.push('admin_npub is still the example placeholder — replace it with your real npub');
+    } else {
+      adminNpubs.push(cfg.admin_npub);
+    }
   }
-  if (cfg.admin_npub && cfg.admin_npub.includes('REPLACE')) {
-    errors.push('admin_npub is still the example placeholder — replace it with your real npub');
+  if (adminNpubs.length === 0 && !cfg.setup_mode) {
+    errors.push('Either admin_npubs (array) or admin_npub (string, legacy) must be set, OR set setup_mode: true for first-run key generation.');
   }
+  // Replace raw config with normalized array for downstream consumers
+  cfg.admin_npubs = adminNpubs;
   if (!cfg.session_secret || typeof cfg.session_secret !== 'string' || cfg.session_secret.length < 64) {
     errors.push('session_secret must be >=64 hex chars (32 bytes). Generate: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
   }
@@ -74,6 +94,7 @@ export function loadConfig(path) {
   }
 
   // Defaults for optional fields
+  cfg.setup_mode ??= false;
   cfg.session_ttl_sec ??= 86400;
   cfg.server.cors_origins ??= [];
   cfg.cashu ??= { mints: [], low_balance_warn_sats: 500, hard_floor_sats: 100 };
@@ -93,9 +114,16 @@ export function loadConfig(path) {
   cfg.rate_limit.auth_verify_per_min ??= 20;
   cfg.rate_limit.max_challenges ??= 1000;
 
-  return Object.freeze(cfg);
+  if (!cfg.setup_mode) {
+    return Object.freeze(cfg);
+  }
+  return cfg; // mutable in setup mode — setup.mjs needs to add pubkey
 }
 
 export function agentRoot() {
   return AGENT_ROOT;
+}
+
+export function configPath(path) {
+  return path || resolve(AGENT_ROOT, 'config.yaml');
 }

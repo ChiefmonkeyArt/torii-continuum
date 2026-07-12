@@ -1,0 +1,88 @@
+---
+# Continuum agent role — clone repo, render config, deploy systemd unit, start service
+
+- name: Ensure git safe.directory is set
+  shell: git config --global --add safe.directory {{ continuum_agent_dir }}/repo || true
+  changed_when: false
+
+- name: Clone torii-continuum repo (fork)
+  git:
+    repo: "{{ continuum_repo_url }}"
+    dest: "{{ continuum_agent_dir }}/repo"
+    version: "{{ continuum_repo_branch }}"
+    force: true
+
+- name: Fix ownership of repo
+  file:
+    path: "{{ continuum_agent_dir }}/repo"
+    owner: "{{ continuum_user }}"
+    group: "{{ continuum_user }}"
+    recurse: yes
+
+- name: Install npm dependencies (production only)
+  shell: |
+    cd {{ continuum_install_dir }}
+    sudo -u {{ continuum_user }} npm install --omit=dev
+  args:
+    creates: "{{ continuum_install_dir }}/node_modules"
+
+- name: Ensure memory directories exist
+  file:
+    path: "{{ continuum_install_dir }}/{{ item }}"
+    state: directory
+    owner: "{{ continuum_user }}"
+    group: "{{ continuum_user }}"
+    mode: "0700"
+  loop:
+    - memory
+    - memory/wallet
+    - pending
+    - ciphertexts
+
+- name: Render config.yaml
+  template:
+    src: config.yaml.j2
+    dest: "{{ continuum_install_dir }}/config.yaml"
+    owner: "{{ continuum_user }}"
+    group: "{{ continuum_user }}"
+    mode: "0600"
+  notify: restart continuum-agent
+
+- name: Deploy systemd unit
+  template:
+    src: continuum-agent.service.j2
+    dest: /etc/systemd/system/continuum-agent.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload systemd
+
+- name: Enable and start continuum-agent
+  systemd:
+    name: continuum-agent
+    enabled: yes
+    daemon_reload: yes
+    state: started
+  register: agent_start
+
+- name: Wait for agent health endpoint
+  uri:
+    url: "http://127.0.0.1:{{ continuum_port }}/api/health"
+    return_content: yes
+  register: health_check
+  until: health_check.status == 200
+  retries: 20
+  delay: 3
+  when: agent_start is defined
+
+- name: Verify agent version
+  uri:
+    url: "http://127.0.0.1:{{ continuum_port }}/api/health"
+    return_content: yes
+  register: health_data
+  changed_when: false
+
+- name: Display agent status
+  debug:
+    msg: "Continuum agent running: {{ health_data.json }}"
+  when: health_data.json is defined

@@ -1,0 +1,51 @@
+---
+# Frontend role — clone repo, build Vite SPA with VITE_AGENT_URL, deploy dist/
+
+- name: Ensure git safe.directory is set (frontend)
+  shell: git config --global --add safe.directory {{ continuum_agent_dir }}/frontend_repo || true
+  changed_when: false
+
+- name: Clone frontend repo
+  git:
+    repo: "{{ continuum_repo_url }}"
+    dest: "{{ continuum_agent_dir }}/frontend_repo"
+    version: "{{ continuum_repo_branch }}"
+    force: true
+
+- name: Fix ownership of frontend repo
+  file:
+    path: "{{ continuum_agent_dir }}/frontend_repo"
+    owner: "{{ continuum_user }}"
+    group: "{{ continuum_user }}"
+    recurse: yes
+
+- name: Install frontend dependencies
+  shell: |
+    cd {{ continuum_agent_dir }}/frontend_repo
+    sudo -u {{ continuum_user }} npm install
+  args:
+    creates: "{{ continuum_agent_dir }}/frontend_repo/node_modules"
+
+- name: Build frontend with VITE_AGENT_URL
+  shell: |
+    cd {{ continuum_agent_dir }}/frontend_repo
+    sudo -u {{ continuum_user }} env VITE_AGENT_URL="https://{{ continuum_agent_domain }}" npm run build
+  args:
+    creates: "{{ continuum_agent_dir }}/frontend_repo/dist/index.html"
+
+- name: Ensure frontend serve dir exists
+  file:
+    path: "{{ continuum_frontend_dir }}/dist"
+    state: directory
+    owner: "{{ continuum_user }}"
+    group: "{{ continuum_user }}"
+    mode: "0755"
+
+- name: Copy built frontend to serve location
+  copy:
+    src: "{{ continuum_agent_dir }}/frontend_repo/dist/"
+    dest: "{{ continuum_frontend_dir }}/dist/"
+    owner: "{{ continuum_user }}"
+    group: "{{ continuum_user }}"
+    mode: "0644"
+    remote_src: true
