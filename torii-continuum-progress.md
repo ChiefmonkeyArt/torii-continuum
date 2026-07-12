@@ -9,6 +9,27 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.25-alpha - onboarding preview v0.1.11-preview (fix reload stall)
+
+Operator reported browser refresh left Chiefmonkey invisible.
+Root cause: `<link rel=preload as=fetch crossorigin>` for same-origin
+assets uses CORS credentials mode but GLTFLoader/DRACOLoader fetch
+without CORS. On reload the cached preload could not be matched
+to the actual request and stalled.
+
+Fixes:
+- Dropped `crossorigin` from same-origin preload hints (glb, wasm).
+  Added `type` attributes for accurate matching.
+- Removed modulepreload for GLTFLoader/DRACOLoader (bare `three`
+  specifier probes before the importmap resolves, printing a
+  harmless but noisy error).
+- Added 8s load watchdog with cache-bust retry so a stalled load
+  never leaves the user with an empty stage.
+
+Local: first 1.29s, reload 1 270ms, reload 2 113ms, reload 3 60ms.
+
+VERSION 0.1.11-preview. sha256 5b956052c915f45bdd8486bc721f92cb3e1dacac7663c51e5419ddfcedfee54b.
+
 ## v0.2.24-alpha - onboarding preview v0.1.10-preview (Draco wasm + shader precompile)
 
 Operator reported Chiefmonkey still lagged ~10s after v0.1.9. Two more
