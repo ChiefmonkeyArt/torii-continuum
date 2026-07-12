@@ -1,6 +1,6 @@
 {
   "name": "torii-continuum",
-  "version": "0.2.15-alpha",
+  "version": "0.2.16-alpha",
   "description": "Continuum — an app builder, project engine and marketplace for bot work. A gateway into the Torii ecosystem.",
   "type": "module",
   "private": true,
