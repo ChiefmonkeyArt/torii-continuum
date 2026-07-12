@@ -9,6 +9,23 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.24-alpha - onboarding preview v0.1.10-preview (Draco wasm + shader precompile)
+
+Operator reported Chiefmonkey still lagged ~10s after v0.1.9. Two more
+culprits fixed:
+1. Draco was configured `type: 'js'` - the slow pure-JS decoder.
+   Switched to `wasm` and added `draco.preload()` so the wasm module
+   is instantiated before the GLB arrives.
+2. First render triggered synchronous shader compilation. Added
+   `renderer.compile(scene, camera)` before the opacity fade so the
+   pipelines are warm.
+Fade shortened 900ms -> 400ms.
+
+Local render 1.85s -> 1.31s. Bigger gain expected on slow networks
+because wasm decode is 3-10x faster than JS decode.
+
+VERSION 0.1.10-preview. sha256 db0f7cab6d3d73d74c256e9599853a126d25802229c343f1ae48e818ff2b6654.
+
 ## v0.2.23-alpha - onboarding preview v0.1.9-preview (fast load)
 
 Operator reported the scene painted in 3 chunks and Chiefmonkey took
