@@ -9,6 +9,45 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.17-alpha - onboarding preview v0.1.3-preview (desktop-only gate)
+
+Continuum onboarding is a desktop-only flow (Torii VPS setup + a desktop-only game
+launch). Rather than fight iOS WebGL quirks for a use case that does not exist,
+small screens and coarse-pointer devices are now blocked at the door with a
+friendly notice pointing them at a laptop.
+
+Onboarding preview delta:
+
+- Added desktop-only gate: `matchMedia('(max-width: 899px)')` or
+  `matchMedia('(pointer: coarse)')` sets `data-desktop-only="blocked"` on
+  `<html>` before any scripts load. Three.js, GLTFLoader, DRACOLoader, and the
+  Chiefmonkey GLB are never fetched on mobile - respects data allowance,
+  battery, and iOS WebGL cost.
+- Splash copy: "Continuum onboarding is desktop-only. Setting up your Torii and
+  stepping into the world both need a keyboard and a bigger screen. Open this
+  link on a laptop or desktop to begin."
+- Reverted the v0.1.2 in-browser diagnostic overlay experiment; character.js
+  is back to the clean v0.1.1 baseline.
+- Self-hosted Three.js retained from v0.1.1 (privacy standing rule).
+- Onboarding preview `VERSION` bumped to `0.1.3-preview` (0.1.2 was diagnostic
+  only, never deployed).
+- Repo tarball at `preview-assets/releases/torii-continuum-onboarding-preview-v0.1.3.tar.gz`
+  (sha256 `29fe758120308cdc7d32ca6487e1a97152e4f90667a518e6ba9e5e9e73306872`).
+
+VPS deploy from tarball -> new dated release dir under
+`/var/www/torii/onboarding-preview-releases/` -> atomic symlink flip on
+`/var/www/torii/onboarding-preview`. Registry `version` bumped to
+`0.1.3-preview`. No nginx reload needed (fragment points at the symlink).
+
+QA:
+
+- Playwright at 390x844 mobile viewport: gate splash renders, ZERO requests
+  to `three-libs/*`, `character.js`, `deck.js`, or the GLB. Confirmed via
+  request interceptor.
+- Playwright at 1440x900 desktop viewport: full onboarding still renders,
+  panel-current at step 1, painterly backdrop + frosted panel + amber CTA
+  all intact.
+
 ## v0.2.14-alpha — SUITE-VPS-READY-1 (Continuum PR slice): rate-limit auth surface + bounded challenges Map + structured [auth] logs
 
 First code slice of the suite v0.6.0-alpha VPS-install prep. Hardens the two public endpoints that a scanner will hit first — `/api/auth/challenge` and `/api/auth/verify` — without touching the admin surface. Also swaps the previously-unbounded in-memory challenges Map for a hard-capped, LRU-by-expiry structure so a challenge flood can no longer OOM the agent.
