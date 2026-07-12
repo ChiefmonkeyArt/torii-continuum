@@ -9,6 +9,23 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.21-alpha - onboarding preview v0.1.7-preview (canvas full viewport)
+
+Operator flagged that Chiefmonkey's hand vanished off the right side of
+the character during the step-1 stretch pose. Root cause: `#character`
+canvas was `width: 50vw`, so any pose extending past 720px on a 1440px
+viewport got clipped at the canvas boundary - looking like a hand
+disappearing "behind the panel".
+
+Fix:
+- `#character` canvas widened to 100vw
+- `CHAR_X_DESKTOP = -0.9` in character.js keeps him in the left third
+- `.panel { z-index: 5 }` so a swinging arm is correctly occluded by UI,
+  not by an invisible canvas edge
+- `resize()` re-anchors the base x on orientation flips
+
+VERSION 0.1.7-preview. sha256 bdf01ae2021648f2350f378fb03ca9cf12648fa784e7b5feb86c480e8dac7a9e.
+
 ## v0.2.20-alpha - onboarding preview v0.1.6-preview (main page opaque fix)
 
 v0.1.5 patched only `/inspect/inspector.js`. Operator confirmed the main
