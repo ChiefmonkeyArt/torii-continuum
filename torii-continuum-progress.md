@@ -9,6 +9,14 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.22-alpha - onboarding preview v0.1.8-preview (recenter character)
+
+Operator felt Chiefmonkey was too far left after v0.1.7. Nudged
+CHAR_X_DESKTOP from -0.9 to -0.5 so he lands in the left third with
+breathing room to both sides.
+
+VERSION 0.1.8-preview. sha256 bb36aa7928b176b859519ef6623305e714626df0cba4984e411a2367ec6e69d2.
+
 ## v0.2.21-alpha - onboarding preview v0.1.7-preview (canvas full viewport)
 
 Operator flagged that Chiefmonkey's hand vanished off the right side of
