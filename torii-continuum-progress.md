@@ -9,6 +9,26 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.23-alpha - onboarding preview v0.1.9-preview (fast load)
+
+Operator reported the scene painted in 3 chunks and Chiefmonkey took
+30s to appear. Two root causes fixed:
+
+1. Scene PNGs 3MB x 5 = 14.5MB, progressive-decoded. Converted to WebP
+   q82 -> 1.3MB total (91% smaller).
+2. Character load was fully serial: three.module.js (1.3MB) -> GLTFLoader
+   -> DRACOLoader -> draco_decoder.wasm -> chiefmonkey6.glb. Added
+   `<link rel=preload>` (as=fetch) for glb + wasm and `modulepreload`
+   for three.module + loaders + character.js so everything fetches in
+   parallel with HTML parse.
+3. Fontshare stylesheet moved to media="print" onload=media="all" swap
+   so it doesn't block first paint.
+
+Tarball dropped from 15MB to 2.7MB. Local render measures ~1.9s
+(canvas opacity >0.5, i.e. character visible).
+
+VERSION 0.1.9-preview. sha256 744ef4003e76f2df5cd763601eebec80601659d21249e16754b7b5c103df3305.
+
 ## v0.2.22-alpha - onboarding preview v0.1.8-preview (recenter character)
 
 Operator felt Chiefmonkey was too far left after v0.1.7. Nudged
