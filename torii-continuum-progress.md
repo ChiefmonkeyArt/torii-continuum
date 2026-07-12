@@ -9,6 +9,49 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.18-alpha - onboarding preview v0.1.4-preview (clip inspector)
+
+New `/inspect/` diagnostic page for auditing all 19 GLB animation clips one by
+one. First step of fixing the glitching + limb-through-body issues observed on
+Chiefmonkey during onboarding. Rather than guess, we look.
+
+Inspector delta:
+
+- New page at `/onboarding-preview/inspect/` with an ordered list of every clip
+  discovered in `chiefmonkey6.glb` (uses `gltf.animations` directly, no
+  hard-coded names to drift)
+- Neutral scene: grid floor at y=0, 3-light setup (ambient + key + fill), pink
+  cone marker on +Z axis so orientation is unambiguous
+- Camera: distance / height / orbit yaw sliders, plus mouse-drag orbit and
+  wheel zoom (sliders update on drag, drag updates on sliders)
+- Playback speed 0.1x to 2.0x (`AnimationAction.setEffectiveTimeScale`)
+- Per-clip verdict: Keep / Flag, icon shown next to clip name, persisted in
+  `localStorage['continuum.clipVerdicts.v1']`
+- Copy report button dumps markdown to clipboard: KEEP / FLAG / Not audited
+- Desktop-only (reuses the v0.1.3 mobile gate)
+- Reuses parent `three-libs/` via `..` importmap paths - no dependency
+  duplication
+
+Onboarding preview `VERSION` bumped to `0.1.4-preview`. Repo tarball at
+`preview-assets/releases/torii-continuum-onboarding-preview-v0.1.4.tar.gz`
+(sha256 `9d221744a21986d510f17a7df01354170b8fbcd167b47ac186ca4ba077116b30`,
+~15 MB).
+
+QA:
+
+- Playwright at 1440x900: page loads, all 19 clips enumerated correctly
+  (Crouch_Walk..., FunnyDancing_02, Hit_Reaction_to_Waist, Idle_03,
+  Jump_Over_Obstacle_1/2, Knock_Down, Run_and_Shoot, Running_Reload_inplace,
+  Running, Shot_and_Blown_Back, Standard_Forward_Charge_inplace,
+  Stylish_Walk_inplace, Walk_Backward_inplace, Walk_Left_with_Gun_inplace,
+  Walk_Turn_Left/Right, Walking, idle_to_push_up).
+- Character renders full-body at default distance/height, +Z marker visible,
+  Keep click updates flag icon to ok green, Flag click updates to red.
+- Copy report generates a well-formed KEEP/FLAG/Not-audited markdown block.
+
+Next: user audits the 19 clips, then we apply Three.js-side workarounds
+(bone masking, clip range cropping, weight cleanup) for the flagged ones.
+
 ## v0.2.17-alpha - onboarding preview v0.1.3-preview (desktop-only gate)
 
 Continuum onboarding is a desktop-only flow (Torii VPS setup + a desktop-only game
