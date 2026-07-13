@@ -2,7 +2,7 @@
  * Cashu wallet — offline guard + failure-path coverage.
  *
  * These tests never touch a live mint or the network: the wallet is built with
- * zero configured mints, so no CashuWallet.getMintInfo() / receive() / send()
+ * zero configured mints, so no Wallet.loadMint() / receive() / send()
  * network call is ever reached. They pin the error/rejection paths in
  * core/wallet.mjs AND act as a regression guard that the @cashu/cashu-ts token
  * codec (getEncodedToken / getDecodedToken) still returns the { mint, proofs }

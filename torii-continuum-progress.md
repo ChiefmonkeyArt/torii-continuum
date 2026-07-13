@@ -9,6 +9,72 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.28-alpha — AGENT-SEC-CASHU-LTS: maintained money-path dependency
+
+Security-relevant money-path slice. Executes the follow-up flagged in v0.2.27:
+migrate the deprecated `@cashu/cashu-ts@2.5.3` off the unmaintained line onto
+the maintained **v3-lts "security-fixes-only" LTS**. Dist-tag evidence at
+implementation time: `npm view @cashu/cashu-ts dist-tags` → `v3-lts: 3.7.1`
+(latest is `4.7.0`; we deliberately do **not** jump to v4). Pinned per repo
+convention as `"@cashu/cashu-ts": "^3.7.1"` (caret, matching the other agent
+deps); lockfile regenerated with registry integrity (sha512) — the 2.5.3
+`deprecated` notice is gone from the tree.
+
+API migration (v2.5.3 → v3.7.1), inventoried against the official bundled
+`lib/types/index.d.ts` + compiled `lib/cashu-ts.es.js`, adapting code only where
+required:
+- **Class rename (breaking):** `CashuMint` → `Mint`, `CashuWallet` → `Wallet`.
+  `agent/core/wallet.mjs` import + `new Wallet(new Mint(url))` updated. `Wallet`
+  still accepts a `Mint` instance (also a bare URL string).
+- **`getMintInfo()` (breaking):** was `Promise<MintInfo>` (async network fetch)
+  in 2.5.3; in 3.7.1 it is a **synchronous cached getter** that throws if the
+  wallet has not been loaded. The boot warm-up (`await wallet.getMintInfo()`)
+  is replaced by `await wallet.loadMint()`, which performs the network fetch of
+  mint info + keysets + keys.
+- **Lazy-load semantics:** v3 `receive()`/`send()` require `loadMint()` first
+  (v2 auto-loaded). Added an idempotent `ensureLoaded()` guard before each
+  money-path op — verified in source that `loadMint()` skips both network
+  fetches once cached (`keyChain.init`: `if (keysets>0 && !forceRefresh) return`),
+  so this restores v2's lazy load-on-demand at **zero** extra traffic once warm.
+- **Unchanged (no code change):** token codec `getEncodedToken`/`getDecodedToken`
+  (both default to token-v4/`cashuB` in 2.5.3 **and** 3.7.1); the `Token`
+  `{ mint, proofs, unit?, memo? }` and `Proof` `{ id, amount, secret, C, ... }`
+  shapes; `SendResponse` `{ keep, send }`; the `receive() → Proof[]` return.
+
+Serialized-state compatibility (the load-bearing safety proof): a token encoded
+by the **real 2.5.3 library** decodes under 3.7.1 preserving mint/unit/memo and
+every proof `id`/`amount`/`secret`/`C`, and 3.7.1 **re-encodes it to the
+byte-identical wire string**. On-disk `memory/wallet/*.json` (`{ mint, proofs,
+updated_at }` plain JSON) survives a JSON round-trip unchanged. No re-mint, no
+conversion, no network mutation, no deletion of existing state.
+
+Tests added (offline, deterministic, no live mint / no network / no secrets
+logged) — `agent/test/cashu-migration.test.js`, 8 cases: v2-era `cashuB` token
+decodes under v3-lts; every critical proof field preserved; mint/unit/memo
+survive; **byte-identical re-encode** of the frozen 2.5.3 fixture; encode→decode
+amount preservation; proof/pending memory JSON shape unchanged; malformed and
+truncated tokens fail closed **without echoing secret material**. Existing
+`agent/test/wallet.test.js` guard/codec suite still green under v3.
+
+Verification: `npm audit --omit=dev` and full `npm audit` → **0 vulnerabilities**
+(0 critical / 0 high / 0 moderate / 0 low), unchanged from v0.2.27; agent
+`node --test` **38/38** (was 30 + 8 new); `scripts/smoke-rate-limit.mjs` all
+pass; a real `node index.mjs` boot under Node 20.20.1 comes up clean with
+**no new deprecation/warning** (`/api/health` 200, Fastify 5.10.0 intact); root
+`vitest` (no frontend suites) + `vite build` green; ops `nginx-install` 13/13
+and `installer-signal` 9/9; all `ops/*.sh` pass `bash -n`. Production dep tree
+**shrank 71 → 68** transitive packages (the cashu package itself is larger on
+disk); `@fastify/*` + `fastify@5.10.0` untouched.
+
+Risk note carried into handoff: cashu-ts 3.7.1 declares `engines.node >=22.4.0`;
+the agent targets Node >=20. This is an **install-time `EBADENGINE` advisory
+only** — `npm ci` still installs, and runtime + the full used API surface are
+proven working on Node 20.20.1. Recommendation for the operator: run the VPS on
+Node 22 LTS at next convenience; the advisory is non-blocking on Node 20.
+
+**NOT yet deployed** — v0.2.27-alpha remains the shipped/live agent version
+until an operator re-runs `ops/install-agent.sh`. This slice is code + PR only.
+
 ## v0.2.27-alpha — AGENT-SEC: production dependency remediation
 
 Security-only slice. During the live v0.2.26-alpha deploy, `npm ci --omit=dev`

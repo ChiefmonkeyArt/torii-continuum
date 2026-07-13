@@ -23,7 +23,7 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
-import { CashuMint, CashuWallet, getEncodedToken, getDecodedToken } from '@cashu/cashu-ts';
+import { Mint, Wallet, getEncodedToken, getDecodedToken } from '@cashu/cashu-ts';
 import { agentRoot } from './config.mjs';
 
 const WALLET_DIR = join(agentRoot(), 'memory', 'wallet');
@@ -68,15 +68,26 @@ export async function createWallet(cfg, log) {
 
   for (const url of configuredMints) {
     try {
-      const wallet = new CashuWallet(new CashuMint(url));
-      // Warm the mint info so we fail fast on unreachable mints at boot.
-      await wallet.getMintInfo().catch((e) => {
+      const wallet = new Wallet(new Mint(url));
+      // Warm mint info + keysets + keys so we fail fast on unreachable mints at
+      // boot. cashu-ts v3 splits this from getMintInfo() (now a synchronous
+      // cached getter) into loadMint(), which does the network fetch. A boot
+      // failure here is non-fatal — the mint is still registered and money-path
+      // calls re-run loadMint() lazily via ensureLoaded().
+      await wallet.loadMint().catch((e) => {
         log.warn(`[wallet] mint ${url} unreachable at boot: ${e.message}`);
       });
       mints.set(url, wallet);
     } catch (e) {
       log.error(`[wallet] init failed for ${url}: ${e.message}`);
     }
+  }
+
+  // cashu-ts v3 requires loadMint() before receive()/send(); it is idempotent
+  // (skips both network fetches once keysets are cached), so calling it before
+  // each money-path op restores v2's lazy load-on-demand without extra traffic.
+  async function ensureLoaded(wallet) {
+    await wallet.loadMint();
   }
 
   async function balance() {
@@ -103,7 +114,7 @@ export async function createWallet(cfg, log) {
       return { ok: false, reason: `bad token encoding: ${e.message}` };
     }
 
-    // cashu-ts v2 shape: { mint, proofs, unit, memo }
+    // cashu-ts token shape { mint, proofs, unit?, memo? } — unchanged in v3.
     const mintUrl = decoded.mint;
     if (!mintUrl) return { ok: false, reason: 'token missing mint' };
     if (!mints.has(mintUrl)) {
@@ -113,6 +124,8 @@ export async function createWallet(cfg, log) {
     const wallet = mints.get(mintUrl);
     let received;
     try {
+      await ensureLoaded(wallet);
+      // cashu-ts v3: receive(token) → Proof[] (unchanged shape from v2).
       received = await wallet.receive(encodedToken);
     } catch (e) {
       return { ok: false, reason: `mint refused token: ${e.message}` };
@@ -147,7 +160,8 @@ export async function createWallet(cfg, log) {
 
       let sendResult;
       try {
-        // cashu-ts v2: wallet.send(amount, proofs) → { keep, send }
+        await ensureLoaded(wallet);
+        // cashu-ts v3: wallet.send(amount, proofs) → { keep, send } (unchanged).
         sendResult = await wallet.send(sats, proofs);
       } catch (e) {
         return { ok: false, reason: `send failed on ${mintUrl}: ${e.message}` };

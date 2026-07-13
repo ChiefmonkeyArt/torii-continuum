@@ -1,6 +1,6 @@
 {
   "name": "torii-continuum-agent",
-  "version": "0.2.27-alpha",
+  "version": "0.2.28-alpha",
   "description": "Torii Continuum agent daemon — sovereign personal AI + project engine. VPS-only in v1; NIP-07 login; Cashu-paid Routstr model layer; no key material on the box.",
   "type": "module",
   "private": true,
@@ -13,7 +13,7 @@
     "test": "node --test test/"
   },
   "dependencies": {
-    "@cashu/cashu-ts": "^2.1.0",
+    "@cashu/cashu-ts": "^3.7.1",
     "@fastify/cors": "^11.0.0",
     "@fastify/rate-limit": "^11.0.0",
     "fastify": "^5.10.0",
