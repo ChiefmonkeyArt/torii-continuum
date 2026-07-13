@@ -9,6 +9,72 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.26-alpha — SUITE-VPS-READY-2: agent deploy tooling + first-touch admin claim
+
+Second slice of the suite VPS-install prep. Ships the tooling to run the
+agent as a hardened standalone service and removes the last manual step in
+bootstrapping an operator, so a fresh box is claimable by its owner on first
+sign-in. **The agent is NOT deployed by this PR** — this lands the tooling;
+actually running `install-agent.sh` on a server is a separate, operator-run
+step.
+
+New ops assets:
+- `ops/systemd/torii-continuum-agent.service` — runs the agent as a locked,
+  non-login `continuum` system user from `/opt/torii/continuum-agent` under
+  `NODE_ENV=production`. Hardened: `NoNewPrivileges`, `ProtectSystem=strict`
+  (whole FS read-only to the service except `memory/` + the single
+  `config.yaml` file), `PrivateTmp`/`PrivateDevices`, kernel/proc/clock
+  protections, `MemoryDenyWriteExecute`, `@system-service` syscall filter,
+  empty capability set, `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`.
+  Safe restart with a `StartLimitBurst` cap so a bad config fails the unit
+  instead of crash-looping.
+- `ops/nginx/torii-api.conf` — server-scoped same-origin `location /api/`
+  reverse proxy to `127.0.0.1:8787`, with edge `limit_req` (30 r/s, burst 60)
+  as a second rate-limit layer above the in-process Fastify limiter. The
+  `limit_req_zone` (http context) is documented + shipped separately to
+  `/etc/nginx/conf.d/`. Correct client-IP passthrough (`X-Real-IP`) for the
+  agent's bucket key.
+- `ops/install-agent.sh` — idempotent, strict-mode installer: root check +
+  dependency preflight, locked system user, `rsync --delete` of code that
+  never clobbers `memory/`/`pending/`/`ciphertexts/`/`config.yaml`,
+  `npm ci --omit=dev`, one-time `config.yaml` generation with a fresh
+  `openssl rand -hex 32` `session_secret` (0600, never echoed), config
+  validation before restart, systemd + nginx wiring (`nginx -t` before any
+  reload, refuses to redeclare an existing zone), and a bounded
+  `/api/health` liveness proof.
+- `ops/README.md` — refreshed with an authoritative standalone-install
+  runbook (prereqs, install/upgrade, config, nginx contexts, first-touch
+  claim, service management, security model, rollback/uninstall,
+  troubleshooting).
+
+First-touch admin bootstrap (`agent/core/auth.mjs`, `agent/core/config.mjs`,
+`agent/index.mjs`):
+- If `admin_npub` is empty, the agent boots **unclaimed**. The first caller
+  to pass a valid NIP-07 challenge/verify atomically claims admin: their
+  npub is persisted to `config.yaml` (canonical `npub1…`, 0600) and every
+  later non-matching caller is rejected. Configured-admin behaviour is
+  unchanged.
+- Race-safe (in-flight promise guard → exactly one of two concurrent first
+  verifies wins, no double-persist) and **fails closed**: if the config
+  write throws, no session token is issued and the box stays claimable.
+- Persistence is injected (`deps.persistAdmin`) so `createAuth` stays a pure
+  unit under test; `persistAdminNpub()` lives in `config.mjs`, does an
+  in-place `0600` rewrite that preserves comments/other keys, re-parses the
+  result as a YAML sanity check, and refuses a malformed npub (injection
+  guard).
+- Logging stays prefix-only — never full pubkeys/challenges/IPs, never the
+  session secret. `/api/health` now reports `admin_claimed`.
+
+Tests: 13 agent unit tests via `node --test` — first-touch success + single
+persist, restart honours persisted admin (no re-persist), second/different
+caller rejected, configured-admin matching/stranger/never-persist, bad
+signature no claim, wrong-kind no claim, concurrent race one-winner,
+persistence-failure fail-closed, no-persister fail-closed, plus four
+`persistAdminNpub` temp-tree tests (replace empty/set/insert/refuse
+malformed). Installer passes `bash -n`; `nginx -t`/`systemd-analyze` are
+environment-gated (tools absent in CI) and validated by the installer at
+deploy time.
+
 ## v0.2.25-alpha - onboarding preview v0.1.11-preview (fix reload stall)
 
 Operator reported browser refresh left Chiefmonkey invisible.
@@ -336,7 +402,7 @@ Self-hosted Draco decoder at `three-libs/draco/` (756 KB) so the
 character render has zero third-party runtime CDN dependency.
 
 Tarball + sha256 attached under `preview-assets/releases/` for scp
-deploy to chiefmonkey.art:/var/www/torii/continuum/onboarding-preview/.
+deploy to your gateway host under `/var/www/torii/continuum/onboarding-preview/`.
 
 Design review only - not built into the production app. Real
 integration lands in v0.9.0-alpha.

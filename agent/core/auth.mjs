@@ -51,7 +51,11 @@ function prefix(str, n = 8) {
 
 /**
  * @param {object} cfg  frozen loadConfig() result
- * @param {object} deps optional deps for testing: { now, log }
+ * @param {object} deps optional deps for testing:
+ *   { now, log, persistAdmin }
+ *   - persistAdmin(npub) async — persists a first-touch admin claim. Injected
+ *     so auth stays unit-testable without touching the filesystem. index.mjs
+ *     wires it to config.persistAdminNpub(cfg._config_path, npub).
  */
 export function createAuth(cfg, deps = {}) {
   const now = deps.now || (() => Math.floor(Date.now() / 1000));
@@ -72,17 +76,38 @@ export function createAuth(cfg, deps = {}) {
 
   const challenges = new Map(); // challenge → { expiresAt, ip }
 
-  // Decode admin npub to hex once at boot.
-  let adminHex;
-  try {
-    const decoded = nip19.decode(cfg.admin_npub);
-    if (decoded.type !== 'npub') throw new Error('not an npub');
-    adminHex = decoded.data;
-  } catch (e) {
-    // Boot-time failure: use console.error (logger may not exist yet in some code paths).
-    console.error(`[auth] admin_npub decode failed: ${e.message}`);
-    process.exit(1);
+  const persistAdmin =
+    typeof deps.persistAdmin === 'function' ? deps.persistAdmin : null;
+
+  // Decode admin npub to hex once at boot. An empty admin_npub is the valid
+  // "unclaimed" first-touch state — we boot in bootstrap mode and let the
+  // first verified caller claim admin (see claimAdmin below). A NON-empty but
+  // undecodable admin_npub is a hard misconfiguration → refuse to start.
+  let adminHex = null; // hex pubkey of the admin, or null while unclaimed
+  let adminNpub = cfg.admin_npub || null; // canonical npub, kept in sync on claim
+  const bootstrap = !cfg.admin_npub || cfg.admin_bootstrap === true;
+  if (!bootstrap) {
+    try {
+      const decoded = nip19.decode(cfg.admin_npub);
+      if (decoded.type !== 'npub') throw new Error('not an npub');
+      adminHex = decoded.data;
+    } catch (e) {
+      // Boot-time failure: use console.error (logger may not exist yet in some code paths).
+      console.error(`[auth] admin_npub decode failed: ${e.message}`);
+      process.exit(1);
+    }
+  } else {
+    log.warn({
+      evt: 'auth.bootstrap.armed',
+      note: 'admin_npub empty — first verified caller will claim admin',
+    });
   }
+
+  // Guards the one-shot first-touch claim. While a claim is being persisted
+  // this holds the in-flight promise so a second concurrent verify cannot
+  // also claim (single-threaded JS makes the check-and-set atomic between
+  // awaits). Cleared once the claim resolves or fails.
+  let claimInFlight = null;
 
   function gc() {
     const t = now();
@@ -137,9 +162,12 @@ export function createAuth(cfg, deps = {}) {
   }
 
   /**
-   * @returns { ok: true, token, expiresAt } | { ok: false, reason }
+   * @returns Promise<{ ok: true, token, expiresAt } | { ok: false, reason }>
+   *
+   * Async because a successful first-touch verification persists the admin
+   * claim to disk before issuing a token.
    */
-  function verifyChallenge(event, clientIp) {
+  async function verifyChallenge(event, clientIp) {
     if (!event || typeof event !== 'object') {
       log.warn({ evt: 'auth.verify.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'malformed_event' });
       return { ok: false, reason: 'no event' };
@@ -148,7 +176,10 @@ export function createAuth(cfg, deps = {}) {
       log.warn({ evt: 'auth.verify.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'wrong_kind' });
       return { ok: false, reason: 'wrong kind (expected 22242)' };
     }
-    if (event.pubkey !== adminHex) {
+    // Cheap early reject only once an admin is CLAIMED. In bootstrap mode we
+    // cannot pre-judge the pubkey, so we fall through to full signature
+    // verification and let claimAdmin() decide.
+    if (adminHex && event.pubkey !== adminHex) {
       log.warn({
         evt: 'auth.verify.fail',
         ip_prefix: prefix(clientIp || '', 12),
@@ -235,8 +266,17 @@ export function createAuth(cfg, deps = {}) {
       return { ok: false, reason: 'bad signature' };
     }
 
-    // All checks passed. Consume the challenge.
+    // Signature is valid. Consume the challenge so it can't be replayed even
+    // if the claim below fails.
     challenges.delete(challenge);
+
+    // First-touch bootstrap: no admin claimed yet → this verified caller
+    // claims it. Persist BEFORE issuing a token so a crash mid-claim never
+    // leaves a live session for an unpersisted admin.
+    if (!adminHex) {
+      const claim = await claimAdmin(event.pubkey, clientIp);
+      if (!claim.ok) return { ok: false, reason: claim.reason };
+    }
 
     log.info({
       evt: 'auth.verify.success',
@@ -248,7 +288,72 @@ export function createAuth(cfg, deps = {}) {
     return { ok: true, token: token.token, expires_at: token.expiresAt };
   }
 
+  /**
+   * One-shot first-touch admin claim. Called only after a caller's NIP-07
+   * signature has been fully verified.
+   *
+   * Race safety: JS runs synchronously between awaits, so the
+   * `if (claimInFlight)` check and the `claimInFlight = ...` assignment form
+   * an atomic critical section. Two concurrent first verifies therefore see:
+   * the first sets claimInFlight and awaits persistence; the second observes
+   * claimInFlight truthy and is rejected. Neither can overwrite the other.
+   * Persistence failures fail closed — adminHex stays null and no token is
+   * issued, so the box remains unclaimed and safe to retry.
+   *
+   * @returns Promise<{ ok: true } | { ok: false, reason }>
+   */
+  async function claimAdmin(pubkeyHex, clientIp) {
+    // Lost a race that already resolved: honour the winner.
+    if (adminHex) {
+      return adminHex === pubkeyHex
+        ? { ok: true }
+        : { ok: false, reason: 'admin already claimed' };
+    }
+    // Lost a race still in flight: refuse rather than double-claim.
+    if (claimInFlight) {
+      log.warn({
+        evt: 'auth.claim.contended',
+        ip_prefix: prefix(clientIp || '', 12),
+        pubkey_prefix: prefix(pubkeyHex),
+      });
+      return { ok: false, reason: 'admin claim already in progress' };
+    }
+    if (!persistAdmin) {
+      log.error({ evt: 'auth.claim.fail', reason: 'no_persister' });
+      return { ok: false, reason: 'no admin persister configured' };
+    }
+
+    let npub;
+    try {
+      npub = nip19.npubEncode(pubkeyHex);
+    } catch (e) {
+      log.error({ evt: 'auth.claim.fail', reason: 'npub_encode', msg: e.message });
+      return { ok: false, reason: 'could not encode admin npub' };
+    }
+
+    claimInFlight = Promise.resolve().then(() => persistAdmin(npub));
+    try {
+      await claimInFlight;
+    } catch (e) {
+      claimInFlight = null;
+      log.error({
+        evt: 'auth.claim.fail',
+        ip_prefix: prefix(clientIp || '', 12),
+        pubkey_prefix: prefix(pubkeyHex),
+        reason: 'persist_error',
+      });
+      return { ok: false, reason: 'failed to persist admin claim' };
+    }
+    claimInFlight = null;
+    adminHex = pubkeyHex;
+    adminNpub = npub;
+    log.info({ evt: 'auth.claim.success', pubkey_prefix: prefix(pubkeyHex) });
+    return { ok: true };
+  }
+
   function issueSessionToken() {
+    // Only ever called after a claim (or with a configured admin), so adminHex
+    // is guaranteed non-null here.
     const iat = now();
     const exp = iat + cfg.session_ttl_sec;
     const payload = `${iat}.${exp}.${adminHex}`;
@@ -268,7 +373,8 @@ export function createAuth(cfg, deps = {}) {
     const exp = parseInt(expStr, 10);
     if (!Number.isFinite(iat) || !Number.isFinite(exp)) return { ok: false, reason: 'bad timestamps' };
     if (exp < now()) return { ok: false, reason: 'expired' };
-    if (pk !== adminHex) return { ok: false, reason: 'not admin pubkey' };
+    // Unclaimed box: no valid session can exist yet.
+    if (!adminHex || pk !== adminHex) return { ok: false, reason: 'not admin pubkey' };
 
     const expected = createHmac('sha256', cfg.session_secret)
       .update(`${iat}.${exp}.${pk}`)
@@ -281,15 +387,17 @@ export function createAuth(cfg, deps = {}) {
     }
     if (!match) return { ok: false, reason: 'bad signature' };
 
-    return { ok: true, npub: cfg.admin_npub, exp };
+    return { ok: true, npub: adminNpub, exp };
   }
 
   return {
     issueChallenge,
     verifyChallenge,
     verifySessionToken,
-    _adminHex: adminHex, // exposed for tests
+    isClaimed: () => adminHex !== null,
+    adminNpub: () => adminNpub,
     _challenges: challenges, // exposed for tests (read-only usage)
     _maxChallenges: maxChallenges, // exposed for tests
+    get _adminHex() { return adminHex; }, // live getter for tests
   };
 }

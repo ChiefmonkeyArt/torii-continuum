@@ -20,7 +20,7 @@ import rateLimit from '@fastify/rate-limit';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { writeFile, mkdir, unlink, readdir, readFile } from 'node:fs/promises';
-import { loadConfig } from './core/config.mjs';
+import { loadConfig, persistAdminNpub } from './core/config.mjs';
 import { createAuth } from './core/auth.mjs';
 import { createWallet } from './core/wallet.mjs';
 import { createRoutstr } from './core/routstr.mjs';
@@ -49,7 +49,15 @@ try {
 
 const cfg = loadConfig();
 
+// trustProxy is a LOOPBACK-ONLY allow-list, never `true`. nginx terminates TLS
+// and proxies from 127.0.0.1 (or ::1), so only a connection whose socket peer
+// is loopback may set req.ip from X-Forwarded-For. If the agent is ever exposed
+// beyond loopback, a direct remote peer is NOT in this list, so its forged
+// X-Forwarded-For is ignored and req.ip stays the real socket address — the
+// rate-limit bucket key cannot be spoofed from off-box. An unconditional
+// `trustProxy: true` would trust XFF from ANY peer and collapse that guarantee.
 const app = Fastify({
+  trustProxy: ['127.0.0.1', '::1'],
   logger: {
     level: cfg.logging?.level || 'info',
     transport:
@@ -81,26 +89,24 @@ const rateLimitEnabled = cfg.rate_limit?.enabled !== false;
 if (rateLimitEnabled) {
   await app.register(rateLimit, {
     global: false,
-    // Default keyGenerator uses req.ip which honours the trust-proxy
-    // configuration below. nginx sets X-Forwarded-For; we must trust it
-    // for the per-IP bucket to be the client IP and not the nginx loopback.
+    // keyGenerator uses req.ip, which reflects X-Forwarded-For only when the
+    // socket peer is loopback (see the trustProxy allow-list on the Fastify
+    // constructor). Behind the loopback nginx that means the bucket key is the
+    // real client IP; a direct off-box peer's forged XFF is ignored, so the
+    // per-IP buckets separate clients and cannot be collapsed by spoofing.
     keyGenerator: (req) => req.ip,
   });
 } else {
   app.log.warn({ evt: 'auth.ratelimit.disabled', note: 'cfg.rate_limit.enabled=false' });
 }
 
-// nginx terminates TLS on the VPS and proxies to 127.0.0.1:8787 with
-// X-Forwarded-For set. We trust the immediate proxy (the loopback nginx),
-// so Fastify populates req.ip from that header. This is safe because the
-// server binds to 127.0.0.1 only — nothing else can reach it directly.
-app.addHook('onReady', async () => {
-  // No-op — trust-proxy shape is applied via Fastify options above if
-  // needed. We keep the default (trust the immediate proxy) which matches
-  // the single-hop nginx layout in the suite installer.
+// First-touch admin bootstrap (v0.2.26-alpha): the persister is injected so
+// auth stays filesystem-agnostic + unit-testable. It writes the claimed npub
+// back into the same config.yaml the daemon booted from.
+const auth = createAuth(cfg, {
+  log: app.log,
+  persistAdmin: (npub) => persistAdminNpub(cfg._config_path, npub),
 });
-
-const auth = createAuth(cfg, { log: app.log });
 const wallet = await createWallet(cfg, app.log);
 const routstr = createRoutstr(cfg, wallet, app.log);
 
@@ -189,6 +195,9 @@ app.get('/api/health', async () => ({
   version: VERSION,
   time: new Date().toISOString(),
   memory_unlocked: memoryCache.isUnlocked(),
+  // First-touch state: false means the box is still unclaimed and the next
+  // verified NIP-07 caller becomes admin. No pubkey is exposed either way.
+  admin_claimed: auth.isClaimed(),
 }));
 
 // GET /api/health/models — provider reachability probe.
@@ -273,7 +282,7 @@ app.post('/api/auth/challenge', { config: rateLimitConfig(authChallengeMax, '/ap
 app.post('/api/auth/verify', { config: rateLimitConfig(authVerifyMax, '/api/auth/verify') }, async (req, reply) => {
   const event = req.body?.event;
   if (!event) return reply.code(400).send({ error: 'body.event required' });
-  const result = auth.verifyChallenge(event, req.ip);
+  const result = await auth.verifyChallenge(event, req.ip);
   if (!result.ok) {
     // auth.mjs already emitted the structured auth.verify.fail line.
     return reply.code(401).send({ error: result.reason });
@@ -510,7 +519,11 @@ const host = cfg.server.host;
 try {
   await app.listen({ port, host });
   app.log.info(`torii-continuum-agent listening on http://${host}:${port}`);
-  app.log.info(`admin npub: ${cfg.admin_npub.slice(0, 12)}...`);
+  app.log.info(
+    auth.isClaimed()
+      ? `admin npub: ${(auth.adminNpub() || '').slice(0, 12)}...`
+      : 'admin: UNCLAIMED — first verified NIP-07 caller will claim (first-touch)',
+  );
   app.log.info(`cashu mints: ${wallet.mints.join(', ') || '(none)'}`);
   app.log.info(`routstr endpoint: ${cfg.routstr.endpoint}`);
   app.log.info(`ollama: enabled=${cfg.ollama?.enabled === true} endpoint=${cfg.ollama?.endpoint || '(default)'}`);
