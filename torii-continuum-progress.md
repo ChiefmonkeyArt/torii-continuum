@@ -9,6 +9,40 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.27-alpha — AGENT-SEC: production dependency remediation
+
+Security-only slice. During the live v0.2.26-alpha deploy, `npm ci --omit=dev`
+in `agent/` surfaced **5 HIGH** production advisories in the Fastify dependency
+tree (and the informational `@cashu/cashu-ts@2.5.3` deprecation notice).
+
+Root cause: the whole cluster traces to `fast-uri` and Fastify itself —
+- `fast-uri` path traversal via percent-encoded dot segments (GHSA-q3j6-qgpj-74h6, CWE-22, CVSS 7.5)
+- `fast-uri` host confusion via percent-encoded authority delimiters (GHSA-v39h-62p7-jpjc, CWE-436, CVSS 7.5)
+- `@fastify/ajv-compiler`, `fast-json-stringify`, `@fastify/fast-json-stringify-compiler` all HIGH transitively via the vulnerable `fast-uri`
+- `fastify` HIGH on its own account: Content-Type tab-char body-validation bypass (GHSA-jx2c-rxcm-jvmq, CWE-436, CVSS 7.5), **no v4 backport** — fixed only in `fastify@>=5.7.2`.
+
+Because the Fastify advisory has no v4 fix, an override on `fast-uri` alone
+could not reach zero HIGH; the safe complete remediation was the Fastify v5
+line. Changes:
+- `agent/package.json`: `fastify ^4.28.1 → ^5.10.0`, `@fastify/cors ^9.0.1 → ^11.0.0`, `@fastify/rate-limit ^9.1.0 → ^11.0.0`; lockfile regenerated (`fast-uri` now 3.1.3 / nested 4.1.0, both patched).
+- `agent/index.mjs`: removed the explicit `disableRequestLogging: false`. Passing this top-level option **at all** — even the default `false` — trips Fastify v5's `FSTDEP023` deprecation warning: the constructor guard is `if (options.disableRequestLogging !== undefined)`, not a truthiness check (verified against installed `fastify@5.10.0` `lib/warnings.js` + `fastify.js`, and reproduced live under `node --trace-deprecation`). The warning text states the top-level option "will be removed in `fastify@6`". The value only restated the default, so dropping it is a pure no-op that silences the boot warning — request logging still emits `incoming request` / `request completed`. No other app code change — the v4→v5 migration was API-transparent for this daemon (trustProxy allow-list, CORS options, rate-limit `global:false` + per-route `config.rateLimit` + `errorResponseBuilder(req, ctx.ttl)` all unchanged in the v11 plugins).
+- `@cashu/cashu-ts` **held at 2.5.3**: it carries **no published npm/GHSA advisory** (absent from `npm audit`), so it does not block this HIGH-clearing hotfix. It is **not** merely a spec/maintenance deprecation, though: the registry notice steers users to `@cashu/cashu-ts@v3-lts`, described upstream as the "security-fixes-only LTS" line — implying maintained fixes that 2.5.3 will not receive. A v3-lts (3.7.1) or v4 (4.7.0) migration touches proof/token handling in the wallet money path, so it is deferred to its own slice rather than folded into a security hotfix — but it is tracked as a **security-relevant** money-path follow-up to prioritise, not cosmetic cleanup.
+
+Tests added (offline, no live mint / no network / no secrets logged):
+- `agent/test/wallet.test.js` — wallet guard + failure paths (sub-sat send, insufficient balance, malformed token, non-whitelisted mint) and a `getEncodedToken`/`getDecodedToken` `{ mint, proofs }` round-trip regression against the new lockfile.
+- `agent/test/fastify-v5-api.test.js` — CORS preflight (204 + echoed origin + credentials) and the rate-limit route-config contract (429 at N+1 + `Retry-After` + numeric `context.ttl`) under fastify 5 / plugins 11.
+
+Verification: `npm audit --omit=dev` → **0 vulnerabilities** (from 5 HIGH);
+agent `node --test` 30/30; `scripts/smoke-rate-limit.mjs` all pass; root
+`vitest` (no frontend suites) + `vite build` green; ops regression
+`nginx-install` 13/13 and `installer-signal` 9/9; all `ops/*.sh` pass
+`bash -n`.
+
+**Not deployed by this slice.** v0.2.26-alpha remains the currently deployed
+server version; picking up v0.2.27 on the VPS is a separate operator step
+(re-run `ops/install-agent.sh`, which runs `npm ci --omit=dev` against the new
+lockfile).
+
 ## v0.2.26-alpha — SUITE-VPS-READY-2: agent deploy tooling + first-touch admin claim
 
 Second slice of the suite VPS-install prep. Ships the tooling to run the
