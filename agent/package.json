@@ -1,16 +1,16 @@
 {
   "name": "torii-continuum-agent",
-  "version": "0.2.28-alpha",
+  "version": "0.2.29-alpha",
   "description": "Torii Continuum agent daemon — sovereign personal AI + project engine. VPS-only in v1; NIP-07 login; Cashu-paid Routstr model layer; no key material on the box.",
   "type": "module",
   "private": true,
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.4.0"
   },
   "scripts": {
     "start": "node index.mjs",
     "dev": "node --watch index.mjs",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "dependencies": {
     "@cashu/cashu-ts": "^3.7.1",

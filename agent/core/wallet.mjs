@@ -59,7 +59,7 @@ async function writeProofs(mintUrl, proofs) {
  * @returns wallet API
  */
 export async function createWallet(cfg, log) {
-  const mints = new Map(); // mintUrl → CashuWallet
+  const mints = new Map(); // mintUrl → Wallet
   const configuredMints = cfg.cashu?.mints || [];
 
   if (configuredMints.length === 0) {
@@ -86,6 +86,10 @@ export async function createWallet(cfg, log) {
   // cashu-ts v3 requires loadMint() before receive()/send(); it is idempotent
   // (skips both network fetches once keysets are cached), so calling it before
   // each money-path op restores v2's lazy load-on-demand without extra traffic.
+  // No in-flight promise dedup: loadMint() is idempotent server-side and the
+  // boot warm-up above already primes each mint, so the only un-deduped case is
+  // two concurrent first-ever ops after a boot warm-up failure — which fire
+  // duplicate (idempotent) fetches, never a double-spend. Left simple on purpose.
   async function ensureLoaded(wallet) {
     await wallet.loadMint();
   }

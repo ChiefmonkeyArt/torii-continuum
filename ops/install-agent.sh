@@ -87,8 +87,26 @@ done
 [[ -f "${AGENT_SRC}/index.mjs" ]] || die "agent/index.mjs missing — is this the repo checkout?"
 [[ -f "${AGENT_SRC}/config.example.yaml" ]] || die "agent/config.example.yaml missing"
 
-node_major="$(node -e 'process.stdout.write(String(process.versions.node.split(".")[0]))')"
-[[ "$node_major" -ge 20 ]] || die "Node >= 20 required (found $(node --version))"
+# Node runtime floor is a HARD gate (see ops/lib/node-version.sh). The money
+# path (@cashu/cashu-ts v3-lts) declares engines.node >=22.4.0; we refuse an
+# older runtime here, before touching any user/service/file, rather than let an
+# EBADENGINE advisory slide by during npm ci. Node 22 is LTS — a coordinated
+# upgrade prerequisite, not a bleeding-edge ask.
+# shellcheck source=lib/node-version.sh
+source "${SCRIPT_DIR}/lib/node-version.sh"
+node_ver="$(node -e 'process.stdout.write(process.versions.node)')"
+if node_version_ok "$node_ver"; then
+  :
+else
+  case $? in
+    2) die "could not parse Node version '$node_ver' — need >= ${TORII_NODE_MIN_STR}" ;;
+    *) die "Node >= ${TORII_NODE_MIN_STR} required (found $(node --version)).
+  The Cashu money-path dependency (@cashu/cashu-ts v3-lts) declares
+  engines.node >=${TORII_NODE_MIN_STR}. Running the wallet on an older runtime is
+  unsupported. Upgrade this host to Node 22 LTS (>= ${TORII_NODE_MIN_STR}) and re-run.
+  Aborting before any user, service, or file is touched." ;;
+  esac
+fi
 
 # Resolve the ABSOLUTE node path once, here, from the operator's own PATH.
 # The systemd unit ships with a __NODE_BIN__ placeholder rather than a
