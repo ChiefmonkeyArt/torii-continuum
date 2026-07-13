@@ -9,6 +9,45 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.31-alpha — ONBOARDING-STEP1: live NIP-07/NIP-46 auth for the onboarding preview
+
+Onboarding preview bumped to **v0.1.12-preview** (`preview-assets/onboarding-v0.1.12/`).
+Step 1 ("Prove you're the operator") now performs a real login against the
+same-origin agent API instead of advancing the deck on a bare click.
+
+New self-contained `onboarding-client.js` (ES module, no build step, no
+third-party CDN). Primary path is **NIP-07** via `window.nostr` (button:
+"Sign with Plebeian Signer"): `POST /api/auth/challenge` → build + sign the
+exact kind-22242 auth event the agent expects (`content == challenge`,
+`['challenge', …]` + `['relay', origin]` tags, mirroring
+`agent/core/auth.mjs`) → `POST /api/auth/verify` → persist the session to
+exactly `localStorage['torii.session']`. Fails closed on malformed
+challenge/verify responses, expired challenges, pubkey/challenge mismatch,
+or an absent token. Secondary path is **NIP-46** with the browser as the
+client (architecture per github.com/dsbaars/bunker46), revealed by "Use a
+different signer": the operator pastes a `bunker://` string, the browser
+parses it and asks the remote signer to sign the same event over the
+bunker's relay. There is **no server bunker-connect endpoint**; no key or
+connection secret ever reaches the agent, and it never silently falls back
+to NIP-07. Session value shape: `{ token, expires_at, pubkey, method,
+created_at }` — session token + public identity metadata only, no secrets.
+
+Chiefmonkey reacts via the existing animation channel: `HandGesture_00`
+while prompting/signing, `Idle_03` on success, `Confused_02` on failure —
+each with an ordered fallback to a clip that exists in the shipped GLB (the
+GLB ships neither `HandGesture_00` nor `Confused_02`), so a missing clip
+keeps the current animation rather than freezing.
+
+Preserves the desktop-only gate and every prior perf fix (self-hosted
+Three.js/Draco, WebP scenes, Draco wasm preload, `renderer.compile`,
+same-origin preload cache behaviour). 28 offline vitest cases cover NIP-07
+success/failure, storage shape/key, API response validation, animation
+selection, NIP-46 browser-client behaviour + no-server-bunker-endpoint, and
+no forbidden UI terminology ("Wallet" on the signer button, "VPS") or CDN
+regressions. Verified: root vitest 28/28, root build, agent `node --test`,
+ops regressions, `npm audit --omit=dev` (agent). **Code + draft PR only —
+not deployed.**
+
 ## v0.2.30-alpha — AGENT-SEC-OPT-TORII-PERMS: least-privilege fix for the shared /opt/torii parent
 
 Production regression fix, found after the v0.2.29 deploy to the SHC VPS. The
