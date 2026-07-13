@@ -9,6 +9,39 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.30-alpha — AGENT-SEC-OPT-TORII-PERMS: least-privilege fix for the shared /opt/torii parent
+
+Production regression fix, found after the v0.2.29 deploy to the SHC VPS. The
+installer created the **shared** parent `/opt/torii` with an unconditional
+`install -d -m 0750 -o continuum -g continuum /opt/torii`. `install -d` re-applies
+mode+owner on every run, so this clamped the directory that torii's *other* apps
+live under (torii-base launcher, quest tooling) to `0750 continuum:continuum` and
+stripped its world-execute (`o+x`) bit. nginx (`www-data`) could then no longer
+traverse `/opt/torii` to reach `/opt/torii/launcher/index.html`, so `/` fell
+through to a default nginx **404** (Quest under `/var/www` was unaffected).
+
+Fix (`ops/install-agent.sh`): create `/opt/torii` **only if absent**, `root:root`
+`0755`, and **never re-own or re-mode an existing** shared parent. The agent's own
+subdir `/opt/torii/continuum-agent` stays locked `0750 continuum:continuum` — nginx
+never serves from it (the agent is loopback-proxied on `127.0.0.1:8787`), so no
+confidentiality is lost. No behaviour change for the agent; the only delta is that
+the shared parent keeps the permissions its other tenants need.
+
+Tests: new hermetic + anti-drift `ops/test/installer-shared-parent.test.sh` (10
+assertions) — proves the installer no longer chowns the shared parent to the
+service user, guards its creation with an existence check (non-destructive
+re-run), creates it `root:root 0755`, keeps `$INSTALL_DIR` locked `0750`
+`$SERVICE_USER`, and functionally that an existing parent's mode (incl. an
+operator-chosen `0751`) survives a re-run while a fresh parent comes up
+world-traversable and the agent subdir stays `0750`. Full ops suite green:
+`installer-preflight` 18/18, `installer-signal` 9/9, `nginx-install` 13/13,
+`installer-shared-parent` 10/10; all `ops/*.sh` pass `bash -n`.
+
+Operator out-of-band unblock before redeploy, if needed:
+`sudo chown root:root /opt/torii && sudo chmod 0755 /opt/torii` (restores `o+x`,
+leaves the agent subdir untouched). The previously-planned **onboarding** work
+moves to **v0.2.31-alpha**. Code + draft PR only — not yet deployed.
+
 ## v0.2.29-alpha — AGENT-SEC-CASHU-LTS-RUNTIME: enforce the Node 22 money-path floor
 
 Security-relevant follow-up to v0.2.28. Two independent reviews of PR #26 reached

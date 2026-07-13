@@ -147,7 +147,17 @@ usermod --shell /usr/sbin/nologin "$SERVICE_USER" >/dev/null 2>&1 || true
 
 # ── 2. Directory + code sync ────────────────────────────────────────────────
 log "ensuring install dir $INSTALL_DIR"
-install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" /opt/torii
+# /opt/torii is a SHARED parent across torii apps (the torii-base launcher, quest
+# tooling, this agent). It must stay root-owned and world-traversable so other
+# services — notably nginx as `www-data` — can traverse it to reach their own
+# files (e.g. /opt/torii/launcher/index.html). Create it only if absent; NEVER
+# re-own or re-mode an existing parent. `install -d` re-applies mode+owner on
+# every run, so an unconditional `install -d ... -o continuum ... /opt/torii`
+# would clamp the shared parent to 0750 continuum:continuum and strip its o+x,
+# 404-ing every sibling app. Guard with a test so re-runs are non-destructive.
+if [[ ! -d /opt/torii ]]; then
+  install -d -m 0755 -o root -g root /opt/torii
+fi
 install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$INSTALL_DIR"
 
 # Persistent runtime state — created if absent, never wiped on re-run.
