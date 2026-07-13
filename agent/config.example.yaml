@@ -1,10 +1,16 @@
 # Torii Continuum — Agent Configuration (example)
 #
-# Copy this file to `config.yaml` on the VPS, fill in the values, and never
-# commit the real one. `config.yaml` is in .gitignore.
+# Copy this file to `config.yaml` on your Torii gateway, fill in the values,
+# and never commit the real one. `config.yaml` is in .gitignore.
 #
-# Filesystem posture: this file lives under /home/continuum/agent/ (chmod 700).
-# The `continuum` OS user runs the daemon. No other user can read it.
+# The authoritative install + operations runbook is ops/README.md. The
+# ops/install-agent.sh installer renders this file for you (fresh
+# session_secret, empty admin_npub for first-touch), so hand-editing is only
+# needed for advanced tuning.
+#
+# Filesystem posture: in a standalone install this lives at
+# /opt/torii/continuum-agent/config.yaml, owned by the locked `continuum`
+# system user and chmod 600. No other user can read it.
 
 # ─────────────────────────────────────────────────────────────
 # Admin identity
@@ -15,7 +21,14 @@
 #
 # Only one admin in v1. Multi-admin is not on the roadmap.
 #
-admin_npub: "npub1REPLACE_WITH_YOUR_PLEBEIAN_SIGNER_NPUB"
+# FIRST-TOUCH CLAIM (recommended): leave this empty ("") and the FIRST caller
+# who completes a valid NIP-07 /api/auth/verify permanently claims admin — the
+# agent writes their npub back here atomically. Every later/different caller is
+# then rejected. This means the box is briefly claimable after first boot, so
+# do your first sign-in from the Console immediately after install. To skip the
+# claim window entirely, pin your npub here up front.
+#
+admin_npub: ""
 
 # Session tokens are HMAC-signed with this secret. Generate with:
 #   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"

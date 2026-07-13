@@ -75,7 +75,7 @@ async function makeApp(cfg) {
   app.post('/api/auth/verify', { config: rateLimitConfig(cfg.rate_limit?.auth_verify_per_min, '/api/auth/verify') }, async (req, reply) => {
     const event = req.body?.event;
     if (!event) return reply.code(400).send({ error: 'body.event required' });
-    const result = auth.verifyChallenge(event, req.ip);
+    const result = await auth.verifyChallenge(event, req.ip);
     if (!result.ok) return reply.code(401).send({ error: result.reason });
     return { token: result.token, expires_at: result.expires_at };
   });

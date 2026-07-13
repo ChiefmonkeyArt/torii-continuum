@@ -1,0 +1,84 @@
+# Torii Continuum Agent — systemd unit (standalone install)
+#
+# Installed to /etc/systemd/system/torii-continuum-agent.service by
+# ops/install-agent.sh. Runs the agent as the locked, non-login `continuum`
+# system user from /opt/torii/continuum-agent.
+#
+# Security model (see ops/README.md § Security model):
+#   - Dedicated unprivileged user/group, no shell, no capabilities.
+#   - ProtectSystem=strict makes the whole filesystem read-only except the
+#     paths in ReadWritePaths.
+#   - Only the agent's runtime state (memory/) is writable, plus config.yaml
+#     as a single writable FILE so the one-time first-touch admin claim can
+#     persist the operator's npub. Everything else — code, node_modules,
+#     the rest of the system — is read-only to the service.
+#   - The agent binds 127.0.0.1:8787 only; nginx terminates TLS in front.
+
+[Unit]
+Description=Torii Continuum Agent (Node.js)
+Documentation=https://github.com/ChiefmonkeyArt/torii-continuum
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=continuum
+Group=continuum
+WorkingDirectory=/opt/torii/continuum-agent
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node index.mjs
+
+# Restart safely without hammering: back off and cap the burst so a crash-loop
+# (e.g. a bad config) doesn't spin the CPU. StartLimit trips the unit into a
+# failed state instead of restarting forever.
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=torii-continuum-agent
+
+# ── Sandboxing ────────────────────────────────────────────────────────────
+# Privilege + filesystem
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+# Writable state only. memory/ holds the Cashu wallet, cost/audit logs, and
+# character ciphertexts. config.yaml is writable for the first-touch claim.
+ReadWritePaths=/opt/torii/continuum-agent/memory
+ReadWritePaths=/opt/torii/continuum-agent/config.yaml
+ReadOnlyPaths=/opt/torii/continuum-agent
+PrivateTmp=true
+PrivateDevices=true
+
+# Kernel + process surface
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete
+RemoveIPC=true
+UMask=0077
+
+# Networking: the agent must reach nginx (loopback) and Routstr/mints/Ollama
+# (outbound). Restrict to the address families it actually needs — no raw
+# packet, no bluetooth, no netlink beyond what the runtime requires.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
