@@ -130,8 +130,15 @@ optional same-origin `/api/` nginx proxy — nothing else on the host.
 
 ### Prerequisites
 
-- A Linux host you control with `node` (>= 20), `npm`, `rsync`, `openssl`,
-  `systemctl`, and `getent` on `PATH`.
+- A Linux host you control with `node` (**>= 22.4.0**), `npm`, `rsync`,
+  `openssl`, `systemctl`, and `getent` on `PATH`. **Node 22 LTS is a hard
+  deployment prerequisite, not a recommendation** — the installer refuses to
+  run on anything older and stops before touching any user, service, or file.
+  The Cashu money-path dependency (`@cashu/cashu-ts` v3-lts) declares
+  `engines.node >=22.4.0` across its whole line; an `EBADENGINE` warning during
+  `npm ci` is **not** an acceptable production state for a wallet. If your host
+  is on Node 20, upgrade it to the Node 22 LTS line first — this is a
+  coordinated prerequisite step, not something to defer.
 - Root (the installer creates a system user and writes to `/opt` and
   `/etc/systemd`).
 - Optional: `nginx` (for the same-origin proxy) and `curl` (for the health

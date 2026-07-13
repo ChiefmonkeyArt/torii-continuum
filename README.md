@@ -17,7 +17,7 @@ Continuum treats every project like a nostr identity: portable, signable, yours.
 - **AI chat dock** — routes through your agent (POST /api/chat) when signed in; falls back to mock replies otherwise.
 - **NIP-07 login** — sidebar button opens a Plebeian Signer flow, signs a kind 22242 challenge, and stores the returned session token locally.
 
-**Agent (`agent/`, Node 20 + Fastify)**
+**Agent (`agent/`, Node 22 LTS >= 22.4.0 + Fastify)**
 
 A small daemon designed for one operator, one VPS, one npub. Owns:
 

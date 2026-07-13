@@ -37,7 +37,9 @@ every `.enc` file. See the endpoint reference at the bottom of this file.
 ## 0. Prerequisites
 
 - Ubuntu 22.04 LTS (or any distro with systemd)
-- Node 20 LTS (`nvm install 20 && nvm alias default 20`)
+- Node 22 LTS, **>= 22.4.0** (`nvm install 22 && nvm alias default 22`). This is
+  a hard floor — the `@cashu/cashu-ts` v3-lts money-path dependency declares
+  `engines.node >=22.4.0`, and the installer refuses anything older.
 - Domain pointed at your VPS (e.g. `agent.yourdomain.tld`)
 - Plebeian Signer installed in your browser (or any NIP-07 signer)
 - A Cashu wallet you control with a small float (~5,000 sats to start)
