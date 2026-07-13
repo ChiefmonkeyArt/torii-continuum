@@ -9,6 +9,38 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.32-alpha — ONBOARDING-STEP1-FIX: "agent challenge failed (400)" on Sign with Plebeian Signer
+
+Onboarding preview bumped to **v0.1.13-preview** (`preview-assets/onboarding-v0.1.13/`).
+Production bug: on the live onboarding preview (v0.1.12-preview / agent
+v0.2.31-alpha) the operator clicked "Sign with Plebeian Signer"; Chiefmonkey
+animated but no signer prompt opened and the panel reported exactly
+`agent challenge failed (400)`.
+
+**Root cause (client-only).** `onboarding-client.js`'s `postJson` helper
+always set `Content-Type: application/json`, including on the **bodyless**
+`POST /api/auth/challenge` call. The agent runs Fastify v5, whose JSON
+content-type parser rejects an empty body carrying that header with
+`400 FST_ERR_CTP_EMPTY_JSON_BODY`. So the very first step failed before any
+signer was invoked — the NIP-07 `window.nostr` prompt only fires *after* a
+challenge is fetched, which is why Chiefmonkey animated ("prompting") but no
+extension prompt appeared. The agent route, schema, and validation were
+correct; the mismatch was entirely in the client's request framing.
+
+**Fix.** `postJson` now sets the JSON content-type and serialises a body only
+when a body is actually provided. The challenge call goes out bodyless with no
+content-type (→ 200); the verify call is unchanged. No server endpoint added,
+no validation weakened, no new bunker-connect endpoint. NIP-07 stays primary,
+browser-client NIP-46 secondary; `localStorage['torii.session']`, the exact
+"Sign with Plebeian Signer" wording, and the three auth-phase clips
+(`HandGesture_00` / `Idle_03` / `Confused_02`) are all preserved.
+
+Tests: new offline vitest case asserts the challenge POST carries no body and
+no JSON content-type while the verify POST still does; new agent
+`fastify-v5-api` case pins the empty-body-400 vs bodyless-200 contract the fix
+relies on. Verified root vitest, root build, agent `node --test`, agent
+`npm audit --omit=dev`. Code + PR only — not deployed.
+
 ## v0.2.31-alpha — ONBOARDING-STEP1: live NIP-07/NIP-46 auth for the onboarding preview
 
 Onboarding preview bumped to **v0.1.12-preview** (`preview-assets/onboarding-v0.1.12/`).

@@ -92,6 +92,33 @@ test('rate limiter trips at N+1 with structured 429 body + Retry-After', async (
   }
 });
 
+test('bodyless POST contract: empty body + application/json is a 400, no content-type is a 200', async () => {
+  // Pins the Fastify v5 behaviour that the onboarding client's postJson must
+  // respect. /api/auth/challenge takes no request body. If a caller sends an
+  // empty body WITH `Content-Type: application/json`, Fastify's JSON parser
+  // rejects it as FST_ERR_CTP_EMPTY_JSON_BODY (HTTP 400) before the handler
+  // runs — this is what surfaced to the operator as "agent challenge failed
+  // (400)". The same call with NO content-type reaches the handler and 200s.
+  const app = Fastify({ logger: false });
+  app.post('/api/auth/challenge', async () => ({ challenge: 'x'.repeat(48), expires_in: 300, kind: 22242 }));
+  await app.ready();
+  try {
+    const withJsonCt = await app.inject({
+      method: 'POST',
+      url: '/api/auth/challenge',
+      headers: { 'content-type': 'application/json' },
+    });
+    assert.equal(withJsonCt.statusCode, 400);
+    assert.equal(JSON.parse(withJsonCt.body).code, 'FST_ERR_CTP_EMPTY_JSON_BODY');
+
+    const bodyless = await app.inject({ method: 'POST', url: '/api/auth/challenge' });
+    assert.equal(bodyless.statusCode, 200);
+    assert.equal(JSON.parse(bodyless.body).kind, 22242);
+  } finally {
+    await app.close();
+  }
+});
+
 test('global:false leaves un-opted routes unbounded past the v11 default max (1000)', async () => {
   // @fastify/rate-limit v11 defaults to max:1000 per window for routes that opt
   // in without their own max. With global:false and no route-level config, /open
