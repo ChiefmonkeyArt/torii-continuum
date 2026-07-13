@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, statSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse } from 'yaml';
@@ -70,6 +70,35 @@ test('inserts admin_npub when absent', () => {
     const parsed = parse(readFileSync(path, 'utf8'));
     assert.equal(parsed.admin_npub, VALID_NPUB);
     assert.equal(parsed.session_ttl_sec, 86400);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('write survives a re-parse and is durable (0600, valid YAML)', () => {
+  // The fsync'd in-place write must leave a well-formed, mode-0600 file that
+  // re-parses and carries the npub — the crash-safe path, not temp+rename.
+  const { dir, path } = tmpConfig('admin_npub: ""\nsession_ttl_sec: 86400\n');
+  try {
+    persistAdminNpub(path, VALID_NPUB);
+    const parsed = parse(readFileSync(path, 'utf8'));
+    assert.equal(parsed.admin_npub, VALID_NPUB);
+    assert.equal(parsed.session_ttl_sec, 86400);
+    assert.equal(statSync(path).mode & 0o777, 0o600, 'still 0600 after fsync write');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('fails closed on an unwritable target (I/O error → throw, no partial claim)', () => {
+  // If the target cannot be written, persistAdminNpub MUST throw so the caller
+  // (auth.claimAdmin) fails closed and leaves the box claimable. Point it at a
+  // directory: readFileSync/openSync raise EISDIR deterministically for any uid.
+  const dir = mkdtempSync(join(tmpdir(), 'torii-cfg-'));
+  const asDir = join(dir, 'config.yaml');
+  mkdirSync(asDir);
+  try {
+    assert.throws(() => persistAdminNpub(asDir, VALID_NPUB));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

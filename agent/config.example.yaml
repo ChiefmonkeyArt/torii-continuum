@@ -66,7 +66,7 @@ server:
 #
 cashu:
   # Mint(s) to use. First one is default for new mints; others accepted on receive.
-  # Change these to Bitcoin-only, Chiefmonkey-trusted mints in production.
+  # Change these to Bitcoin-only, operator-trusted mints in production.
   mints:
     - "https://mint.minibits.cash/Bitcoin"
     - "https://mint.coinos.io"

@@ -19,7 +19,7 @@
  *   npub back to config.yaml. See core/auth.mjs.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, openSync, writeSync, fsyncSync, fchmodSync, closeSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { parse } from 'yaml';
@@ -123,10 +123,18 @@ export function agentRoot() {
  *
  * Rewrites (or inserts) the single `admin_npub:` line in place, preserving
  * every other line — comments, ordering, and the rest of the config — so the
- * file stays valid YAML and human-readable. Writes in place (no temp+rename)
- * because the production systemd sandbox exposes config.yaml as a writable
- * file inside an otherwise read-only directory; a rename would need directory
- * write access we deliberately don't grant.
+ * file stays valid YAML and human-readable.
+ *
+ * Crash-safety: we write in place and fsync the fd before returning, so a
+ * power loss right after the claim can't leave the flushed data stranded in
+ * the page cache. We deliberately do NOT use the usual temp-file + atomic
+ * rename dance: the production systemd sandbox exposes config.yaml as a single
+ * writable FILE inside an otherwise read-only directory (ProtectSystem=strict
+ * + ReadWritePaths=.../config.yaml), so creating a sibling temp or renaming
+ * over the target would need directory write access we deliberately don't
+ * grant. In-place overwrite + fsync is the crash-safe path that fits the
+ * sandbox. The full replacement text is validated as YAML in memory BEFORE any
+ * byte is written, so we never truncate the live file only to fail mid-render.
  *
  * @param {string} configPath absolute path to config.yaml
  * @param {string} npub       canonical npub1... to persist
@@ -153,12 +161,22 @@ export function persistAdminNpub(configPath, npub) {
     next = `${line}\n${raw}`;
   }
 
-  // Sanity check: the rewritten text must still parse and carry our npub.
+  // Sanity check BEFORE touching the file: the rewritten text must still parse
+  // and carry our npub. If this throws, the live config is untouched.
   const check = parse(next);
   if (!check || check.admin_npub !== npub) {
     throw new Error('persistAdminNpub: post-write YAML validation failed');
   }
 
-  // mode is honoured only on create; an existing config.yaml keeps its 0600.
-  writeFileSync(configPath, next, { mode: 0o600 });
+  // Open the existing file for truncating write ('w'), write the full new
+  // contents, re-assert 0600, fsync, then close. fsync flushes the data to
+  // stable storage before we report success so the claim survives a crash.
+  const fd = openSync(configPath, 'w');
+  try {
+    writeSync(fd, next, 0, 'utf8');
+    fchmodSync(fd, 0o600);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
 }

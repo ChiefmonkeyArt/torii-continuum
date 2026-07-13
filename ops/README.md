@@ -145,17 +145,34 @@ From a checkout of this repo, as root:
 sudo ./ops/install-agent.sh
 ```
 
-To also wire the `/api/` proxy into an existing server block automatically:
+To also wire the `/api/` proxy into an existing server block automatically,
+first drop a one-line marker **inside the correct HTTPS `server { … }` block**
+(the one for your Console's domain, `listen 443 ssl`):
+
+```nginx
+# TORII_API_INCLUDE
+```
+
+then point the installer at that site file:
 
 ```bash
 sudo TORII_NGINX_SITE=/etc/nginx/sites-available/torii ./ops/install-agent.sh
 ```
 
+The installer replaces **only** that marker line with
+`include snippets/torii-api.conf;`, preserving indentation, and leaves a
+`.torii.bak` of the file. It never guesses which `server{}` block to edit — a
+site file often has both an HTTP→HTTPS redirect server and the real TLS server,
+and wiring `/api/` into the redirect block would 301 the API. If you set
+`TORII_NGINX_SITE` without placing the marker, the installer **fails with an
+instruction** rather than editing the wrong block. (Already having the literal
+include line in place is detected and left alone — the wiring is idempotent.)
+
 Environment overrides (all optional):
 
 | Variable            | Effect                                                          |
 | ------------------- | -------------------------------------------------------------- |
-| `TORII_NGINX_SITE`  | server-block file to auto-insert `include snippets/torii-api.conf;` |
+| `TORII_NGINX_SITE`  | server-block file whose `# TORII_API_INCLUDE` marker is swapped for `include snippets/torii-api.conf;` |
 | `SKIP_NGINX=1`      | install agent + systemd only, skip all nginx steps             |
 | `SKIP_HEALTHCHECK=1` | skip the final `/api/health` probe (e.g. air-gapped test)     |
 
@@ -210,11 +227,15 @@ collide with a generic global zone. The installer refuses to write the zone
 fragment if a zone of that name is already declared anywhere under
 `/etc/nginx`, and always runs `nginx -t` before reloading — it never
 reloads a broken config. If you wire the include yourself, add this inside
-your server block:
+your HTTPS (`listen 443 ssl`) server block:
 
 ```nginx
 include snippets/torii-api.conf;
 ```
+
+(Or place the `# TORII_API_INCLUDE` marker there and let the installer swap it
+in via `TORII_NGINX_SITE` — see [Install / upgrade](#install--upgrade). Either
+way, put it in the TLS server block, not an HTTP→HTTPS redirect block.)
 
 The agent listens on `127.0.0.1:8787` only; nothing reaches it except
 through this proxy. nginx is the single hop in front, on the same host, so
@@ -239,14 +260,37 @@ A freshly installed agent boots with an empty `admin_npub` — **unclaimed**.
 The first caller to complete a valid NIP-07 challenge/verify against
 `/api/auth/verify` atomically claims admin: their npub is persisted into
 `config.yaml` (canonical `npub1…` form, `0600`) and every later caller is
-rejected unless their pubkey matches. So:
+rejected unless their pubkey matches.
+
+> ⚠️ **Claim the box the moment it is reachable.** Between first boot and your
+> first sign-in, *anyone* who can reach `/api/auth/verify` can claim admin.
+> On an internet-exposed gateway that window is a race you can lose. Do your
+> first Console sign-in **immediately** after the installer prints
+> `agent healthy ✓`, and confirm `/api/health` then shows
+> `"admin_claimed": true`.
+>
+> **Higher-assurance option — pre-pin the admin.** To skip the claim window
+> entirely, set your own npub in `config.yaml` *before* first start:
+>
+> ```bash
+> sudo -u continuum sed -i 's/^admin_npub:.*/admin_npub: "npub1yourkey…"/' \
+>   /opt/torii/continuum-agent/config.yaml
+> sudo systemctl restart torii-continuum-agent
+> ```
+>
+> A pre-pinned npub means the box is never in a claimable state — only that
+> key can ever authenticate. Recommended for any host exposed beyond your LAN.
+
+Normal (first-touch) flow:
 
 1. Install the agent, then immediately open the Console and sign in with
    your own NIP-07 signer — **you** become admin.
 2. `/api/health` reports `"admin_claimed": true` once the claim lands.
 3. The claim is race-safe (two simultaneous first verifies → exactly one
    wins) and **fails closed** — if the config write fails, no session token
-   is issued and the box stays claimable rather than half-claimed.
+   is issued and the box stays claimable rather than half-claimed. The write
+   is `fsync`ed before the token is returned, so a crash right after the claim
+   can't lose it.
 
 To reset the admin (hand the box to a different signer), stop the service,
 clear `admin_npub` back to `""` in `config.yaml`, and restart:
@@ -282,9 +326,14 @@ is never logged.
 - `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`, `ProtectHome`,
   `ProtectKernelTunables/Modules/Logs`, `ProtectControlGroups`,
   `ProtectClock`, `ProtectProc=invisible`, `RestrictNamespaces`,
-  `MemoryDenyWriteExecute`, a `@system-service` syscall filter, and
+  a `@system-service` syscall filter, and
   `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX` (the only families the
   runtime needs to reach loopback nginx and outbound Routstr/mints/Ollama).
+- `MemoryDenyWriteExecute` is deliberately **not** set: V8 (Node's JIT) maps
+  code pages writable then `mprotect`s them executable, which MDWE forbids, so
+  the service would abort on startup (it could only be kept alongside
+  `node --jitless`, at a large performance cost). Availability wins; the JIT
+  surface is mitigated by `NoNewPrivileges` + the syscall filter above.
 
 ### Upgrade / rollback / uninstall
 
@@ -293,6 +342,12 @@ is never logged.
   restarts.
 - **Rollback**: check out the previous tag and re-run the installer. Your
   `config.yaml` and `memory/` are untouched across the downgrade.
+- **Unclaimed installs stay bootable across both.** An empty `admin_npub` is a
+  valid, first-class boot state (the config loader accepts `""` as "unclaimed"),
+  so an agent installed but not yet claimed survives an upgrade or rollback and
+  comes back still claimable — the re-run never invents or clears an npub. If
+  you rolled back *after* claiming, the persisted npub in `config.yaml` is
+  likewise preserved, so you stay admin. Either way the service boots.
 - **Uninstall**:
 
   ```bash

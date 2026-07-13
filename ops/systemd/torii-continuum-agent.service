@@ -20,21 +20,30 @@ Documentation=https://github.com/ChiefmonkeyArt/torii-continuum
 After=network-online.target
 Wants=network-online.target
 
+# Crash-loop protection MUST live in [Unit] — systemd only reads StartLimit*
+# here, silently ignoring it in [Service]. Cap the burst so a persistent
+# failure (e.g. a bad config) trips the unit into a failed state instead of
+# restarting forever and spinning the CPU.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
 [Service]
 Type=simple
 User=continuum
 Group=continuum
 WorkingDirectory=/opt/torii/continuum-agent
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/node index.mjs
+# The absolute node path is filled in by ops/install-agent.sh from the
+# operator's own `command -v node` (node is commonly /usr/local/bin/node for
+# tarball/nvm installs, /usr/bin/node only for a NodeSource .deb). If you
+# install this unit by hand, replace __NODE_BIN__ with your absolute node path:
+# under this hardening systemd will not resolve a bare `node` from PATH.
+ExecStart=__NODE_BIN__ index.mjs
 
-# Restart safely without hammering: back off and cap the burst so a crash-loop
-# (e.g. a bad config) doesn't spin the CPU. StartLimit trips the unit into a
-# failed state instead of restarting forever.
+# Restart safely without hammering. The StartLimit cap in [Unit] turns a
+# persistent failure into a failed unit rather than an infinite restart loop.
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 StandardOutput=journal
 StandardError=journal
@@ -66,7 +75,12 @@ RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
-MemoryDenyWriteExecute=true
+# NOTE: MemoryDenyWriteExecute is deliberately NOT set. V8 (Node's engine) is a
+# JIT: it maps code pages writable, then mprotect()s them executable, which MDWE
+# forbids — the process aborts on startup. Enabling it would trade a marginal
+# hardening for a service that will not run (it could only be kept alongside
+# `node --jitless`, at a large performance cost). Availability wins here; the
+# JIT surface is mitigated by NoNewPrivileges + the syscall filter below.
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources @obsolete

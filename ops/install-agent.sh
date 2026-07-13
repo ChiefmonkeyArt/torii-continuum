@@ -39,6 +39,12 @@ readonly SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 readonly NGINX_SNIPPET="/etc/nginx/snippets/torii-api.conf"
 readonly NGINX_ZONE_CONF="/etc/nginx/conf.d/torii-api-ratelimit.conf"
 readonly NGINX_ZONE_NAME="torii_api_limit"
+# Explicit, operator-placed sentinel for auto-wiring the /api/ include. The
+# installer only ever touches THIS marker line — it never guesses which
+# server{} block to edit (see step 7). The operator drops the marker inside
+# the correct HTTPS server{} block; the installer swaps it for the include.
+readonly NGINX_INCLUDE_MARKER="# TORII_API_INCLUDE"
+readonly NGINX_INCLUDE_LINE="include snippets/torii-api.conf;"
 readonly AGENT_HOST="127.0.0.1"
 readonly AGENT_PORT="8787"
 
@@ -53,10 +59,18 @@ log()  { printf '[install] %s\n' "$*"; }
 warn() { printf '[install] WARN: %s\n' "$*" >&2; }
 die()  { printf '[install] ERROR: %s\n' "$*" >&2; exit 1; }
 
+# Single cleanup path for every temp artifact — including the secret-bearing
+# config temp files. Registered on EXIT/INT/TERM so an awk failure, a sed
+# error, or a Ctrl-C can never leave a world-unreadable-but-lingering temp with
+# a real session_secret behind. Files are appended as they are created.
+TMP_FILES=()
+cleanup() { [[ ${#TMP_FILES[@]} -gt 0 ]] && rm -f -- "${TMP_FILES[@]}" 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
+
 # ── Preflight ─────────────────────────────────────────────────────────────
 [[ ${EUID} -eq 0 ]] || die "must run as root (try: sudo $0)"
 
-for bin in node npm rsync install openssl systemctl getent; do
+for bin in node npm rsync install openssl systemctl getent awk; do
   command -v "$bin" >/dev/null 2>&1 || die "required command not found: $bin"
 done
 
@@ -66,6 +80,19 @@ done
 
 node_major="$(node -e 'process.stdout.write(String(process.versions.node.split(".")[0]))')"
 [[ "$node_major" -ge 20 ]] || die "Node >= 20 required (found $(node --version))"
+
+# Resolve the ABSOLUTE node path once, here, from the operator's own PATH.
+# The systemd unit ships with a __NODE_BIN__ placeholder rather than a
+# hardcoded /usr/bin/node, because node is just as often /usr/local/bin/node
+# (tarball/nvm) — a hardcoded path would leave the service unable to start.
+# We template this resolved path into the installed unit (step 6). Under the
+# unit's hardening, systemd will not resolve a bare command name, so it must be
+# absolute.
+NODE_BIN="$(command -v node)"
+[[ "$NODE_BIN" == /* ]] || die "could not resolve an absolute node path (got: ${NODE_BIN:-<empty>})"
+[[ -x "$NODE_BIN" ]] || die "resolved node is not executable: $NODE_BIN"
+readonly NODE_BIN
+log "using node at $NODE_BIN"
 
 # ── 1. Locked system user/group ─────────────────────────────────────────────
 if getent group "$SERVICE_USER" >/dev/null 2>&1; then
@@ -135,10 +162,13 @@ if [[ -f "$CONFIG_PATH" ]]; then
 else
   log "generating config.yaml from config.example.yaml"
   secret="$(openssl rand -hex 32)"
-  # Build atomically in a private temp file, then move into place 0600.
+  # Build atomically in a private temp file, then move into place 0600. Both
+  # temp files are registered with the EXIT/INT/TERM cleanup trap up top so a
+  # failure mid-render can't leave a secret-bearing temp behind.
   tmp_cfg="$(mktemp "${INSTALL_DIR}/.config.yaml.XXXXXX")"
-  # Ensure cleanup of the temp file on any early exit.
-  trap 'rm -f -- "$tmp_cfg"' EXIT
+  TMP_FILES+=("$tmp_cfg" "${tmp_cfg}.2")
+  # Lock the temps down to 0600 before the secret is ever written into them.
+  chmod 0600 "$tmp_cfg"
   # Replace the two placeholders. Use a non-/ sed delimiter and a variable
   # (never interpolate the secret into the pattern) so nothing is logged and
   # no shell/sed metacharacter can be injected — the hex secret is [0-9a-f].
@@ -149,14 +179,13 @@ else
   # Swap the sentinel for the real secret with a literal, injection-proof
   # replacement (awk gsub of a fixed string), keeping the secret out of argv
   # visible patterns.
-  TORII_SECRET="$secret" awk '
+  ( umask 077; TORII_SECRET="$secret" awk '
     { gsub(/__TORII_SECRET__/, ENVIRON["TORII_SECRET"]); print }
-  ' "$tmp_cfg" > "${tmp_cfg}.2"
+  ' "$tmp_cfg" > "${tmp_cfg}.2" )
   mv -f "${tmp_cfg}.2" "$tmp_cfg"
   chown "$SERVICE_USER":"$SERVICE_USER" "$tmp_cfg"
   chmod 0600 "$tmp_cfg"
   mv -f "$tmp_cfg" "$CONFIG_PATH"
-  trap - EXIT
   unset secret TORII_SECRET
   log "config.yaml created (admin_npub empty → first-touch claim armed)"
 fi
@@ -174,10 +203,23 @@ runuser -u "$SERVICE_USER" -- node -e '
   }).catch(e => { console.error(e); process.exit(1); });
 ' || die "config validation failed — not touching the running service"
 
-# ── 6. systemd unit ─────────────────────────────────────────────────────────
+# ── 6. systemd unit (render the resolved node path in) ───────────────────────
 log "installing systemd unit → $SYSTEMD_UNIT"
-install -m 0644 -o root -g root \
-  "${SCRIPT_DIR}/systemd/${SERVICE_NAME}.service" "$SYSTEMD_UNIT"
+unit_src="${SCRIPT_DIR}/systemd/${SERVICE_NAME}.service"
+[[ -f "$unit_src" ]] || die "systemd unit template missing: $unit_src"
+grep -q '__NODE_BIN__' "$unit_src" || die "unit template lost its __NODE_BIN__ placeholder"
+# Render into a root-owned temp (never mutate the repo template in place), swap
+# __NODE_BIN__ → the resolved absolute node path via a literal awk gsub (the
+# path is an absolute filesystem path, never interpolated into a regex), then
+# install atomically. Registered with the cleanup trap.
+tmp_unit="$(mktemp)"
+TMP_FILES+=("$tmp_unit")
+TORII_NODE_BIN="$NODE_BIN" awk '
+  { gsub(/__NODE_BIN__/, ENVIRON["TORII_NODE_BIN"]); print }
+' "$unit_src" > "$tmp_unit"
+grep -q "^ExecStart=${NODE_BIN} index.mjs$" "$tmp_unit" \
+  || die "failed to render ExecStart with node path $NODE_BIN"
+install -m 0644 -o root -g root "$tmp_unit" "$SYSTEMD_UNIT"
 
 # ── 7. nginx snippets (optional) ─────────────────────────────────────────────
 if [[ "${SKIP_NGINX:-0}" == "1" ]]; then
@@ -186,13 +228,16 @@ elif ! command -v nginx >/dev/null 2>&1; then
   warn "nginx not installed — skipping nginx wiring (agent still installed)"
 else
   install -d -m 0755 /etc/nginx/snippets /etc/nginx/conf.d
-  log "installing nginx location snippet → $NGINX_SNIPPET"
-  install -m 0644 -o root -g root "${SCRIPT_DIR}/nginx/torii-api.conf" "$NGINX_SNIPPET"
 
-  # http-context rate-limit zone. Only write it if no zone of the same name is
-  # already declared anywhere under /etc/nginx — declaring a duplicate zone is
-  # a hard nginx -t error, so we refuse to conflict.
-  if grep -rqsa "zone=${NGINX_ZONE_NAME}" /etc/nginx 2>/dev/null; then
+  # http-context rate-limit zone FIRST — the location snippet references this
+  # zone, so it must exist before nginx parses the snippet. Only write it if a
+  # real `limit_req_zone ... zone=NAME:` DECLARATION is absent. We match the
+  # declaration directive (line begins with `limit_req_zone`, zone name followed
+  # by a `:` size) — NOT a mere reference like `limit_req zone=NAME` (our own
+  # snippet) and NOT a `#` comment. This is the B1 fix: the old grep matched the
+  # snippet's own reference and so never wrote the zone, breaking `nginx -t`.
+  local_zone_re="^[[:space:]]*limit_req_zone[[:space:]][^;#]*zone=${NGINX_ZONE_NAME}:"
+  if grep -rqsE "$local_zone_re" /etc/nginx 2>/dev/null; then
     log "rate-limit zone ${NGINX_ZONE_NAME} already declared — leaving it as is"
   else
     log "installing rate-limit zone → $NGINX_ZONE_CONF"
@@ -205,30 +250,47 @@ EOF
     chmod 0644 "$NGINX_ZONE_CONF"
   fi
 
-  # Optionally wire the include into a server block the operator names.
+  log "installing nginx location snippet → $NGINX_SNIPPET"
+  install -m 0644 -o root -g root "${SCRIPT_DIR}/nginx/torii-api.conf" "$NGINX_SNIPPET"
+
+  # Wire the include ONLY at an explicit, operator-placed marker. We never guess
+  # which server{} block to edit (a site file often has an HTTP→HTTPS redirect
+  # server AND the real TLS server; the old "insert before the last brace"
+  # heuristic could wire /api/ into the redirect block). This is the B2 fix.
   if [[ -n "${TORII_NGINX_SITE:-}" ]]; then
     [[ -f "$TORII_NGINX_SITE" ]] || die "TORII_NGINX_SITE not found: $TORII_NGINX_SITE"
-    if grep -qs 'include snippets/torii-api.conf;' "$TORII_NGINX_SITE"; then
-      log "include already present in $(basename "$TORII_NGINX_SITE")"
-    else
-      # Insert before the LAST closing brace (assumed to end the server block).
-      # Guarded by the grep above so re-runs don't duplicate it.
-      log "wiring include into $(basename "$TORII_NGINX_SITE")"
+    if grep -qsF "$NGINX_INCLUDE_LINE" "$TORII_NGINX_SITE"; then
+      log "include already present in $(basename "$TORII_NGINX_SITE") — nothing to do"
+    elif grep -qsF "$NGINX_INCLUDE_MARKER" "$TORII_NGINX_SITE"; then
+      # Replace the marker line (and only that line) with the include, keeping
+      # its indentation. Idempotent: the include grep above short-circuits on
+      # re-run, and the marker is consumed by the swap.
+      log "wiring include at $NGINX_INCLUDE_MARKER in $(basename "$TORII_NGINX_SITE")"
       cp -a "$TORII_NGINX_SITE" "${TORII_NGINX_SITE}.torii.bak"
-      awk '
-        { lines[NR] = $0 }
-        END {
-          for (i = NR; i >= 1; i--) if (lines[i] ~ /}/) { last = i; break }
-          for (i = 1; i <= NR; i++) {
-            if (i == last) print "    include snippets/torii-api.conf;"
-            print lines[i]
+      awk -v marker="$NGINX_INCLUDE_MARKER" -v inc="$NGINX_INCLUDE_LINE" '
+        {
+          line = $0
+          t = line; sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t)
+          if (t == marker) {
+            indent = line; sub(/[^ \t].*$/, "", indent)
+            print indent inc
+          } else {
+            print line
           }
         }
       ' "${TORII_NGINX_SITE}.torii.bak" > "$TORII_NGINX_SITE"
+    else
+      die "TORII_NGINX_SITE set but no include marker found.
+  Add this single line INSIDE your HTTPS (listen 443 ssl) server{} block, then re-run:
+      ${NGINX_INCLUDE_MARKER}
+  The installer will replace that marker with:
+      ${NGINX_INCLUDE_LINE}
+  (Or just add the include line yourself and re-run — it is detected and left alone.)"
     fi
   else
     log "no TORII_NGINX_SITE given — snippet installed but not wired."
-    log "add this inside your gateway's server{} block: include snippets/torii-api.conf;"
+    log "add '${NGINX_INCLUDE_LINE}' inside your HTTPS server{} block (or place the"
+    log "marker '${NGINX_INCLUDE_MARKER}' there and re-run with TORII_NGINX_SITE set)."
   fi
 
   # Always validate before reloading. Never reload a broken config.
