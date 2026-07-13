@@ -92,13 +92,23 @@ test('rate limiter trips at N+1 with structured 429 body + Retry-After', async (
   }
 });
 
-test('global:false leaves un-opted routes unbounded', async () => {
+test('global:false leaves un-opted routes unbounded past the v11 default max (1000)', async () => {
+  // @fastify/rate-limit v11 defaults to max:1000 per window for routes that opt
+  // in without their own max. With global:false and no route-level config, /open
+  // must have NO limiter at all — so exceeding 1000 requests in one window still
+  // 200s. Fewer than 1001 requests could not distinguish "no limiter" from an
+  // "accidental default limiter", so we cross the 1000 boundary explicitly.
   const { app } = await buildApp();
   try {
-    for (let i = 0; i < 5; i++) {
+    let last = 0;
+    for (let i = 0; i < 1001; i++) {
       const res = await app.inject({ method: 'POST', url: '/open', payload: {}, remoteAddress: '203.0.113.6' });
-      assert.equal(res.statusCode, 200);
+      last = res.statusCode;
+      if (res.statusCode !== 200) {
+        assert.fail(`unconfigured route was limited at request ${i + 1} (status ${res.statusCode}) — global:false leaked a default limiter`);
+      }
     }
+    assert.equal(last, 200, 'the 1001st request past the v11 default cap still succeeds');
   } finally {
     await app.close();
   }
