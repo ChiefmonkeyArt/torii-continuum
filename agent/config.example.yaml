@@ -123,6 +123,59 @@ routstr:
     max_tokens_out: 2048
     max_sats_per_request: 50
 
+  # ── Onboarding provider adapter (v0.2.35-alpha) ──
+  #
+  # Used ONLY by the onboarding Routstr step (verify an operator sk- key, read
+  # balance/models, and quote/poll a Lightning funding invoice). Every request
+  # is PINNED to this single https origin: no redirects, bounded timeout +
+  # response size, no open proxy. Defaults to `endpoint` above.
+  #
+  # The Lightning paths below are the SOURCE-GROUNDED routstr-core contract
+  # (Routstr/routstr-core routstr/lightning.py, mounted at root):
+  #   • POST /lightning/invoice
+  #       req { amount_sats, purpose:"create"|"topup" }  (topup needs Bearer sk-)
+  #       res { invoice_id, bolt11, amount_sats, expires_at, payment_hash }
+  #   • GET  /lightning/invoice/{id}/status
+  #       res { status:"pending"|"paid"|"expired", api_key:"sk-…"|null, … }
+  #   • POST /lightning/recover  { bolt11 } → same status shape (recoverable path)
+  # Onboarding funds a fresh session with purpose:"create" (no key yet), pays via
+  # the connected NWC wallet only after explicit confirm, then polls status to
+  # claim the minted sk- key. If a poll times out the payment is NOT lost — the
+  # bolt11 is returned for /lightning/recover, and routstr-core's server-side
+  # watcher credits the invoice regardless.
+  # Set any path to null to DISABLE it for a provider that lacks the endpoint —
+  # createInvoice then returns a fail-closed "blocked" result and the existing-
+  # key path is used instead.
+  provider:
+    base_url: "https://api.routstr.com"
+    min_topup_sats: 10
+    max_topup_sats: 10000
+    request_timeout_ms: 15000
+    max_response_bytes: 65536
+    poll_interval_ms: 3000
+    poll_max_attempts: 20
+    balance_path: "/v1/balance/info"
+    models_path: "/v1/models"
+    invoice_path: "/lightning/invoice"
+    invoice_status_path: "/lightning/invoice/{id}/status"   # {id} = invoice_id
+    invoice_recover_path: "/lightning/recover"
+
+
+# ─────────────────────────────────────────────────────────────
+# NWC (Nostr Wallet Connect) — onboarding wallet step (v0.2.35-alpha)
+# ─────────────────────────────────────────────────────────────
+#
+# The operator's NWC connection URI is NEVER stored in this file. It is pasted
+# once in the browser, submitted over the authenticated same-origin API, and
+# stored encrypted at rest under memory/secrets/ (AES-256-GCM, key derived from
+# session_secret). Only redacted status (wallet pubkey prefix, relay hosts, a
+# non-reversible fingerprint) is ever returned. This block only tunes the
+# NIP-47 client timeout. Requires Node >= 22.4.0 (global WebSocket) for the
+# live relay path.
+#
+nwc:
+  request_timeout_ms: 15000
+
 
 # ─────────────────────────────────────────────────────────────
 # Ollama (optional local-model fallback — CONT-AGENT-1b)
@@ -335,3 +388,10 @@ rate_limit:
   # expiresAt are evicted before insertion. 1000 covers ~3 challenges/sec
   # sustained at the 5-min TTL before eviction becomes lossy.
   max_challenges: 1000
+
+  # Max requests per minute per IP for the admin-gated onboarding mutation,
+  # test, and pay endpoints (wallet connect/test/disconnect, Routstr
+  # key/quote/pay/disconnect). Admin session is already required; this bounds
+  # a stolen-session abuse of the wallet/provider + pay path. 12/min is ample
+  # for a human clicking through onboarding.
+  onboarding_per_min: 12

@@ -31,6 +31,10 @@ import { createMemoryCache, validateCiphertext, ciphertextFilename, fingerprintC
 import { createMemoryLoader } from './lib/memory.mjs';
 import { createReflector } from './lib/reflect.mjs';
 import { KINDS, dirForKind } from './lib/events.mjs';
+import { createSecretStore } from './lib/secretstore.mjs';
+import { createNwcClient, createLiveNwcTransport } from './core/nwc.mjs';
+import { createRoutstrProvider } from './core/routstr-provider.mjs';
+import { createOnboarding } from './core/onboarding.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENT_ROOT = __dirname;
@@ -122,6 +126,26 @@ const reflector = createReflector({ agentRoot: AGENT_ROOT, cache: memoryCache, l
 await memory.loadCharacter();
 
 const chatSkill = createChatSkill(router, app.log, { memory, reflector });
+
+// Onboarding stack (v0.2.35-alpha) — encrypted-at-rest secret store for the
+// operator secrets the agent must USE (NWC URI, Routstr sk- key), plus the
+// pinned Routstr provider adapter. The live NIP-47 transport is built per-call
+// so the onboarding logic stays testable with an injected client.
+const secretStore = createSecretStore(cfg, { log: app.log });
+const routstrProvider = createRoutstrProvider(cfg, { log: app.log });
+const onboarding = createOnboarding({
+  secretStore,
+  routstrProvider,
+  log: app.log,
+  connectNwc: async (parsed) => {
+    const transport = await createLiveNwcTransport(parsed, { log: app.log });
+    return createNwcClient(parsed, {
+      transport,
+      log: app.log,
+      timeoutMs: cfg.nwc?.request_timeout_ms || 15000,
+    });
+  },
+});
 
 // ─────────────────────────────────────────────────────────────
 // Panic-key nudge state — one-time hint, per admin_npub
@@ -244,6 +268,12 @@ const authVerifyMax =
   Number.isFinite(cfg.rate_limit?.auth_verify_per_min) && cfg.rate_limit.auth_verify_per_min > 0
     ? cfg.rate_limit.auth_verify_per_min
     : 20;
+// Onboarding mutation/test/pay endpoints are admin-gated AND rate-limited so a
+// stolen session can't hammer the wallet/provider or the pay path.
+const onboardingMax =
+  Number.isFinite(cfg.rate_limit?.onboarding_per_min) && cfg.rate_limit.onboarding_per_min > 0
+    ? cfg.rate_limit.onboarding_per_min
+    : 12;
 
 function rateLimitConfig(max, route) {
   if (!rateLimitEnabled) return undefined;
@@ -507,6 +537,78 @@ app.delete('/api/pending/:file', { preHandler: requireAdmin }, async (req, reply
     return reply.code(404).send({ error: e.message });
   }
 });
+
+// ─────────────────────────────────────────────────────────────
+// Onboarding routes (v0.2.35-alpha) — wallet (Step 2) + Routstr (Step 3)
+//
+// All admin-gated. Mutation/test/pay endpoints are additionally rate-limited.
+// Handlers live in core/onboarding.mjs and return { code, body }; these routes
+// are thin adapters. No secret is ever echoed back — only redacted shapes.
+// ─────────────────────────────────────────────────────────────
+function sendOnboarding(reply, r) {
+  return reply.code(r.code).send(r.body);
+}
+
+// Step 2 — wallet (NWC)
+app.post(
+  '/api/onboarding/wallet/connect',
+  { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/onboarding/wallet/connect') },
+  async (req, reply) => sendOnboarding(reply, await onboarding.walletConnect({ nwcUri: req.body?.nwc_uri })),
+);
+app.get('/api/onboarding/wallet/status', { preHandler: requireAdmin }, async (req, reply) =>
+  sendOnboarding(reply, await onboarding.walletStatus()),
+);
+app.post(
+  '/api/onboarding/wallet/test',
+  { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/onboarding/wallet/test') },
+  async (req, reply) => sendOnboarding(reply, await onboarding.walletTest()),
+);
+app.post(
+  '/api/onboarding/wallet/disconnect',
+  { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/onboarding/wallet/disconnect') },
+  async (req, reply) => sendOnboarding(reply, await onboarding.walletDisconnect()),
+);
+
+// Step 3 — Routstr
+app.post(
+  '/api/onboarding/routstr/key',
+  { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/onboarding/routstr/key') },
+  async (req, reply) => sendOnboarding(reply, await onboarding.routstrKey({ key: req.body?.key })),
+);
+app.get('/api/onboarding/routstr/status', { preHandler: requireAdmin }, async (req, reply) =>
+  sendOnboarding(reply, await onboarding.routstrStatus()),
+);
+app.get('/api/onboarding/routstr/models', { preHandler: requireAdmin }, async (req, reply) =>
+  sendOnboarding(reply, await onboarding.routstrModels()),
+);
+app.post(
+  '/api/onboarding/routstr/quote',
+  { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/onboarding/routstr/quote') },
+  async (req, reply) => sendOnboarding(reply, await onboarding.routstrQuote({ amountSats: req.body?.amount_sats })),
+);
+app.post(
+  '/api/onboarding/routstr/pay',
+  { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/onboarding/routstr/pay') },
+  async (req, reply) =>
+    sendOnboarding(
+      reply,
+      await onboarding.routstrPay({
+        invoice: req.body?.invoice,
+        quoteId: req.body?.quote_id,
+        confirm: req.body?.confirm,
+      }),
+    ),
+);
+app.post(
+  '/api/onboarding/routstr/recover',
+  { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/onboarding/routstr/recover') },
+  async (req, reply) => sendOnboarding(reply, await onboarding.routstrRecover({ bolt11: req.body?.bolt11 })),
+);
+app.post(
+  '/api/onboarding/routstr/disconnect',
+  { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/onboarding/routstr/disconnect') },
+  async (req, reply) => sendOnboarding(reply, await onboarding.routstrDisconnect()),
+);
 
 // ─────────────────────────────────────────────────────────────
 // Startup

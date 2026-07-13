@@ -110,6 +110,33 @@ export function loadConfig(path) {
   cfg.rate_limit.auth_challenge_per_min ??= 10;
   cfg.rate_limit.auth_verify_per_min ??= 20;
   cfg.rate_limit.max_challenges ??= 1000;
+  // Onboarding wallet/Routstr mutation+test+pay endpoints (v0.2.35-alpha).
+  cfg.rate_limit.onboarding_per_min ??= 12;
+
+  // NWC (Nostr Wallet Connect) client tuning (v0.2.35-alpha). The URI itself is
+  // never in config — it is submitted at runtime and stored encrypted at rest.
+  cfg.nwc ??= {};
+  cfg.nwc.request_timeout_ms ??= 15000;
+
+  // Routstr provider adapter (v0.2.35-alpha) used by the onboarding Routstr
+  // step. Pinned to a single https origin. Lightning paths default to the
+  // source-grounded routstr-core contract (POST /lightning/invoice, GET
+  // /lightning/invoice/{id}/status, POST /lightning/recover). Set any path to
+  // null to disable it for a provider that lacks it (createInvoice then returns
+  // a fail-closed blocked result). `??=` so an explicit null in config survives.
+  cfg.routstr.provider ??= {};
+  cfg.routstr.provider.base_url ??= cfg.routstr.endpoint;
+  cfg.routstr.provider.min_topup_sats ??= 10;
+  cfg.routstr.provider.max_topup_sats ??= 10000;
+  cfg.routstr.provider.request_timeout_ms ??= 15000;
+  cfg.routstr.provider.max_response_bytes ??= 64 * 1024;
+  cfg.routstr.provider.poll_interval_ms ??= 3000;
+  cfg.routstr.provider.poll_max_attempts ??= 20;
+  cfg.routstr.provider.balance_path ??= '/v1/balance/info';
+  cfg.routstr.provider.models_path ??= '/v1/models';
+  cfg.routstr.provider.invoice_path ??= '/lightning/invoice';
+  cfg.routstr.provider.invoice_status_path ??= '/lightning/invoice/{id}/status';
+  cfg.routstr.provider.invoice_recover_path ??= '/lightning/recover';
 
   return Object.freeze(cfg);
 }
