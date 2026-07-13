@@ -60,12 +60,21 @@ warn() { printf '[install] WARN: %s\n' "$*" >&2; }
 die()  { printf '[install] ERROR: %s\n' "$*" >&2; exit 1; }
 
 # Single cleanup path for every temp artifact — including the secret-bearing
-# config temp files. Registered on EXIT/INT/TERM so an awk failure, a sed
-# error, or a Ctrl-C can never leave a world-unreadable-but-lingering temp with
-# a real session_secret behind. Files are appended as they are created.
+# config temp files. Files are appended as they are created, so an awk failure,
+# a sed error, or a Ctrl-C can never leave a world-unreadable-but-lingering temp
+# with a real session_secret behind.
+#
+# cleanup runs ONCE, on EXIT — which fires no matter how the script ends
+# (normal exit, `die`, or a signal that we turn into an exit below). The INT/TERM
+# traps do NOT run cleanup directly; they just `exit` with the conventional
+# 128+signo status. That (a) guarantees a Ctrl-C ABORTS the install instead of
+# letting bash resume the script after the handler, and (b) avoids double-cleanup
+# — only the single EXIT trap removes the temps.
 TMP_FILES=()
 cleanup() { [[ ${#TMP_FILES[@]} -gt 0 ]] && rm -f -- "${TMP_FILES[@]}" 2>/dev/null || true; }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT   # 128 + SIGINT(2)
+trap 'exit 143' TERM  # 128 + SIGTERM(15)
 
 # ── Preflight ─────────────────────────────────────────────────────────────
 [[ ${EUID} -eq 0 ]] || die "must run as root (try: sudo $0)"
@@ -217,7 +226,9 @@ TMP_FILES+=("$tmp_unit")
 TORII_NODE_BIN="$NODE_BIN" awk '
   { gsub(/__NODE_BIN__/, ENVIRON["TORII_NODE_BIN"]); print }
 ' "$unit_src" > "$tmp_unit"
-grep -q "^ExecStart=${NODE_BIN} index.mjs$" "$tmp_unit" \
+# Exact whole-line, fixed-string match (-x -F): the node path is a literal, so
+# treat it as one — no regex metachar in the path can widen or narrow the match.
+grep -qxF "ExecStart=${NODE_BIN} index.mjs" "$tmp_unit" \
   || die "failed to render ExecStart with node path $NODE_BIN"
 install -m 0644 -o root -g root "$tmp_unit" "$SYSTEMD_UNIT"
 

@@ -342,12 +342,17 @@ is never logged.
   restarts.
 - **Rollback**: check out the previous tag and re-run the installer. Your
   `config.yaml` and `memory/` are untouched across the downgrade.
-- **Unclaimed installs stay bootable across both.** An empty `admin_npub` is a
-  valid, first-class boot state (the config loader accepts `""` as "unclaimed"),
-  so an agent installed but not yet claimed survives an upgrade or rollback and
-  comes back still claimable — the re-run never invents or clears an npub. If
-  you rolled back *after* claiming, the persisted npub in `config.yaml` is
-  likewise preserved, so you stay admin. Either way the service boots.
+- **Unclaimed installs stay bootable on v0.2.26+.** An empty `admin_npub` is a
+  valid, first-class boot state **from v0.2.26-alpha onward** (the config loader
+  accepts `""` as "unclaimed"), so an unclaimed agent survives an upgrade, or a
+  rollback to any first-touch-aware version, and comes back still claimable —
+  the re-run never invents or clears an npub. **Caveat:** rolling an *unclaimed*
+  box back to a **pre-v0.2.26** tag runs the older loader, which rejects an
+  empty `admin_npub` and refuses to start (`process.exit(1)`). Before any such
+  downgrade, pre-pin a valid `admin_npub` (or restore a config that has one) —
+  see the pre-pin recipe under **First-touch admin claim** above. If you rolled
+  back *after* claiming, the persisted npub in `config.yaml` is preserved, so
+  you stay admin and the service boots on any version.
 - **Uninstall**:
 
   ```bash
