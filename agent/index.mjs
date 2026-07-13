@@ -66,7 +66,6 @@ const app = Fastify({
         : { target: 'pino/file', options: { destination: cfg.logging.destination } },
   },
   bodyLimit: 512 * 1024, // 512 KB — enough for a Cashu token + a chat message, nothing more
-  disableRequestLogging: false,
 });
 
 await app.register(cors, {
