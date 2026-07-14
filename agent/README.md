@@ -319,6 +319,21 @@ Only prefixes are logged; never full pubkeys, full challenges, or full IPs.
 - `GET /api/pending/:file` — fetch one draft for signing
 - `DELETE /api/pending/:file` — discard a draft
 
+**Onboarding — wallet / Routstr / recovery (admin, rate-limited):**
+- `GET  /api/onboarding/wallet/status` — redacted NWC view (pubkey prefix, relay count, secret fingerprint; never the URI)
+- `GET  /api/onboarding/routstr/status` — redacted key view (`sk-…last4` + fingerprint, balance)
+- `POST /api/onboarding/routstr/quote` — request a Lightning funding invoice (no payment)
+- `POST /api/onboarding/routstr/pay` — pay a quoted invoice; requires `confirm:true` (the hard payment boundary). Success only when it returns `key_stored:true`
+- `POST /api/onboarding/routstr/recover` — **idempotent, never pays.** Empty body → the agent re-submits the stored bolt11 to claim an already-paid-but-unclaimed key. `202` = settled-not-yet (retryable), `200`+`key_stored:true` = claimed
+- `GET  /api/onboarding/recovery/state` — redacted resume snapshot; `claimable:true` means a paid invoice is stored with no key yet (drives refresh-resume). No bolt11/key/URI in the body
+- `GET  /api/onboarding/recovery-kit` — `Cache-Control: no-store`. Redacted, **secret-free** kit (previews, fingerprints, provider host, admin npub, instructions). Never the NWC secret or full key
+- `POST /api/onboarding/routstr/export-key` — one-time full-key reveal. `Cache-Control: no-store`, admin-gated, rate-limited, and requires `confirm:true` (else `400 confirmation_required`; `409` when no key is stored). Persists `export_count` / `last_exported_at` audit fields and logs a warning (never the key)
+
+Recovery flow after a paid-but-unclaimed session (e.g. UI said "confirmed" but
+no key appeared): call `recovery/state`; if `claimable`, POST an empty body to
+`routstr/recover` to finish the claim without re-paying. Only reveal the full
+key with `export-key` + `confirm:true` if the operator must copy it manually.
+
 The agent NEVER signs, NEVER publishes, NEVER holds an nsec. Signing
 happens in the operator's browser via Plebeian Signer, one click at a time.
 

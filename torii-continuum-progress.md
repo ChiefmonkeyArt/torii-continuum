@@ -9,6 +9,53 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.37-alpha — ONBOARDING-PAY-RECOVERY: paid-but-unclaimed Routstr recovery + payment progress state machine + working recovery kit
+
+Onboarding preview bumped to **v0.1.18-preview** (`preview-assets/onboarding-v0.1.18/`).
+Fixes a live onboarding incident: an operator connected NWC and paid 10,000 sats
+to fund a Routstr session, but the UI said "payment confirmed" without surfacing
+the key, never auto-advanced, and the Recovery Kit "download" was a no-op that
+just stepped the deck. No new invoice was created or paid to diagnose or fix it.
+
+**Recovery-first.** Shipped a safe SSH runbook before any code: inspect
+`memory/secrets/*.enc` by existence/metadata only (never decrypt), reuse the
+operator's existing browser session token against the loopback admin API, and
+claim the already-paid key with the **idempotent** `POST /api/onboarding/routstr/recover`
+(empty body → the agent re-submits the stored bolt11; **never re-pays**). All
+status/verify responses are redacted by design; the full key is revealed only
+by an explicit one-time no-store export. Established that **payment-confirmed
+does not imply the key is stored** — the claim is a separate post-settlement
+step — and enumerated the recovery states (paid+claimed / paid+unclaimed / unpaid).
+
+**Agent (v0.2.37-alpha).** New admin-gated endpoints: `GET /recovery/state`
+(redacted resume snapshot, `claimable` true only when a pending invoice is
+stored with no key yet), `GET /recovery-kit` (`Cache-Control: no-store`,
+secret-free by default), and `POST /routstr/export-key` (one-time full-key
+reveal; requires `confirm:true`, `no-store`, rate-limited, persists
+`export_count`/`last_exported_at` audit fields, logs a warning but never the key).
+
+**Preview (v0.1.18).** A pure `ONBOARD_PHASES`/`PHASE_META` state machine drives
+an accessible (role=status, aria-live) progress + scanning bar and elapsed timer
+across connect → quote → pay → claim → verify. **SUCCESS is reached only when
+the agent reports `key_stored === true`** — `classifyPayResult`/
+`classifyRecoverResult` map a bare paid/recoverable result to a retryable
+`PAID_UNCLAIMED` phase, so the UI never claims success while the key is unissued.
+The invoice Confirm button is permanently disabled after the first click
+(duplicate-payment prevention). Success renders the redacted key then
+auto-advances after a short countdown with an immediate Continue-now. On load,
+Step 3 reads `recovery/state` and, when `claimable`, finishes the claim via an
+empty-body `recover` without re-paying (refresh-resume). The Recovery Kit
+download now builds a real text bundle via a Blob object URL; the default kit
+excludes the NWC secret and full key, carrying redacted previews and restoration
+instructions, and the full key is included only after an explicit confirmed
+one-time reveal. Step 5 markup no longer prints static secret-adjacent values.
+
+Preserved: character/animation behaviour, self-hosted Three.js (no CDN),
+provider pinning, redaction discipline, rate limits, no autonomous spend, no
+nsec on the server. Tests: agent `node --test` **102/102**, root vitest
+**453/453** (preview v0.1.18 **124**), `npm run build` clean, `npm audit
+--omit=dev` **0 vulnerabilities** (root + agent). Code + PR only — not deployed.
+
 ## v0.2.36-alpha — ONBOARDING-ASSET: new Chiefmonkey GLB + forbidden-safe animation state machine
 
 Onboarding preview bumped to **v0.1.17-preview** (`preview-assets/onboarding-v0.1.17/`).
