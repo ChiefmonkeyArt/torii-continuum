@@ -9,6 +9,48 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.38-alpha — ONBOARDING-FINISH: verified-state cleanup, correct balance units, inline key reveal, deterministic final curtain
+
+Onboarding preview bumped to **v0.1.19-preview** (`preview-assets/onboarding-v0.1.19/`).
+A focused live UX/completion pass on the wizard from three screenshots. No
+character/animation/CDN/provider-pinning behaviour changed, and no payment/NWC
+semantics changed beyond how balances are *displayed* and how the full key is
+safely *retrieved*. The funded Routstr key and all prior state are preserved.
+
+**Balance units (root cause).** Routstr denominates wallet balances in
+MILLISATS, but `extractBalanceSats` surfaced the raw `balance` verbatim, so a
+10,000-sat funded key showed as "10000000 sats". The provider adapter now
+divides msat fields to whole sats (explicit `*_sats` fields trusted as-is). A
+marker-guarded `displayBalanceSats` migration divides legacy stored envelopes
+(no `balance_units`) by 1000 on read; new envelopes carry `balance_units:'sat'`.
+All balances render through `formatSats` (e.g. `10,000 sats`).
+
+**Step 3 verified state.** Once the key is claimed/encrypted/verified,
+`collapseStep3Setup` hides the two path cards, both input forms, the invoice
+card, the progress/scanning bar and all three setup CTAs, leaving one green
+verified summary and a SINGLE Continue button outside it. No countdown/
+auto-advance (supersedes the v0.1.18 countdown). Advance stays idempotent.
+
+**Step 5 recovery kit.** Removed the unbranded "Reveal full Routstr key
+(one-time)" button and its `window.confirm` flow (which never revealed the key).
+The ROUTSTR KEY row now has branded inline eye + copy controls; both fetch the
+key over the existing admin-authenticated no-store export endpoint, hold it in
+memory only, and never touch localStorage/sessionStorage/URL/logs. Re-masks on
+toggle, step-leave, tab hide, session loss, and a conservative timeout. The
+Download click is itself the explicit confirmation and embeds the full key in
+the saved file while still excluding the NWC secret.
+
+**Final curtain.** The old curtain only `console.log`'d a commented redirect and
+spun forever. `initCurtain` navigates deterministically to the resolved
+same-origin `/continuum/` home (a `window.__toriiContinuumHome` override is
+accepted only same-origin — open-redirect guard), reveals a real "Open Continuum
+now" fallback link on a bounded timer, honours reduced motion, and drops the
+spinner shortly after the nav attempt so it can never hang.
+
+Tests: agent `node --test` **104/104**, root vitest **269/269** (preview v0.1.19
+**145**), `npm run build` clean, `npm audit --omit=dev` **0 vulnerabilities**
+(root + agent). Code + PR only — not deployed.
+
 ## v0.2.37-alpha — ONBOARDING-PAY-RECOVERY: paid-but-unclaimed Routstr recovery + payment progress state machine + working recovery kit
 
 Onboarding preview bumped to **v0.1.18-preview** (`preview-assets/onboarding-v0.1.18/`).
