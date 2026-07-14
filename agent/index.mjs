@@ -610,6 +610,39 @@ app.post(
   async (req, reply) => sendOnboarding(reply, await onboarding.routstrDisconnect()),
 );
 
+// ── Recovery / resume (v0.2.37-alpha) ────────────────────────────────────
+//
+// A refresh/restart during a paid-but-unclaimed Routstr session must NEVER
+// require re-payment. recovery/state is the redacted resume snapshot the
+// Console reads on load; when `claimable` is true it calls the existing,
+// idempotent routstr/recover (empty body → the agent supplies the stored
+// bolt11) to finish the claim. recovery-kit and routstr/export-key are served
+// with Cache-Control: no-store so no secret-adjacent bytes are ever cached.
+
+app.get('/api/onboarding/recovery/state', { preHandler: requireAdmin }, async (req, reply) =>
+  sendOnboarding(reply, await onboarding.recoveryState()),
+);
+
+app.get('/api/onboarding/recovery-kit', { preHandler: requireAdmin }, async (req, reply) => {
+  reply.header('Cache-Control', 'no-store');
+  reply.header('Pragma', 'no-cache');
+  return sendOnboarding(
+    reply,
+    await onboarding.recoveryKit({ adminNpub: req.session?.npub || null, agentVersion: VERSION }),
+  );
+});
+
+// One-time full-key reveal. Admin-gated, rate-limited, confirm-gated, no-store.
+app.post(
+  '/api/onboarding/routstr/export-key',
+  { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/onboarding/routstr/export-key') },
+  async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    reply.header('Pragma', 'no-cache');
+    return sendOnboarding(reply, await onboarding.routstrExportKey({ confirm: req.body?.confirm }));
+  },
+);
+
 // ─────────────────────────────────────────────────────────────
 // Startup
 // ─────────────────────────────────────────────────────────────

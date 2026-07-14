@@ -412,6 +412,142 @@ export function createOnboarding(deps = {}) {
     return { code: 202, body: { ok: false, recoverable: true, status: rec.status || 'pending', reason: rec.reason || 'invoice not yet settled' } };
   }
 
+  // ── Recovery / resume (v0.2.37-alpha) ──────────────────────────────────
+
+  // A single, redacted snapshot the Console reads on load to decide whether a
+  // paid-but-unclaimed session needs resuming — WITHOUT ever exposing the
+  // bolt11, key, or URI. `claimable` is the whole point: it is true only when a
+  // pending funding invoice is stored AND no key has been claimed yet, so the
+  // browser can call routstrRecover (with an empty body — the agent supplies
+  // the stored bolt11) to finish the claim after a refresh/restart, never
+  // re-paying. This is the source of truth for refresh-resume.
+  async function recoveryState() {
+    const nwc = await loadEnvelope(NWC_SECRET);
+    const key = await loadEnvelope(ROUTSTR_SECRET);
+    const pending = await loadEnvelope(ROUTSTR_PENDING);
+    const keyStored = !!(key && !key.error && key.key);
+    const pendingExists = !!(pending && !pending.error && pending.bolt11);
+    return {
+      code: 200,
+      body: {
+        ok: true,
+        wallet: {
+          connected: !!(nwc && !nwc.error),
+          can_fund_routstr: nwc?.capabilities?.can_fund_routstr === true,
+        },
+        routstr: {
+          connected: keyStored,
+          key_preview: keyStored ? key.redacted?.key_preview ?? null : null,
+          balance_sats: keyStored ? key.balance_sats ?? null : null,
+        },
+        pending: pendingExists
+          ? {
+              exists: true,
+              amount_sats: pending.amount_sats ?? null,
+              purpose: pending.purpose ?? null,
+              created_at: pending.created_at ?? null,
+              expires_at: pending.expires_at ?? null,
+            }
+          : null,
+        // The resume signal: paid funds are represented by a stored pending
+        // quote with no key yet. The claim path (routstrRecover) is idempotent
+        // and never pays, so the Console may auto-invoke it on load.
+        claimable: pendingExists && !keyStored,
+      },
+    };
+  }
+
+  // The default Recovery Kit: safe restoration data ONLY. Never the NWC
+  // connection secret, never the full sk- key — only redacted previews,
+  // fingerprints, the pinned provider host, the (public) admin npub, and
+  // human instructions. Secrets require the separate, explicit
+  // routstrExportKey action. The route serves this with Cache-Control:
+  // no-store so it is never written to a browser/proxy cache.
+  async function recoveryKit({ adminNpub = null, agentVersion = null } = {}) {
+    const nwc = await loadEnvelope(NWC_SECRET);
+    const key = await loadEnvelope(ROUTSTR_SECRET);
+    const keyStored = !!(key && !key.error && key.key);
+    const walletConnected = !!(nwc && !nwc.error);
+    let walletView = null;
+    if (walletConnected) {
+      const parsed = parseNwcUri(nwc.uri);
+      walletView = {
+        connected: true,
+        wallet: parsed.ok ? redactNwc(parsed) : null,
+        can_fund_routstr: nwc.capabilities?.can_fund_routstr === true,
+        alias: nwc.alias || null,
+        network: nwc.network || null,
+      };
+    }
+    return {
+      code: 200,
+      body: {
+        ok: true,
+        generated_at: new Date().toISOString(),
+        agent_version: agentVersion,
+        admin_npub: adminNpub, // public identity — safe to include
+        provider_host: routstrProvider.providerHost,
+        includes_secrets: false,
+        routstr: keyStored
+          ? {
+              connected: true,
+              key_preview: key.redacted?.key_preview ?? null,
+              key_fingerprint: key.redacted?.key_fingerprint ?? null,
+              balance_sats: key.balance_sats ?? null,
+              source: key.source ?? null,
+            }
+          : { connected: false },
+        wallet: walletView || { connected: false },
+        instructions: [
+          'Store this kit somewhere only you control. It is enough to REIDENTIFY and RECONNECT your Torii, not to spend from it.',
+          'Your NWC connection secret is NOT in this kit. Re-pair your wallet from its own app if you ever need to reconnect.',
+          'Your full Routstr key is NOT in this kit. Use the explicit "Reveal Routstr key" action (one-time, never cached) only when you must move it to another client.',
+          'The admin npub identifies the only key allowed to sign in. Keep your Nostr signer (nsec) safe — it is never held by the agent.',
+        ],
+        notes:
+          'Default kit excludes all secrets (NWC connection secret + full Routstr key). ' +
+          'Reveal the full Routstr key only via the explicit one-time export, which is served no-store and never persisted.',
+      },
+    };
+  }
+
+  // One-time, no-store full-key reveal. This is the ONLY method that returns a
+  // full sk- key, and it exists solely so an operator can move an already-paid
+  // key to another client during recovery. Hard gates: explicit confirm===true
+  // (an accidental GET can never leak it) and a stored key must exist. The
+  // route MUST send Cache-Control: no-store. Each reveal is audited (count +
+  // timestamp) so an operator can see the key was exported; the plaintext is
+  // never logged.
+  async function routstrExportKey({ confirm } = {}) {
+    if (confirm !== true) {
+      return { code: 400, body: { ok: false, error: 'explicit confirmation required', code: 'confirmation_required' } };
+    }
+    const env = await loadEnvelope(ROUTSTR_SECRET);
+    if (env === null) return { code: 409, body: { ok: false, error: 'no routstr key stored' } };
+    if (env.error) return { code: 409, body: { ok: false, error: `stored key ${env.error}` } };
+    if (typeof env.key !== 'string' || env.key.length === 0) {
+      return { code: 409, body: { ok: false, error: 'stored key is unusable' } };
+    }
+    // Audit the reveal (never the key itself) and persist the counter so the
+    // export is visible after the fact.
+    const exportCount = (Number.isInteger(env.export_count) ? env.export_count : 0) + 1;
+    await secretStore.put(ROUTSTR_SECRET, JSON.stringify({ ...env, export_count: exportCount, last_exported_at: new Date().toISOString() }));
+    log.warn(`[onboarding] routstr key exported (one-time reveal #${exportCount}, fp=${env.redacted?.key_fingerprint || 'unknown'})`);
+    return {
+      code: 200,
+      body: {
+        ok: true,
+        key: env.key,
+        routstr: env.redacted || null,
+        provider_host: routstrProvider.providerHost,
+        one_time: true,
+        export_count: exportCount,
+        // Advisory for the client: do not store, do not cache.
+        no_store: true,
+      },
+    };
+  }
+
   return {
     walletConnect,
     walletStatus,
@@ -424,5 +560,8 @@ export function createOnboarding(deps = {}) {
     routstrQuote,
     routstrPay,
     routstrRecover,
+    recoveryState,
+    recoveryKit,
+    routstrExportKey,
   };
 }

@@ -372,3 +372,126 @@ test('routstrRecover is non-terminal (202) while the invoice is still pending', 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── recovery state (refresh-resume, never re-pays) ─────────────────────────
+
+test('recoveryState reports claimable=true for a paid-but-unclaimed session (survives restart)', async () => {
+  const dir = tmp();
+  try {
+    // Poll times out so the pay leaves a stored pending quote and NO key.
+    const provider = fakeProvider({
+      pollInvoice: async () => ({ ok: false, recoverable: true, reason: 'polling timed out before settlement' }),
+    });
+    await (async () => {
+      const { onboarding } = build(dir, { provider });
+      await onboarding.walletConnect({ nwcUri: NWC_URI });
+      await onboarding.routstrQuote({ amountSats: 10000 });
+      const paid = await onboarding.routstrPay({ confirm: true });
+      assert.equal(paid.body.key_stored, false);
+    })();
+    // "Restart / refresh": a brand-new store + onboarding over the same dir.
+    const { onboarding: after } = build(dir, { provider });
+    const st = await after.recoveryState();
+    assert.equal(st.code, 200);
+    assert.equal(st.body.claimable, true, 'paid-unclaimed must be claimable after refresh');
+    assert.equal(st.body.routstr.connected, false);
+    assert.equal(st.body.pending.exists, true);
+    assert.equal(st.body.pending.amount_sats, 10000);
+    // No secret material of any kind in the resume snapshot.
+    const s = JSON.stringify(st.body);
+    assert.ok(!s.includes(SK) && !s.includes(NWC_URI) && !s.includes('lnbc_fake'), 'resume snapshot leaks no secrets/bolt11');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('recoveryState reports claimable=false once the key is stored', async () => {
+  const dir = tmp();
+  try {
+    const { onboarding } = build(dir);
+    await onboarding.walletConnect({ nwcUri: NWC_URI });
+    await onboarding.routstrQuote({ amountSats: 100 });
+    await onboarding.routstrPay({ confirm: true }); // stores the key, clears pending
+    const st = await onboarding.recoveryState();
+    assert.equal(st.body.claimable, false);
+    assert.equal(st.body.routstr.connected, true);
+    assert.equal(st.body.pending, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── recovery kit (safe by default, no secrets) ─────────────────────────────
+
+test('recoveryKit excludes the NWC secret and the full key, includes redacted restoration data', async () => {
+  const dir = tmp();
+  try {
+    const { onboarding } = build(dir);
+    await onboarding.walletConnect({ nwcUri: NWC_URI });
+    await onboarding.routstrKey({ key: 'sk-livekey999999' });
+    const kit = await onboarding.recoveryKit({ adminNpub: 'npub1testadmin', agentVersion: '0.2.37-alpha' });
+    assert.equal(kit.code, 200);
+    assert.equal(kit.body.includes_secrets, false);
+    assert.equal(kit.body.admin_npub, 'npub1testadmin');
+    assert.equal(kit.body.agent_version, '0.2.37-alpha');
+    assert.equal(kit.body.routstr.connected, true);
+    assert.equal(kit.body.wallet.connected, true);
+    assert.ok(Array.isArray(kit.body.instructions) && kit.body.instructions.length > 0);
+    const s = JSON.stringify(kit.body);
+    assert.ok(!s.includes(SK), 'kit must not contain the NWC secret');
+    assert.ok(!s.includes(NWC_URI), 'kit must not contain the NWC URI');
+    assert.ok(!s.includes('sk-livekey999999'), 'kit must not contain the full Routstr key');
+    // Only the redacted preview is present.
+    assert.equal(kit.body.routstr.key_preview, 'sk-…9999');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── one-time full-key export (explicit, no-store) ──────────────────────────
+
+test('routstrExportKey refuses without explicit confirm', async () => {
+  const dir = tmp();
+  try {
+    const { onboarding } = build(dir);
+    await onboarding.routstrKey({ key: 'sk-livekey999999' });
+    const r = await onboarding.routstrExportKey({ confirm: false });
+    assert.equal(r.code, 400);
+    assert.equal(r.body.code, 'confirmation_required');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('routstrExportKey refuses when no key is stored (409)', async () => {
+  const dir = tmp();
+  try {
+    const { onboarding } = build(dir);
+    const r = await onboarding.routstrExportKey({ confirm: true });
+    assert.equal(r.code, 409);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('routstrExportKey returns the full key ONLY on explicit confirm, and audits the reveal', async () => {
+  const dir = tmp();
+  try {
+    const { onboarding } = build(dir);
+    await onboarding.routstrKey({ key: 'sk-livekey999999' });
+    const r = await onboarding.routstrExportKey({ confirm: true });
+    assert.equal(r.code, 200);
+    assert.equal(r.body.key, 'sk-livekey999999', 'export must return the full key on explicit confirm');
+    assert.equal(r.body.one_time, true);
+    assert.equal(r.body.no_store, true);
+    assert.equal(r.body.export_count, 1);
+    // A second reveal increments the audit counter (visible after the fact).
+    const r2 = await onboarding.routstrExportKey({ confirm: true });
+    assert.equal(r2.body.export_count, 2);
+    // Redacted status never exposes the key even after an export.
+    const status = await onboarding.routstrStatus();
+    assert.ok(!JSON.stringify(status.body).includes('sk-livekey999999'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
