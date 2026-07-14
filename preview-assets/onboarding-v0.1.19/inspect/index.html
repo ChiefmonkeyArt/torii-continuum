@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>continuum · clip inspector</title>
+  <link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@500,700&f[]=satoshi@400,500,700&f[]=jetbrains-mono@400,500&display=swap">
+  <!-- Desktop-only gate reused from parent page -->
+  <script>
+    (function () {
+      var narrow = window.matchMedia('(max-width: 899px)').matches;
+      var coarse = window.matchMedia('(pointer: coarse)').matches;
+      if (narrow || coarse) {
+        document.documentElement.setAttribute('data-desktop-only', 'blocked');
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      --bg: hsl(220 15% 8%);
+      --panel: hsl(220 15% 12%);
+      --panel-border: hsl(220 15% 22%);
+      --fg: hsl(220 10% 92%);
+      --fg-mid: hsl(220 8% 70%);
+      --fg-muted: hsl(220 6% 48%);
+      --amber: hsl(38 96% 60%);
+      --red: hsl(0 70% 60%);
+      --green: hsl(150 55% 55%);
+      --neon: hsl(320 100% 68%);
+      --font-display: 'Cabinet Grotesk', ui-sans-serif, system-ui, sans-serif;
+      --font-body: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--font-body);
+      overflow: hidden;
+    }
+    .desktop-only-gate { display: none; }
+    html[data-desktop-only="blocked"] body > *:not(.desktop-only-gate) { display: none !important; }
+    html[data-desktop-only="blocked"] .desktop-only-gate {
+      display: flex; position: fixed; inset: 0; z-index: 9999;
+      align-items: center; justify-content: center; padding: 32px 24px;
+      background: hsl(220 15% 6%); color: var(--fg); text-align: center;
+    }
+    .desktop-only-inner { max-width: 460px; }
+    .desktop-only-title { font-family: var(--font-display); font-size: 28px; margin-bottom: 12px; }
+    .desktop-only-lede { color: var(--fg-mid); }
+
+    .stage {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      grid-template-columns: 1fr 340px;
+    }
+    canvas#viewport {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: radial-gradient(ellipse 80% 60% at 50% 40%, hsl(220 15% 14%), hsl(220 15% 6%));
+    }
+    .sidebar {
+      background: var(--panel);
+      border-left: 1px solid var(--panel-border);
+      padding: 24px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--panel-border);
+      padding-bottom: 16px;
+    }
+    .brand {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 18px;
+    }
+    .brand .dot { color: var(--amber); }
+    .header-sub {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .section-label {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+    .clip-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 40vh;
+      overflow-y: auto;
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      padding: 4px;
+    }
+    .clip-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--fg-mid);
+      transition: background 120ms;
+    }
+    .clip-item:hover { background: hsl(220 15% 16%); color: var(--fg); }
+    .clip-item.active {
+      background: hsl(38 40% 20%);
+      color: var(--fg);
+    }
+    .clip-num {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-muted);
+      min-width: 22px;
+      text-align: right;
+    }
+    .clip-name {
+      flex: 1;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .clip-flag {
+      font-size: 11px;
+      color: var(--red);
+      font-weight: 600;
+    }
+    .clip-flag.ok { color: var(--green); }
+    .clip-flag:empty { display: none; }
+
+    .controls-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .controls-row label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--fg-mid);
+    }
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--amber);
+    }
+    .btn-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    button.action {
+      background: hsl(220 15% 18%);
+      border: 1px solid var(--panel-border);
+      color: var(--fg);
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-family: var(--font-body);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 120ms;
+    }
+    button.action:hover { background: hsl(220 15% 24%); }
+    button.action.danger { border-color: hsl(0 40% 40%); color: hsl(0 60% 75%); }
+    button.action.danger:hover { background: hsl(0 30% 20%); }
+    button.action.good { border-color: hsl(150 40% 40%); color: hsl(150 55% 75%); }
+    button.action.good:hover { background: hsl(150 30% 18%); }
+
+    .notes {
+      font-size: 12px;
+      color: var(--fg-mid);
+      background: hsl(220 15% 10%);
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      padding: 12px;
+      line-height: 1.5;
+    }
+    .notes strong { color: var(--fg); }
+    .notes .mono { font-family: var(--font-mono); font-size: 11px; color: var(--amber); }
+
+    .clip-info {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-muted);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .export-area {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      background: hsl(220 15% 10%);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      padding: 10px;
+      color: var(--fg-mid);
+      max-height: 20vh;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      background: hsl(220 15% 18%);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      color: var(--fg);
+      font-size: 12px;
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity 200ms, transform 200ms;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+<body>
+  <div class="desktop-only-gate" role="alertdialog">
+    <div class="desktop-only-inner">
+      <h1 class="desktop-only-title">Inspector is desktop-only.</h1>
+      <p class="desktop-only-lede">The clip inspector needs a keyboard, a mouse, and screen space for the controls.</p>
+    </div>
+  </div>
+
+  <div class="stage">
+    <canvas id="viewport"></canvas>
+
+    <aside class="sidebar">
+      <div class="header">
+        <div>
+          <div class="brand">continuum<span class="dot">.</span></div>
+          <div class="header-sub" style="margin-top:4px">clip inspector v0.1.4</div>
+        </div>
+        <div class="header-sub" id="clipCount">0 clips</div>
+      </div>
+
+      <div>
+        <div class="section-label">1. Pick a clip</div>
+        <div class="clip-list" id="clipList"></div>
+      </div>
+
+      <div class="controls-row">
+        <label>Playback speed <span id="speedVal">1.00x</span></label>
+        <input type="range" id="speed" min="0.1" max="2" step="0.05" value="1" />
+      </div>
+
+      <div class="controls-row">
+        <label>Camera distance <span id="distVal">6.0</span></label>
+        <input type="range" id="dist" min="2" max="12" step="0.1" value="6" />
+      </div>
+
+      <div class="controls-row">
+        <label>Camera height <span id="heightVal">1.90</span></label>
+        <input type="range" id="height" min="0" max="5" step="0.05" value="1.9" />
+      </div>
+
+      <div class="controls-row">
+        <label>Orbit yaw <span id="yawVal">0</span></label>
+        <input type="range" id="yaw" min="-3.14" max="3.14" step="0.02" value="0" />
+      </div>
+
+      <div>
+        <div class="section-label">2. Verdict on this clip</div>
+        <div class="btn-row">
+          <button class="action good" id="btnKeep">Keep ✓</button>
+          <button class="action danger" id="btnFlag">Flag ✗</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">3. Export findings</div>
+        <button class="action" id="btnExport">Copy report to clipboard</button>
+        <div class="export-area" id="exportArea" style="margin-top:8px; display:none;"></div>
+      </div>
+
+      <div class="notes">
+        <strong>How to use:</strong><br>
+        Click a clip. It plays looped on the character. Use camera sliders to inspect from any angle. Note anything wrong (arm through torso, foot through floor, mesh popping). Click <strong style="color:var(--green)">Keep</strong> or <strong style="color:var(--red)">Flag</strong>. Repeat all 19. Then click <strong>Copy report</strong> and paste it back to Perplexity.
+      </div>
+    </aside>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "../three-libs/three/three.module.js",
+      "three/addons/": "../three-libs/three/addons/"
+    }
+  }
+  </script>
+  <script>
+    // Only load Three.js on desktop
+    if (document.documentElement.getAttribute('data-desktop-only') !== 'blocked') {
+      const s = document.createElement('script');
+      s.type = 'module';
+      s.src = './inspector.js';
+      document.body.appendChild(s);
+    }
+  </script>
+</body>
+</html>

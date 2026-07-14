@@ -442,11 +442,16 @@ async function readCapped(res, maxBytes) {
 }
 
 function extractBalanceSats(json) {
-  // Routstr balance may arrive as sats or msats under a few field names.
+  // Routstr-core denominates wallet balances in MILLISATS: GET /v1/balance/info
+  // returns { balance: <msats>, reserved: <msats> } (source: routstr-core wallet
+  // model). Earlier code returned the raw `balance` as if it were sats, so a
+  // 10,000-sat funding surfaced as "10000000 sats". Convert msat fields down to
+  // whole sats; only explicitly *_sats fields are already in sats.
   if (Number.isFinite(json.balance_sats)) return json.balance_sats;
-  if (Number.isFinite(json.balance)) return json.balance;
   if (Number.isFinite(json.balance_msats)) return Math.floor(json.balance_msats / 1000);
-  if (json.wallet && Number.isFinite(json.wallet.balance)) return json.wallet.balance;
+  if (Number.isFinite(json.balance)) return Math.floor(json.balance / 1000);
+  if (json.wallet && Number.isFinite(json.wallet.balance_sats)) return json.wallet.balance_sats;
+  if (json.wallet && Number.isFinite(json.wallet.balance)) return Math.floor(json.wallet.balance / 1000);
   return null;
 }
 

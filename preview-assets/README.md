@@ -6,17 +6,17 @@ production code but never ship into the built app.
 Each mockup lives under `onboarding-vX.Y.Z/`. Releases publish the
 matching tarball under `releases/`.
 
-Current preview: **v0.1.18-preview** (`onboarding-v0.1.18/`). Earlier
-versions (`onboarding-v0.1.0/` … `onboarding-v0.1.17/`) are kept for reference.
+Current preview: **v0.1.19-preview** (`onboarding-v0.1.19/`). Earlier
+versions (`onboarding-v0.1.0/` … `onboarding-v0.1.18/`) are kept for reference.
 
 ## Deploy a preview to chiefmonkey.art
 
-    scp releases/torii-continuum-onboarding-preview-v0.1.18.tar.gz \
+    scp releases/torii-continuum-onboarding-preview-v0.1.19.tar.gz \
         root@chiefmonkey.art:/tmp/
     ssh root@chiefmonkey.art
-    tar xzf /tmp/torii-continuum-onboarding-preview-v0.1.18.tar.gz \
+    tar xzf /tmp/torii-continuum-onboarding-preview-v0.1.19.tar.gz \
         -C /var/www/torii/continuum/
-    mv /var/www/torii/continuum/torii-continuum-onboarding-preview-v0.1.18 \
+    mv /var/www/torii/continuum/torii-continuum-onboarding-preview-v0.1.19 \
        /var/www/torii/continuum/onboarding-preview
 
 Then browse https://chiefmonkey.art/continuum/onboarding-preview/

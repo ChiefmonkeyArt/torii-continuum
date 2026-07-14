@@ -35,7 +35,8 @@ test('verifyKey returns redacted metadata, never the full key', async () => {
   const seen = [];
   const fetchImpl = async (url, opts) => {
     seen.push({ url, auth: opts.headers.Authorization, redirect: opts.redirect });
-    if (url.endsWith('/v1/balance/info')) return res(200, { balance: 4200 });
+    // Routstr denominates the wallet balance in MILLISATS.
+    if (url.endsWith('/v1/balance/info')) return res(200, { balance: 4200000 });
     if (url.endsWith('/v1/models')) return res(200, { data: [{ id: 'a' }, { id: 'b' }] });
     return res(404);
   };
@@ -51,6 +52,29 @@ test('verifyKey returns redacted metadata, never the full key', async () => {
   for (const c of seen) {
     assert.ok(c.url.startsWith(BASE), 'pinned origin');
     assert.equal(c.redirect, 'error', 'no redirect following (SSRF)');
+  }
+});
+
+test('verifyKey converts the millisat balance down to whole sats (screenshot bug)', async () => {
+  // The provider used to surface Routstr's msat `balance` verbatim, so a
+  // 10,000-sat funded key showed as "10000000 sats". A 10,000,000 msat balance
+  // must now report 10,000 sats. Explicit *_sats fields are already in sats.
+  const cases = [
+    { json: { balance: 10000000 }, expect: 10000 },
+    { json: { balance_msats: 4200000 }, expect: 4200 },
+    { json: { balance_sats: 777 }, expect: 777 },
+    { json: { wallet: { balance: 5000 } }, expect: 5 },
+  ];
+  for (const c of cases) {
+    const fetchImpl = async (url) => {
+      if (url.endsWith('/v1/balance/info')) return res(200, c.json);
+      if (url.endsWith('/v1/models')) return res(200, { data: [{ id: 'a' }] });
+      return res(404);
+    };
+    const p = createRoutstrProvider(cfg(), { fetchImpl });
+    const r = await p.verifyKey('sk-abcdef123456');
+    assert.equal(r.ok, true);
+    assert.equal(r.balance_sats, c.expect, `${JSON.stringify(c.json)} → ${c.expect} sats`);
   }
 });
 

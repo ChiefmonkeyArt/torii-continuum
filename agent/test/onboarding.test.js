@@ -194,6 +194,37 @@ test('routstrKey verifies + stores + returns redacted, never the full key', asyn
   }
 });
 
+test('routstrStatus displays a legacy msat balance as whole sats; new keys are verbatim', async () => {
+  const dir = tmp();
+  try {
+    const { onboarding, secretStore } = build(dir);
+
+    // A LEGACY envelope written before the fix: balance_sats actually holds
+    // MILLISATS and there is no balance_units marker. This is the funded key in
+    // the screenshot — 10,000,000 msats that wrongly showed as "10000000 sats".
+    await secretStore.put('routstr_key', JSON.stringify({
+      redacted: { key_preview: 'sk-…9abc', key_fingerprint: 'fp' },
+      balance_sats: 10000000,
+      connected_at: '2026-07-01T00:00:00Z',
+    }));
+    const legacy = await onboarding.routstrStatus();
+    assert.equal(legacy.body.connected, true);
+    assert.equal(legacy.body.balance_sats, 10000, 'legacy msats divided down to 10,000 sats');
+
+    // A NEW envelope carries balance_units:'sat' and is used verbatim.
+    await secretStore.put('routstr_key', JSON.stringify({
+      redacted: { key_preview: 'sk-…9abc', key_fingerprint: 'fp' },
+      balance_sats: 10000,
+      balance_units: 'sat',
+      connected_at: '2026-07-01T00:00:00Z',
+    }));
+    const fresh = await onboarding.routstrStatus();
+    assert.equal(fresh.body.balance_sats, 10000, 'sat-marked balance is not divided again');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('routstrKey rejects an invalid key (provider says no)', async () => {
   const dir = tmp();
   try {

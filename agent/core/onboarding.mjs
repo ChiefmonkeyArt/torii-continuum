@@ -37,6 +37,19 @@ export function createOnboarding(deps = {}) {
   if (!routstrProvider) throw new Error('createOnboarding: routstrProvider required');
   if (typeof connectNwc !== 'function') throw new Error('createOnboarding: connectNwc required');
 
+  // Display balance in whole sats, migrating legacy envelopes on read. Before
+  // v0.2.38-alpha the Routstr provider returned its msat balance under
+  // `balance_sats`, so a stored envelope with no `balance_units` marker holds
+  // MILLISATS and must be divided by 1000 for display. Envelopes written by the
+  // fixed code carry `balance_units:'sat'` and are used verbatim. Marker-guarded
+  // so the migration only ever touches genuinely-legacy blobs.
+  function displayBalanceSats(env) {
+    const raw = env?.balance_sats;
+    if (!Number.isFinite(raw)) return null;
+    if (env.balance_units === 'sat') return raw;
+    return Math.floor(raw / 1000);
+  }
+
   async function loadEnvelope(name) {
     let raw;
     try {
@@ -197,6 +210,8 @@ export function createOnboarding(deps = {}) {
       key,
       redacted: { key_preview: verified.key_preview, key_fingerprint: verified.key_fingerprint },
       balance_sats: balanceSats,
+      // Marker: this balance is already in whole sats (see displayBalanceSats).
+      balance_units: 'sat',
       models_available: verified.models_available,
       capabilities: verified.capabilities || {},
       source,
@@ -234,7 +249,7 @@ export function createOnboarding(deps = {}) {
       body: {
         connected: true,
         routstr: env.redacted || null,
-        balance_sats: env.balance_sats ?? null,
+        balance_sats: displayBalanceSats(env),
         models_available: env.models_available ?? null,
         source: env.source || null,
         connected_at: env.connected_at || null,
@@ -438,7 +453,7 @@ export function createOnboarding(deps = {}) {
         routstr: {
           connected: keyStored,
           key_preview: keyStored ? key.redacted?.key_preview ?? null : null,
-          balance_sats: keyStored ? key.balance_sats ?? null : null,
+          balance_sats: keyStored ? displayBalanceSats(key) : null,
         },
         pending: pendingExists
           ? {
@@ -493,20 +508,20 @@ export function createOnboarding(deps = {}) {
               connected: true,
               key_preview: key.redacted?.key_preview ?? null,
               key_fingerprint: key.redacted?.key_fingerprint ?? null,
-              balance_sats: key.balance_sats ?? null,
+              balance_sats: displayBalanceSats(key),
               source: key.source ?? null,
             }
           : { connected: false },
         wallet: walletView || { connected: false },
         instructions: [
-          'Store this kit somewhere only you control. It is enough to REIDENTIFY and RECONNECT your Torii, not to spend from it.',
-          'Your NWC connection secret is NOT in this kit. Re-pair your wallet from its own app if you ever need to reconnect.',
-          'Your full Routstr key is NOT in this kit. Use the explicit "Reveal Routstr key" action (one-time, never cached) only when you must move it to another client.',
+          'Store this kit somewhere only you control.',
+          'Your NWC connection secret is NOT included. Re-pair your wallet from its own app if you ever need to reconnect.',
+          'The recovery kit you DOWNLOAD embeds your full Routstr key so you can restore access from another client — treat the downloaded file like cash. This API response itself never contains the full key.',
           'The admin npub identifies the only key allowed to sign in. Keep your Nostr signer (nsec) safe — it is never held by the agent.',
         ],
         notes:
-          'Default kit excludes all secrets (NWC connection secret + full Routstr key). ' +
-          'Reveal the full Routstr key only via the explicit one-time export, which is served no-store and never persisted.',
+          'This API response is redacted: it never contains the NWC connection secret or the full Routstr key. ' +
+          'The full Routstr key is fetched over the explicit, no-store export endpoint at download time and written only into the file you save.',
       },
     };
   }
