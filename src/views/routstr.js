@@ -181,7 +181,7 @@ function openTopUpModal() {
 
   const handle = openModal({
     title: 'Top up agent wallet',
-    subtitle: 'The Cashu token is sent to your agent, decoded and stored on your VPS. Your browser never keeps proofs — it just hands them to your own daemon.',
+    subtitle: 'The Cashu token is sent to your agent, decoded and stored on your Torii. Your browser never keeps proofs — it just hands them to your own gateway.',
     body,
   });
 
@@ -209,7 +209,7 @@ function openTopUpModal() {
 
 function disconnect() {
   // Local UI toggle only — the agent-side wallet is persistent by design.
-  // Signing out (sidebar) revokes the session token; the mint proofs on the VPS remain.
+  // Signing out (sidebar) revokes the session token; the mint proofs on your Torii remain.
   updateRoutstr({ connected: false, cashuBalanceSats: 0 });
   stopBalancePoll();
   renderRoutstr(document.getElementById('main-content'));

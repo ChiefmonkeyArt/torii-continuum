@@ -219,7 +219,7 @@ function toriiSvg() {
 }
 
 const PROMISES = [
-  { title: 'Local-first', body: 'Your projects live in your browser and on your VPS. No SaaS in the middle. No account required to try it.' },
+  { title: 'Local-first', body: 'Your projects live in your browser and on your Torii. Your Torii, your gateway. No SaaS in the middle. No account required to try it.' },
   { title: 'Nostr-native', body: 'Projects, sessions, milestones and marketplace tasks all shaped as nostr events (kinds 30078–30091). Portable between clients, signable, yours.' },
   { title: 'Pay per request', body: 'Model calls route through Routstr and settle in Cashu — one request, one token, no monthly bill and no API key custody.' },
   { title: 'Human-in-the-loop', body: 'The agent drafts. You sign. Every publish is an explicit click through Plebeian Signer. No autonomous writes to Nostr.' },
@@ -227,7 +227,7 @@ const PROMISES = [
 
 const PILLARS = [
   { k: 'Identity', v: 'npub via NIP-07', note: 'Plebeian Signer for now, NIP-46 later.' },
-  { k: 'Value',    v: 'Cashu + Routstr',  note: 'Per-request payment. Small on-VPS float.' },
+  { k: 'Value',    v: 'Cashu + Routstr',  note: 'Per-request payment. Small float on your Torii.' },
   { k: 'Coord',    v: 'Nostr events',      note: 'Projects, todos, marketplace on relays.' },
   { k: 'Compute',  v: 'DeepSeek default',  note: 'Local Ollama fallback (next slice).' },
 ];
@@ -236,7 +236,7 @@ const STATUS = [
   { s: 'ok',      t: 'App shell + Console mockup live' },
   { s: 'ok',      t: 'Agent daemon scaffold (Node 20, Fastify)' },
   { s: 'ok',      t: 'NIP-07 login flow (Plebeian Signer)' },
-  { s: 'ok',      t: 'Cashu wallet on VPS (@cashu/cashu-ts)' },
+  { s: 'ok',      t: 'Cashu wallet on your Torii (@cashu/cashu-ts)' },
   { s: 'ok',      t: 'Routstr chat wired to DeepSeek by default' },
   { s: 'next',    t: 'Local Ollama fallback (CONT-AGENT-1b)' },
   { s: 'next',    t: 'brain.write, todo.patch, nostr.draft skills' },

@@ -10,6 +10,7 @@ import { initStore } from './data/store.js';
 import { mountShell, mainContent, renderSidebar, applyStoredTheme } from './shell.js';
 import { route, startRouter, currentRoute } from './router.js';
 import { mountChat } from './chat.js';
+import { adoptOnboardingSession } from './data/agent.js';
 
 import { renderLanding } from './views/landing.js';
 import { renderProjects } from './views/projects.js';
@@ -29,6 +30,10 @@ function boot() {
   if (!root) return;
 
   applyStoredTheme();
+  // Adopt a handed-off onboarding session (localStorage['torii.session']) before
+  // anything renders, so a freshly onboarded operator lands authenticated on
+  // #/dashboard instead of being bounced to a login/marketing screen.
+  adoptOnboardingSession();
   initStore();
   mountShell(root);
 
