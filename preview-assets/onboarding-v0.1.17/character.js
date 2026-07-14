@@ -293,6 +293,23 @@ let playingLoop = false;
 let playingName = null;
 let lastReaction = null;
 
+// Read-only animation-state probe, consistent with the existing window.__torii*
+// readiness globals. Returns a live snapshot (reads current module state on each
+// call) — used by the deterministic tests and headless browser QA to assert the
+// dedicated-step clip, click-reaction takeover, and return-to-step behaviour
+// without reaching into Three.js internals. No effect on rendering.
+if (typeof window !== 'undefined') {
+  window.__toriiAnim = () => ({
+    step: currentStep,
+    stepClip: currentStepClip,
+    playing: playingName,
+    loop: playingLoop,
+    reactionActive,
+    reducedMotion,
+    available: [...availableClips],
+  });
+}
+
 // Crossfade to `name`, either looping or one-shot. No-op when already playing
 // that exact clip in the same mode (so a resize/re-apply never hitches).
 function crossTo(name, loop) {

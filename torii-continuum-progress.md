@@ -73,6 +73,116 @@ reduced motion, and final load-error. Verified target file green and the full
 root vitest suite green; `npm run build` clean. **Code + draft PR only — preview
 snapshot only, NOT wired into the production Continuum app and NOT deployed.**
 
+## v0.2.35-alpha — ONBOARDING-STEP2/3: existing-wallet NWC connect + two-path Routstr setup
+
+Onboarding preview bumped to **v0.1.16-preview** (`preview-assets/onboarding-v0.1.16/`).
+Reworks Step 2 (Wallet) and Step 3 (Routstr) around real, secret-safe agent
+flows, replacing the earlier local-wallet / LNbits mockup.
+
+- **Step 2 — existing-wallet NWC connect (wallet-agnostic).** Operator pastes an
+  NWC URI (password field, reveal opt-in, cleared on every outcome). The agent
+  validates the URI, connects via NIP-47, calls `get_info`, and reports a
+  capability matrix. A wallet missing optional caps is not rejected, but
+  Routstr funding-by-payment stays gated on `pay_invoice` (`can_fund_routstr`).
+- **Step 3 — Routstr, two paths.** Existing key: paste an `sk-…` key, agent
+  verifies balance/models/info before ready. Fund a new session: quote a
+  Lightning invoice → explicit confirm → pay via connected NWC → claim minted
+  key. Routstr Lightning contract is source-grounded against `Routstr/routstr-core`
+  (`CREATE /lightning/invoice`, `STATUS /lightning/invoice/{id}/status`,
+  `RECOVER /lightning/recover`); a poll timeout returns a precise RECOVERABLE
+  state carrying the bolt11 (sats never lost, UI offers Claim-key retry).
+- **Security.** Provider adapter pinned to one https origin (`redirect:'error'`,
+  no SSRF pivot, bounded timeout + body cap + bounded polling, fail closed,
+  constant-safe key redaction). Secrets (NWC URI, `sk-…`) never touch
+  storage/URL/logs/errors; submitted only over the authenticated same-origin API,
+  stored encrypted at rest (AES-256-GCM, key from `session_secret`); only
+  redacted shapes returned. Mutation/test/pay/recover routes admin-gated
+  (`requireAdmin`) + rate-limited (`onboarding_per_min`, default 12). Pay refuses
+  unless `confirm===true` AND the wallet advertises `pay_invoice`. No nsec on the
+  server, no autonomous spending.
+
+Tests: agent `node --test` **96/96** (secretstore, nwc, routstr-provider incl.
+create/status/recover + topup-bearer + poll-timeout→recoverable +
+expired-terminal + disabled-path-blocked, onboarding quote/pay/recover); root
+vitest **223/223** (client quote/pay/recover, confirm boundary, no-persistence,
+redaction, disabled-provider degrade); `npm run build` clean;
+`npm audit --omit=dev` 0 vulnerabilities (root + agent). Code + PR (#32) only —
+not deployed.
+
+## v0.2.34-alpha — ONBOARDING: deterministic character↔deck step sync (Chiefmonkey after soft reload)
+
+Onboarding preview bumped to **v0.1.15-preview** (`preview-assets/onboarding-v0.1.15/`).
+Fixes the intermittent "Chiefmonkey stays absent after an ordinary `Cmd+R` soft
+refresh" bug while Step 2 session restore still succeeds (a hard reload always
+worked). A live browser diagnostic ruled out the assets — every file served 200,
+the GLB parsed with all clips incl. `Idle_03`, canvas present at opacity 0 —
+leaving startup ordering as the only variable.
+
+**Root cause — a script/load-ordering race, not bad assets.** `character.js`
+(ES module) and `deck.js` (classic script) execute in non-deterministic order
+relative to each other and to the async GLB load. `deck.js` announced the
+desired step (incl. restored Step 2) via an `onboarding:step` event; when that
+fired *before* the GLB finished, the old `character.js` dropped it (empty
+`actions` map) and then hard-applied `applyStep(1)` in `onLoaded` — reverting the
+restored step and, because the intended ready-state was lost, leaving the stage
+dark.
+
+**Fix (client-only; no server/schema/validation-endpoint/asset change).** New
+pure, injectable step-sync state machine in `onboarding-client.js`
+(`createCharacterSync`/`recordStep`/`resolveReadyStep`/`markCharacterFailed`).
+`character.js` records every `onboarding:step` (remembered, not dropped, before
+readiness); on load `resolveReadyStep(sync, window.__toriiRestoredStep)` applies
+the deck's resolved step, else the restored session step read at ready time, else
+Step 1. The hard-coded `applyStep(1)` is gone; a step arriving after readiness
+applies immediately — both paths order-independent. Explicit readiness/terminal
+state + events: `window.__toriiCharacterReady` + `onboarding:model-loaded` on
+success; `window.__toriiCharacterFailed` + `onboarding:model-error` on terminal
+give-up. Preserved byte-for-byte: retry policy, no-`crossorigin` preload hints,
+fail-closed restore, NIP-07/NIP-46 flow, signer wording, session shape, the three
+auth-phase clips; `deck.js`/`index.html`/`shared.css`/assets/`three-libs/`
+unchanged from v0.1.14.
+
+Tests: root vitest preview suite **51/51** for v0.1.15 (both orderings, ordinary
+reload/cache-hit → Step 1 no revert, out-of-range restore fail-safe, terminal
+failure branch), v0.1.14 still 41/41; agent `node --test` 39/39; `npm run build`
+clean (`preview-assets/` excluded from `dist/`). Root `npm audit` findings are
+dev-tooling only (vite/vitest/esbuild dev-server advisory, fix needs breaking
+vite@8, out of scope). Code + PR (#31) only — not deployed.
+
+## v0.2.33-alpha — ONBOARDING: restore Step 2 on reload + Chiefmonkey reappears
+
+Onboarding preview bumped to **v0.1.14-preview** (`preview-assets/onboarding-v0.1.14/`).
+Live acceptance hotfix: after a successful NIP-07 sign the deck advances to
+Step 2, but a plain page refresh dropped the operator back to Step 1 and left
+Chiefmonkey invisible. Two independent refresh-path root causes, fixed together
+— client-only, no server/schema/validation-endpoint change.
+
+- **Root cause 1 — Step 2 → Step 1 on refresh.** `onboarding-client.js` wrote
+  `localStorage['torii.session']` on success but nothing ever read it back on
+  load, and `deck.js` always hard-started at Step 1. Fix: `restoreSession()`
+  reads + validates the stored session at module load and, when valid, sets
+  `window.__toriiRestoredStep`; `deck.js` opens directly on that step, with an
+  `onboarding:advance` dispatch covering the reverse load order. Validation is
+  fail-closed and adds no server surface — `isSessionValid()` enforces every
+  non-secret invariant the agent's `verifySessionToken` enforces (exact
+  `iat.exp.pubkey.sig` shape, numeric timestamps, unexpired, pubkey match);
+  the HMAC secret is never needed in the browser. Invalid/expired/tampered
+  sessions are removed and the operator restarts cleanly at Step 1.
+- **Root cause 2 — Chiefmonkey invisible after refresh.** v0.1.11's watchdog
+  retried the GLB once on an 8s stall, but a reload could make the preloaded
+  same-origin fetch error outright, and the old `onErr` merely hid the canvas
+  and cancelled the watchdog so the retry never ran. Fix: both stall and error
+  route through the pure `nextLoadAttempt()` policy — first failure (either kind)
+  → one cache-busting retry, second → give up (no loop). Preload hints untouched
+  (v0.1.11 same-origin no-`crossorigin` fix preserved).
+
+Preserved: v0.1.13 bodyless-challenge fix, NIP-07 primary + browser-client NIP-46
+secondary (no server bunker-connect), signer wording, session shape, the three
+auth-phase clips, no new CDN. Tests: focused preview/auth vitest **41 passed**
+(incl. restore + loader-retry + no-crossorigin guardrails); agent `node --test`
+**39 passed**; `npm run build` OK; `npm audit --omit=dev` 0 vulnerabilities
+(root + agent). Code + PR (#30) only — not deployed.
+
 ## v0.2.32-alpha — ONBOARDING-STEP1-FIX: "agent challenge failed (400)" on Sign with Plebeian Signer
 
 Onboarding preview bumped to **v0.1.13-preview** (`preview-assets/onboarding-v0.1.13/`).
