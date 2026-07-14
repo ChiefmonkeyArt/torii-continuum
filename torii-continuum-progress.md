@@ -9,6 +9,70 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.36-alpha — ONBOARDING-ASSET: new Chiefmonkey GLB + forbidden-safe animation state machine
+
+Onboarding preview bumped to **v0.1.17-preview** (`preview-assets/onboarding-v0.1.17/`).
+A substantial asset + animation upgrade: a fresh Chiefmonkey source GLB replaces
+the old `chiefmonkey6.glb`, every walking/running/knock-down clip is removed
+from the shipped model, and the runtime plays a dedicated, forbidden-safe clip
+per onboarding step plus a curated pool of click reactions.
+
+**New optimized asset (`assets/chiefmonkey-onboarding.glb`).** Produced by a new
+reproducible local optimizer `tools/optimize-glb.mjs` (gltf-transform 4.4.1 +
+draco3dgltf 1.5.7 + sharp 0.35.3, all build-time only — no third-party runtime
+CDN). Pipeline: `dedup → weld → resample → textureCompress(webp,q82,≤1024²) →
+prune → draco(edgebreaker)`, and it drops every forbidden locomotion/knock-down
+clip using the runtime's own `isForbiddenClip` predicate (single source of
+truth, imported from `onboarding-client.js`). Deterministic — the same source
+bytes yield byte-identical output.
+- Source: 9,298,852 bytes, SHA-256 `87b0048c…c37dd` — **kept out of git**
+  (build artifact only; see `tools/SOURCE.md`).
+- Optimized: **2,347,780 bytes, 74.75% smaller** (target was ≥60%), SHA-256
+  `0253d5e1…e2fcb`. Ships with a `.manifest.json` recording sizes, %reduction,
+  the deterministic SHA, and the retained/dropped clip inventory.
+- **13 clips retained, 5 forbidden dropped** (`Clapping_Run`, `Knock_Down`,
+  `Running`, `Stylish_Walk_inplace`, `Walking`). Mesh/skin (24 joints)/material/
+  texture counts all preserved nonzero; clip names survive Draco compression.
+
+**Forbidden-clip filter (REQ2).** `isForbiddenClip`/`filterForbidden` in
+`onboarding-client.js` do case-insensitive semantic matching robust to spaces /
+underscores / camelCase (walk, walking, run, running, jog, sprint,
+knock(-/ )down, fall-down equivalents). Used by BOTH the optimizer (drop at
+build) and the runtime (never select), so a forbidden clip can never be mapped
+to a step, chosen as a click reaction, or triggered by a status phase.
+
+**Dedicated per-step animation state machine (REQ3, `character.js`).** Each of
+the five deck steps resolves one dedicated clip from `STEP_CLIPS`/`selectStepClip`
+(1 Talk_with_Hands_Open, 2 Agree_Gesture, 3 mage_soell_cast_3, 4 Gentlemans_Bow,
+5 Idle_10; a dormant step-6 Victory_Cheer "curtain" is defined for a future
+completion beat). The clip plays deterministically on entering/restoring that
+step and loops. Applied on model-ready via the v0.1.15 `resolveReadyStep` path so
+restore-before-ready and ready-before-restore both land on the correct step.
+
+**Click reactions via raycast (REQ4).** A window-level `pointerdown` +
+NDC-from-canvas-rect `Raycaster.intersectObject(model)` plays one random one-shot
+from a curated `CLICK_POOL` (`pickClickReaction`, no immediate repeat), then
+crossfades back to the current step's dedicated clip on the mixer `finished`
+event. Guards: ignores clicks on UI controls (never steals a panel/button
+click), respects `prefers-reduced-motion`, and ignores click-spam while a
+reaction is active. No walking/running/knock-down/severe-damage in the pool.
+
+**Status-phase reconciliation (REQ5).** The Step-1/2/3 prompt/success/failure
+reactions (`onboarding:anim`) are transient overrides that always return to the
+*current* step clip afterwards; a looping prompting override yields to a genuine
+step change but not to a mere resize. Async auth/wallet/Routstr outcomes and the
+character load order can no longer race or permanently overwrite step state.
+
+Tests (offline, deterministic): parse the optimized GLB's JSON chunk to prove
+skeleton/skin/mesh/material counts nonzero and every referenced step/click/status
+clip name survives; assert no forbidden pattern is ever selectable; verify the
+committed asset matches the manifest SHA + size budget (≤3 MB, ≥60% reduction);
+cover every step mapping, restore ordering, status→current-step return, click
+hit/no-hit + UI-guard + no-immediate-repeat + spam guard + crossfade return,
+reduced motion, and final load-error. Verified target file green and the full
+root vitest suite green; `npm run build` clean. **Code + draft PR only — preview
+snapshot only, NOT wired into the production Continuum app and NOT deployed.**
+
 ## v0.2.32-alpha — ONBOARDING-STEP1-FIX: "agent challenge failed (400)" on Sign with Plebeian Signer
 
 Onboarding preview bumped to **v0.1.13-preview** (`preview-assets/onboarding-v0.1.13/`).
