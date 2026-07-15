@@ -26,6 +26,7 @@ export function renderProjectHome(mount, slug) {
     h('span', { class: 'mono', text: slug }),
   ]);
   mount.appendChild(crumbs);
+  mount.appendChild(renderProjectTabs(slug, 'overview'));
 
   // Header
   const ms = milestonesFor(slug);
@@ -204,6 +205,26 @@ renderTodos.refresh = function refresh(slug) {
   const mount = document.getElementById('main-content');
   renderProjectHome(mount, slug);
 };
+
+/**
+ * The per-project view switcher (Overview · Board). Shared by projectHome and
+ * the Kanban board so the multi-view navigation is identical on both. These are
+ * genuine hash-route links, so they use real <a href> navigation semantics
+ * inside a <nav> landmark (not the ARIA tab pattern, which would demand full
+ * arrow-key/aria-controls tab management for a control that just navigates).
+ * The active link is marked with aria-current="page".
+ */
+export function renderProjectTabs(slug, active) {
+  const tab = (id, label, path) => {
+    const attrs = { class: `view-tab ${active === id ? 'active' : ''}`, href: `#${path}` };
+    if (active === id) attrs['aria-current'] = 'page';
+    return h('a', attrs, [label]);
+  };
+  return h('nav', { class: 'view-tabs', 'aria-label': 'Project views' }, [
+    tab('overview', 'Overview', `/projects/${slug}`),
+    tab('board', 'Board', `/projects/${slug}/board`),
+  ]);
+}
 
 function openInSource(p) {
   if (p.content.sourceUrl) {

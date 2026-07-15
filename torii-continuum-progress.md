@@ -9,6 +9,17 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.45-alpha — KANBAN: production Kanban board for every project
+
+Frontend-only release (no agent code changed; onboarding preview stays **v0.1.20-preview**). Every Continuum project now has a first-class Kanban board, integrated into the project's Amber multi-view navigation (an **Overview · Board** switcher in the project header, plus route `#/projects/:slug/board`) — not a disconnected demo.
+
+- **Default columns** Todo · Doing · Done, created lazily per project by `ensureBoard(slug)` so existing and freshly-created projects alike get a board on first access with no destructive rewrite of persisted state.
+- **Custom columns**: add, rename, reorder (drag or accessible `‹ ›` buttons), delete. Deleting a non-empty column requires choosing a destination — every card is relocated first (`deleteColumn` → `moveToColumnId`); the final column can't be deleted. Cards are never lost.
+- **Cards** (lean model): title + description + optional assignee + due date. Create/edit/delete via modal; move within/between columns by HTML5 drag-drop **or** accessible `‹ ↑ ↓ ›` controls for keyboard/touch. Both paths share one `moveCard` primitive with dense `order` reindexing.
+- **Data**: new Nostr-shaped kinds 30083 (column, `d=<slug>:col:<id>`) and 30084 (card, `d=<slug>:card:<id>`), persisted via the existing local store; per-project isolation by `projectSlug`; `deleteProject` cascades. Migration is additive and fail-closed.
+- **Safety/limits** (`BOARD_LIMITS`): ≤20 columns, ≤200 cards/column, title ≤120, description ≤2000, assignee ≤80, name ≤40; due date accepts only `YYYY-MM-DD`. All rendering via the XSS-safe `util.h()` (textContent, no raw HTML). Responsive scroller + dark-Amber styling; empty states throughout.
+- **Tests**: new `src/data/board.test.js` (32 cases). `vitest run` 43/43; `npm run build` clean (74.6 kB / 23.2 kB gzip). No headed browser in sandbox — logic proven via the pure store layer (repo's no-DOM convention). Root version → v0.2.45-alpha; agent unchanged. Code + PR only — not merged/tagged/deployed.
+
 ## v0.2.44-alpha — APP-ROUTING: application-first root (login + dashboard), sales page isolated to #/about
 
 Frontend-only release (no agent code changed; onboarding preview stays **v0.1.20-preview**). The root (`/continuum/`) was the marketing/sales page; it is now the application. Fulfils the operator ask: *"separate out that sales page from the root of continuum and replace it with a login page and the dashboard."*

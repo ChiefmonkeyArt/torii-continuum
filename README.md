@@ -11,7 +11,8 @@ Continuum treats every project like a nostr identity: portable, signable, yours.
 - **Application-first root** at `#/` — logged out, root renders a dedicated branded Amber **login page** in place (NIP-07 / Plebeian Signer, no password auth, no secrets in the DOM); logged in (valid `continuum.session.v1`, or a safely-adopted onboarding session), root routes straight to `#/dashboard`. Routing/auth decisions live in the pure `src/nav-guard.js`; `#/dashboard` is guarded and expired/invalid sessions return to login without a loop.
 - **About / Discover** at `#/about` — the marketing surface (sovereignty story, torii-arch hero, promises grid, freedom-tech pillars, live status roadmap) now isolated behind an explicit route, reachable from small non-primary links on the login page. Never the app root or an onboarding completion target.
 - **Projects** — list, create, open. Import from GitHub or ngit. Cascades to sessions/milestones/todos/files.
-- **Project home** — milestones ladder, session log, live todo list, files created.
+- **Project home** — milestones ladder, session log, live todo list, files created. A per-project **Overview · Board** view switcher lives in the header.
+- **Kanban board** — every project ships a board (default columns **Todo · Doing · Done**) at `#/projects/:slug/board`. Add/rename/reorder/delete custom columns (deleting a non-empty column forces a card move — cards are never lost), create/edit/delete cards (title, description, optional assignee + due date), and move cards by drag **or** accessible arrow controls for keyboard/touch. State is per-project, persisted, and Nostr-shaped (kinds 30083/30084).
 - **Marketplace** — open AI-work tasks. Yours highlighted amber.
 - **Routstr** — real Cashu wallet top-up when an agent is configured; mock behaviour on demo builds. Default coding model: DeepSeek-Coder-V2. Default chat model: DeepSeek Chat.
 - **Dashboard** — cross-project oversight rundown.
@@ -37,6 +38,8 @@ See `agent/README.md` for the VPS bring-up runbook and `agent/PRIVACY.md` for th
 | 30080   | Milestone                        | `<slug>:m<index>`          |
 | 30081   | Todo                             | `<slug>:<todo-id>`         |
 | 30082   | File reference                   | `<slug>:<path>`            |
+| 30083   | Board column                     | `<slug>:col:<column-id>`   |
+| 30084   | Board card                       | `<slug>:card:<card-id>`    |
 | 30090   | Marketplace task listing         | task id                    |
 | 30091   | Routstr wallet + prefs           | `default`                  |
 
