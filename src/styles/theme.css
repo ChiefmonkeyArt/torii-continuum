@@ -2,8 +2,9 @@
  *
  * Mirrors the palette + typography of continuum.pplx.app:
  *   deep warm brown-black background, amber/orange primary (~38° 92%),
- *   cream foreground, subtle card borders. Cabinet Grotesk display,
- *   Satoshi body, JetBrains Mono for code.
+ *   cream foreground, subtle card borders. Typography uses a deliberate
+ *   local system font stack (no third-party font CDNs): the native UI sans
+ *   for display/body and the platform monospace for code.
  *
  * Both dark (default) and light variants supplied.
  */
@@ -49,9 +50,10 @@
 
   --radius: 0.75rem;
 
-  --font-display: 'Cabinet Grotesk', 'Satoshi', system-ui, sans-serif;
-  --font-sans:    'Satoshi', 'Open Sans', system-ui, sans-serif;
-  --font-mono:    'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+  /* Local system font stack only — no webfont downloads. */
+  --font-display: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-sans:    system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:    ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
 
   --sidebar-w: 232px;
   --chat-h: 88px;

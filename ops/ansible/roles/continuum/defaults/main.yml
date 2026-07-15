@@ -37,3 +37,25 @@ continuum_allow_config_rotation: false
 continuum_release_dir: "/home/{{ continuum_user }}/app.staging"
 continuum_quarantine_dir: "/home/{{ continuum_user }}/app.quarantine-{{ continuum_stamp }}"
 continuum_failed_release_dir: "/home/{{ continuum_user }}/app.failed-{{ continuum_stamp }}"
+
+# Public static webroot (v0.2.43-alpha). nginx runs as www-data and CANNOT
+# traverse /home/{{ continuum_user }} (0750 home + the unit's ProtectHome), so
+# serving the SPA directly out of the private app dir returns HTTP 500. The
+# built static bundle is instead deployed to a world-traversable public webroot
+# owned by root (dirs 0755, files 0644); the app/agent source and the encrypted
+# state stay PRIVATE under continuum_app_dir and are never exposed. The deploy is
+# staged then atomically swapped, and the prior webroot is kept as a timestamped
+# backup for rollback — never deleted in place.
+continuum_webroot_parent: "/var/www/torii"
+continuum_webroot: "/var/www/torii/continuum"
+continuum_webroot_stage: "/var/www/torii/continuum.staging-{{ continuum_stamp }}"
+continuum_webroot_backup: "/var/www/torii/continuum.backup-{{ continuum_stamp }}"
+
+# torii launcher registration (v0.2.43-alpha). The installed Torii CLI parses
+# `torii register <name> [--display ...] [--desc ...] [--version ...]` with FLAGS,
+# not positional args (the old positional form failed with `unknown flag`). The
+# --version flag wants a bare semver, so the role strips the leading `v` from
+# continuum_version at call time.
+continuum_register_name: "continuum"
+continuum_register_display: "Continuum"
+continuum_register_desc: "App builder + agent"

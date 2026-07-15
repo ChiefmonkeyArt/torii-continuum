@@ -361,6 +361,36 @@
         cmd: "chown -R {{ continuum_user }}:{{ continuum_user }} {{ continuum_app_dir }}"
       changed_when: true
 
+    # 5e. Publish the built SPA to a PUBLIC webroot. nginx (www-data) cannot
+    #     traverse /home/{{ continuum_user }} (0750 home + the unit's ProtectHome),
+    #     so serving the bundle from the private app dir returns HTTP 500. Copy ONLY
+    #     the static build out to /var/www/torii/continuum (root:root, dirs 0755 /
+    #     files 0644); source + encrypted state stay private under the app dir. The
+    #     deploy stages then atomically swaps, keeping the prior webroot as a backup
+    #     for rescue rollback.
+    - name: Ensure the public webroot parent exists (world-traversable)
+      ansible.builtin.file:
+        path: "{{ continuum_webroot_parent }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Deploy the built SPA to the public webroot (atomic, backup-preserving)
+      ansible.builtin.script: >-
+        {{ continuum_adopt_lib }} deploy-webroot
+        {{ continuum_app_dir | quote }}/dist
+        {{ continuum_webroot | quote }}
+        {{ continuum_webroot_stage | quote }}
+        {{ continuum_webroot_backup | quote }}
+      register: continuum_webroot_deploy
+      changed_when: "'ok' in continuum_webroot_deploy.stdout"
+      failed_when: continuum_webroot_deploy.rc != 0
+
+    - name: Mark the webroot as swapped (enables rescue rollback if a later step fails)
+      ansible.builtin.set_fact:
+        continuum_webroot_swapped: true
+
     - name: Install continuum-agent systemd unit
       ansible.builtin.template:
         src: continuum-agent.service.j2
@@ -371,6 +401,35 @@
       notify:
         - reload systemd
         - restart continuum-agent
+
+    # Node 22's V8 JITs with W^X memory; systemd MemoryDenyWriteExecute=yes makes
+    # the kernel refuse that mprotect and V8 dies on startup (fatal SetPermissions /
+    # errno 12 / SIGTRAP). Prove Node can actually start a JIT compile under the SAME
+    # MemoryDenyWriteExecute constraint the rendered unit uses BEFORE we start the
+    # real service, so a reintroduced MDWE=yes fails here with a clear message rather
+    # than a crash-looping unit. systemd-run runs a transient scope mirroring the
+    # unit's hardening. Skipped cleanly if systemd-run is unavailable.
+    - name: Read the MemoryDenyWriteExecute value from the rendered unit file
+      ansible.builtin.shell:
+        cmd: >-
+          set -eo pipefail;
+          sed -n -E 's/^MemoryDenyWriteExecute=(.*)$/\1/p'
+          /etc/systemd/system/continuum-agent.service | head -n1
+      register: continuum_mdwe
+      changed_when: false
+
+    - name: Smoke-test Node V8 JIT under the rendered MemoryDenyWriteExecute constraint
+      ansible.builtin.command:
+        cmd: >-
+          systemd-run --quiet --pipe --wait
+          --property=MemoryDenyWriteExecute={{ (continuum_mdwe.stdout | trim) if (continuum_mdwe.stdout | trim | length > 0) else 'no' }}
+          /usr/bin/node -e "new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0])); process.exit(0)"
+      register: continuum_v8_smoke
+      changed_when: false
+      failed_when:
+        - continuum_v8_smoke.rc != 0
+        - "'command not found' not in continuum_v8_smoke.stderr"
+        - "'No such file' not in continuum_v8_smoke.stderr"
 
     - name: Enable and start continuum-agent
       ansible.builtin.systemd:
@@ -388,11 +447,20 @@
         mode: '0644'
       notify: reload nginx
 
+    # The installed Torii CLI parses register as `torii register <name>
+    # [--display ...] [--desc ...] [--version ...]` — it does NOT accept
+    # positional display/path/description. The old positional form
+    # (`torii register continuum "Continuum" "/continuum" "App builder + agent"`)
+    # failed live with `unknown flag: Continuum`. --version wants a BARE semver, so
+    # the leading `v` from continuum_version is stripped.
     - name: Register /continuum with torii launcher
       ansible.builtin.shell: |
         set -eo pipefail
         source /opt/torii/env
-        /usr/local/bin/torii register continuum "Continuum" "{{ continuum_mount_path }}" "App builder + agent"
+        /usr/local/bin/torii register {{ continuum_register_name | quote }} \
+          --display {{ continuum_register_display | quote }} \
+          --desc {{ continuum_register_desc | quote }} \
+          --version {{ (continuum_version | regex_replace('^v', '')) | quote }}
       args:
         executable: /bin/bash
       changed_when: true
@@ -457,6 +525,24 @@
       when: continuum_mode in ['adopt-standalone', 'partial-adoption']
       failed_when: false
 
+    # If we already swapped the public webroot, restore the prior one from backup so
+    # nginx keeps serving the previous SPA. For a fresh install there is no backup;
+    # rollback_webroot returns non-zero which we tolerate (nothing to restore).
+    - name: Roll the public webroot back from backup after a failed cutover
+      ansible.builtin.script: >-
+        {{ continuum_adopt_lib }} rollback-webroot
+        {{ continuum_webroot | quote }}
+        {{ continuum_webroot_backup | quote }}
+      when: continuum_webroot_swapped | default(false) | bool
+      failed_when: false
+
+    - name: Reload nginx after restoring the prior webroot
+      ansible.builtin.command:
+        cmd: nginx -s reload
+      when: continuum_webroot_swapped | default(false) | bool
+      changed_when: true
+      failed_when: false
+
     - name: Surface backup + quarantine paths and recovery command on cutover failure
       ansible.builtin.fail:
         msg: >-
@@ -464,7 +550,8 @@
           {{ continuum_backup_dir }} (root-only 0700) and no secret was printed.
           The staged build (if any) is at {{ continuum_release_dir }}; a
           quarantined prior app tree (if the swap happened) is at
-          {{ continuum_quarantine_dir }}.
+          {{ continuum_quarantine_dir }}. If the public webroot was swapped it was
+          rolled back from {{ continuum_webroot_backup }} and nginx reloaded.
           RECOVERY (adopt/partial): the original standalone install was left on
           disk and its unit re-enabled — verify with
           `systemctl status {{ continuum_standalone_service }}` and

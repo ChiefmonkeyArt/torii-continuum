@@ -27,7 +27,14 @@ ProtectControlGroups=true
 RestrictNamespaces=true
 RestrictRealtime=true
 LockPersonality=true
-MemoryDenyWriteExecute=true
+# MemoryDenyWriteExecute MUST stay off for Node.js. Node 22's V8 engine JITs with
+# W^X memory (it maps executable pages and toggles their protection at runtime);
+# MemoryDenyWriteExecute=yes makes the kernel refuse that mprotect, so V8 aborts
+# on startup with a fatal `SetPermissions` / errno 12 (ENOMEM) and the process
+# dies on SIGTRAP before it can serve. Every other sandboxing directive above and
+# below is V8-compatible and stays enabled; only this one is relaxed, and only as
+# far as Node requires.
+MemoryDenyWriteExecute=no
 SystemCallArchitectures=native
 PrivateTmp=true
 PrivateDevices=true

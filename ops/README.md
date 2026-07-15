@@ -50,7 +50,7 @@ Ubuntu 22 / 24 host
 │   ├── launcher at /
 │   └── sidecar (127.0.0.1:8780)
 ├── continuum
-│   ├── /continuum/ (static SPA, served from /home/continuum/app/dist)
+│   ├── /continuum/ (static SPA, served from public webroot /var/www/torii/continuum)
 │   ├── /continuum/api/ → 127.0.0.1:8787 (agent)
 │   └── continuum-agent.service (systemd, hardened)
 └── (optional) ollama
@@ -250,6 +250,96 @@ Adoption tunables live in `roles/continuum/defaults/main.yml`
 `continuum_backup_root`, `continuum_allow_config_rotation`,
 `continuum_release_dir`, `continuum_quarantine_dir`) and rarely need changing.
 The logic is unit-tested in `ops/test/continuum-adopt.test.sh`.
+
+### Live-discovered corrections (v0.2.43-alpha)
+
+The v0.2.42-alpha cutover succeeded manually, but three environment realities on
+the live box had to be worked around by hand. v0.2.43-alpha encodes all three
+permanently so a clean re-run needs no manual steps.
+
+1. **Torii CLI `register` takes flags, not positionals.** The installed CLI is
+   `torii register <name> [--display …] [--desc …] [--version …]`; the old
+   positional form failed with `unknown flag: Continuum`. The role now calls
+   `torii register continuum --display "Continuum" --desc "App builder + agent"
+   --version 0.2.43-alpha` (the bare semver is derived from `continuum_version`
+   with its leading `v` stripped). Names/labels are `continuum_register_*` vars.
+2. **`MemoryDenyWriteExecute` must stay off for Node.** Node 22's V8 JITs with
+   W^X memory; `MemoryDenyWriteExecute=yes` makes the kernel refuse the mprotect
+   and V8 aborts on startup (fatal `SetPermissions` / errno 12 / `SIGTRAP`). The
+   rendered unit now sets `MemoryDenyWriteExecute=no` **and documents why**, while
+   keeping every other compatible directive (`NoNewPrivileges`, the `Protect*`
+   set, `RestrictNamespaces`, `LockPersonality`, empty `CapabilityBoundingSet`,
+   …). The role also runs a **Node V8 JIT smoke test** under the rendered
+   `MemoryDenyWriteExecute` value (via a transient `systemd-run` scope) *before*
+   starting the real service, so a reintroduced `=yes` fails fast with a clear
+   message instead of a crash-loop.
+3. **nginx cannot traverse `/home/continuum`.** The `0750` home plus the agent
+   unit's `ProtectHome` mean www-data cannot descend into it, so aliasing the SPA
+   out of `/home/continuum/app/dist` returned HTTP 500. The build is now published
+   to a **public webroot `/var/www/torii/continuum`** (root-owned, dirs `0755` /
+   files `0644`) via an atomic staged swap that keeps the prior webroot as a
+   timestamped backup for rollback. Only the static bundle is copied out — the
+   app/agent **source and encrypted state stay private** under
+   `/home/continuum/app`. A **single** `location /continuum/` prefix alias serves
+   both the SPA entry and the hashed `assets/*` bundle. The earlier nested
+   `location /continuum/assets/` block re-mapped the path and returned 404 for the
+   hashed `.js`/`.css` (a black page); it has been removed so `try_files` on the
+   parent alias serves assets directly and only genuine misses fall back to
+   `index.html`. No regex-alias, no `/home` traversal.
+
+The cutover `rescue` now also **rolls the webroot back** from its backup and
+reloads nginx on failure. Re-running against the now-live v0.2.42 Ansible layout
+is idempotent: it re-detects `existing-ansible`, **preserves** config (never
+rotates `session_secret`, never touches the funded key), and re-publishes the
+webroot while keeping the prior bundle as a backup.
+
+New tunables in `roles/continuum/defaults/main.yml`: `continuum_webroot`,
+`continuum_webroot_parent`, `continuum_webroot_stage`, `continuum_webroot_backup`,
+and `continuum_register_name` / `_display` / `_desc`.
+
+**Upgrade the now-live v0.2.42 Ansible box to v0.2.43-alpha** (vault-free; the
+live config + funded key are preserved byte-for-byte).
+
+On the live box the v0.2.42 checkout sits at `/opt/deploy/torii-continuum-v0.2.42-alpha`
+and the promoted app lives at `/home/continuum/app`. Rather than mutating that
+checkout in place, do a **fresh, version-specific clone** of the final tag (after
+this PR merges and `v0.2.43-alpha` is tagged) into a parallel dir, then run the
+same localhost, vault-free `existing-ansible` redeploy. The role re-detects the
+live layout and preserves state; a fresh dir keeps the previous release intact for
+an instant rollback.
+
+```bash
+# After merge + tag. (Pre-merge, replace `--branch v0.2.43-alpha` with
+# `--branch hardening-live-corrections-v0.2.43-alpha`.)
+SRC=/opt/deploy/torii-continuum-v0.2.43-alpha
+sudo git clone --depth 1 --branch v0.2.43-alpha \
+  https://github.com/ChiefmonkeyArt/torii-continuum.git "$SRC"
+cd "$SRC/ops/ansible"
+
+# Localhost, no SSH, no vault. NO vault.yml is created or referenced.
+cat > inventory.yml <<'YAML'
+all:
+  children:
+    torii:
+      hosts:
+        localhost:
+          ansible_connection: local
+YAML
+mkdir -p group_vars
+cat > group_vars/all.yml <<'YAML'
+torii_domain: chiefmonkey.art
+continuum_version: v0.2.43-alpha
+YAML
+
+# existing-ansible redeploy: preserves config + funded key, republishes the
+# public webroot (prior bundle kept as a timestamped backup), registers via flags.
+sudo ansible-playbook -i inventory.yml site.yml --tags continuum
+
+# validate
+sudo nginx -t && sudo systemctl status continuum-agent --no-pager
+curl -sf http://127.0.0.1:8787/api/health
+curl -sf https://chiefmonkey.art/continuum/api/health
+```
 
 ---
 

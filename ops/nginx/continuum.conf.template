@@ -11,19 +11,21 @@
 # The trailing slashes on both /continuum/api/ AND proxy_pass are load-bearing:
 # they strip the /continuum prefix so the agent still sees `/api/*` internally.
 # This lets the same agent code run at / on pplx.app and at /continuum on a VPS.
+#
+# @CONTINUUM_DIST@ MUST be a PUBLIC webroot (e.g. /var/www/torii/continuum) that
+# nginx (www-data) can traverse — NOT a path under a user home. Serving the SPA
+# from a 0750 home returns HTTP 500 because nginx cannot descend into it. Only the
+# built static files are published there; source + encrypted state stay private.
 
+# Single prefix alias serves BOTH the SPA entry and the Vite hashed bundle under
+# /continuum/assets/*. There is deliberately NO nested `location /continuum/assets/`
+# block: a nested alias + try_files re-mapped the path and returned 404 for hashed
+# .js/.css in production (the black page). try_files checks real files first, so
+# assets are served directly and only genuine misses fall through to the SPA entry.
 location /continuum/ {
     alias @CONTINUUM_DIST@/;
     index index.html;
     try_files $uri $uri/ /continuum/index.html;
-
-    # Vite hashed assets — long-cache
-    location ~* /continuum/assets/.+\.(?:css|js|woff2?|svg|png|jpg|jpeg|webp)$ {
-        alias @CONTINUUM_DIST@/;
-        expires 30d;
-        add_header Cache-Control "public, immutable";
-        try_files $uri =404;
-    }
 }
 
 # Agent API — mount-prefix stripped before proxy_pass
