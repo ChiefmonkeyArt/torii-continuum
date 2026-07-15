@@ -1,18 +1,43 @@
 ---
-# Role: continuum
-# Installs the Continuum SPA + agent under /home/{{ continuum_user }}/.
+# Role: continuum — installs the Continuum SPA + agent under /home/{{ continuum_user }}/.
 #
-# Layout on disk:
-#   /home/continuum/
-#     app/                        <- git checkout of torii-continuum
-#       dist/                     <- vite build output (served by nginx)
-#       agent/
-#         config.yaml             <- rendered from template (chmod 600)
-#         memory/                 <- wallet + costs + audit + panic-nudge state
-#         pending/                <- draft events awaiting signature
+# SAFETY MODEL (v0.2.40-alpha hardening)
+# --------------------------------------
+# The agent's funded Routstr key + character ciphertexts are encrypted at rest
+# with a key DERIVED FROM session_secret. Overwriting config.yaml with a fresh
+# session_secret, or pointing the service at an empty state dir, ORPHANS that key
+# irrecoverably. So this role:
 #
-# Nginx: drops /opt/torii/nginx-fragments/continuum.conf. Registered with
-# the launcher via `torii register continuum {{ continuum_mount_path }}`.
+#   1. Detects which layout already exists (existing-ansible | adopt-standalone |
+#      fresh) via the sourceable lib ops/lib/continuum-adopt.sh.
+#   2. Backs up config + encrypted state to a timestamped root-only 0700 dir
+#      BEFORE any mutation. Fail-closed: no backup, no deploy.
+#   3. On adopt-standalone: stops+disables the standalone unit (freeing port
+#      {{ continuum_agent_port }}), then migrates its state + config VERBATIM into
+#      the Ansible layout — session_secret is copied, never regenerated.
+#   4. Renders config.yaml ONLY on a fresh install, or when the operator has
+#      explicitly set continuum_allow_config_rotation=true. Otherwise the existing
+#      config is preserved untouched; a drift against vault is reported as a safe
+#      "differ" warning that prints NO secret value.
+#   5. Wraps the service + nginx cutover in block/rescue: on failure it surfaces
+#      the backup path and an exact recovery command instead of leaving a
+#      half-migrated box.
+#
+# Layout on disk (Ansible):
+#   /home/continuum/app/                <- git checkout of torii-continuum
+#                        dist/          <- vite build output (served by nginx)
+#                        agent/
+#                          config.yaml  <- preserved/migrated (chmod 600)
+#                          memory/      <- wallet + costs + audit + panic state
+#                          ciphertexts/ <- encrypted funded key + character
+#                          pending/     <- draft events awaiting signature
+
+- name: Resolve paths + backup timestamp
+  ansible.builtin.set_fact:
+    continuum_app_dir: "/home/{{ continuum_user }}/app"
+    continuum_agent_dir: "/home/{{ continuum_user }}/app/agent"
+    continuum_adopt_lib: "{{ playbook_dir }}/../lib/continuum-adopt.sh"
+    continuum_backup_dir: "{{ continuum_backup_root }}/continuum-backup-{{ ansible_date_time.iso8601_basic_short | default(lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ')) }}"
 
 - name: Ensure continuum OS user exists
   ansible.builtin.user:
@@ -24,16 +49,77 @@
 
 - name: Ensure app checkout directory exists
   ansible.builtin.file:
-    path: "/home/{{ continuum_user }}/app"
+    path: "{{ continuum_app_dir }}"
     state: directory
     owner: "{{ continuum_user }}"
     group: "{{ continuum_user }}"
     mode: '0750'
 
+# ── 1. Detect layout ────────────────────────────────────────────────────────
+- name: Detect existing install layout
+  ansible.builtin.script: >-
+    {{ continuum_adopt_lib }} detect
+    {{ continuum_agent_dir | quote }}
+    {{ continuum_standalone_dir | quote }}
+  register: continuum_detect
+  changed_when: false
+
+- name: Record detected mode
+  ansible.builtin.set_fact:
+    continuum_mode: "{{ continuum_detect.stdout | regex_search('mode=([a-z-]+)', '\\1') | first }}"
+
+- name: Show detected mode
+  ansible.builtin.debug:
+    msg: "Continuum install mode: {{ continuum_mode }}"
+
+# ── 2. Back up ALL state before any mutation (fail-closed) ───────────────────
+# Sources: both the standalone dir and the Ansible agent dir (whichever have
+# state). backup_state creates the 0700 backup dir and copies config.yaml +
+# memory/ + ciphertexts/ + pending/. A non-zero return aborts the whole run.
+- name: Back up config + encrypted state before mutating (fail-closed)
+  ansible.builtin.script: >-
+    {{ continuum_adopt_lib }} backup
+    {{ continuum_backup_dir | quote }}
+    {{ continuum_standalone_dir | quote }}
+    {{ continuum_agent_dir | quote }}
+  register: continuum_backup
+  changed_when: "'items=' in continuum_backup.stdout"
+  failed_when: continuum_backup.rc != 0
+  no_log: true
+
+- name: Report backup location (no secret values)
+  ansible.builtin.debug:
+    msg: "State backup written to {{ continuum_backup_dir }} (root-only 0700). Recovery: cp -a {{ continuum_backup_dir }}/<label>/* into the agent dir and restart {{ continuum_service }}."
+
+# ── 3. Adopt a standalone install (stop old unit, migrate state) ─────────────
+- name: Adopt standalone install
+  when: continuum_mode == 'adopt-standalone'
+  block:
+    - name: Stop + disable the standalone unit (free port {{ continuum_agent_port }})
+      ansible.builtin.systemd:
+        name: "{{ continuum_standalone_service }}"
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Migrate standalone state + config into the Ansible layout (verbatim)
+      ansible.builtin.script: >-
+        {{ continuum_adopt_lib }} migrate
+        {{ continuum_standalone_dir | quote }}
+        {{ continuum_agent_dir | quote }}
+        {{ continuum_user | quote }}
+      register: continuum_migrate
+      changed_when: "'copied' in continuum_migrate.stdout"
+      failed_when: continuum_migrate.rc != 0
+      no_log: true
+
+# ── 4. Sync code + build (untracked state survives: it is gitignored) ────────
+# force:true resets only TRACKED files; memory/ ciphertexts/ pending/ config.yaml
+# are gitignored, so the checkout/build can never delete migrated encrypted state.
 - name: Clone (or update) torii-continuum
   ansible.builtin.git:
     repo: "{{ continuum_repo }}"
-    dest: "/home/{{ continuum_user }}/app"
+    dest: "{{ continuum_app_dir }}"
     version: "{{ continuum_version }}"
     force: true
     depth: 1
@@ -43,7 +129,7 @@
 - name: Install npm dependencies (dev + prod, needed for vite build)
   ansible.builtin.command:
     cmd: npm ci
-    chdir: "/home/{{ continuum_user }}/app"
+    chdir: "{{ continuum_app_dir }}"
   become_user: "{{ continuum_user }}"
   environment:
     NODE_ENV: development
@@ -54,7 +140,7 @@
 - name: Build Continuum SPA with base-path awareness
   ansible.builtin.command:
     cmd: npm run build
-    chdir: "/home/{{ continuum_user }}/app"
+    chdir: "{{ continuum_app_dir }}"
   become_user: "{{ continuum_user }}"
   environment:
     NODE_ENV: production
@@ -66,23 +152,79 @@
 - name: Install agent production dependencies
   ansible.builtin.command:
     cmd: npm ci --omit=dev
-    chdir: "/home/{{ continuum_user }}/app/agent"
+    chdir: "{{ continuum_agent_dir }}"
   become_user: "{{ continuum_user }}"
   args:
-    creates: "/home/{{ continuum_user }}/app/agent/node_modules"
+    creates: "{{ continuum_agent_dir }}/node_modules"
 
-- name: Render agent config.yaml
+# ── 5. Config decision — render ONLY on fresh install or explicit rotation ────
+- name: Decide config.yaml action
+  ansible.builtin.script: >-
+    {{ continuum_adopt_lib }} config-action
+    {{ continuum_mode | quote }}
+    {{ continuum_allow_config_rotation | string | lower | quote }}
+  register: continuum_cfg_action
+  changed_when: false
+
+- name: Record config action
+  ansible.builtin.set_fact:
+    continuum_config_action: "{{ continuum_cfg_action.stdout | trim }}"
+
+- name: Render agent config.yaml (fresh install or explicit rotation)
   ansible.builtin.template:
     src: config.yaml.j2
-    dest: "/home/{{ continuum_user }}/app/agent/config.yaml"
+    dest: "{{ continuum_agent_dir }}/config.yaml"
     owner: "{{ continuum_user }}"
     group: "{{ continuum_user }}"
     mode: '0600'
+  when: continuum_config_action in ['render', 'rotate']
+  no_log: true
   notify: restart continuum-agent
 
+# When preserving, still detect (without revealing) whether the vault secret has
+# drifted from the live config, so the operator learns a rotation is pending.
+- name: Render candidate config to a temp path for drift check (no clobber)
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: "{{ continuum_agent_dir }}/.config.candidate.yaml"
+    owner: "{{ continuum_user }}"
+    group: "{{ continuum_user }}"
+    mode: '0600'
+  when: continuum_config_action == 'preserve'
+  no_log: true
+
+- name: Compare live config vs vault candidate (reveals no value)
+  ansible.builtin.script: >-
+    {{ continuum_adopt_lib }} config-drift
+    {{ continuum_agent_dir | quote }}/config.yaml
+    {{ continuum_agent_dir | quote }}/.config.candidate.yaml
+  register: continuum_drift
+  changed_when: false
+  when: continuum_config_action == 'preserve'
+  no_log: true
+
+- name: Remove the candidate config (never left on disk)
+  ansible.builtin.file:
+    path: "{{ continuum_agent_dir }}/.config.candidate.yaml"
+    state: absent
+  when: continuum_config_action == 'preserve'
+
+- name: Warn if vault differs from the preserved config (no secret printed)
+  ansible.builtin.debug:
+    msg: >-
+      NOTICE: existing config.yaml PRESERVED. The vault session_secret DIFFERS
+      from the live one. Deploy did NOT rotate it (rotating would orphan the
+      funded key). To rotate deliberately: re-run with
+      -e continuum_allow_config_rotation=true (backup at {{ continuum_backup_dir }}).
+  when:
+    - continuum_config_action == 'preserve'
+    - continuum_drift.stdout is defined
+    - "'differ' in continuum_drift.stdout"
+
+# ── 6. Ensure runtime dirs, then transactional service + nginx cutover ───────
 - name: Ensure agent runtime dirs exist
   ansible.builtin.file:
-    path: "/home/{{ continuum_user }}/app/agent/{{ item }}"
+    path: "{{ continuum_agent_dir }}/{{ item }}"
     state: directory
     owner: "{{ continuum_user }}"
     group: "{{ continuum_user }}"
@@ -93,57 +235,70 @@
     - pending
     - ciphertexts
 
-- name: Install continuum-agent systemd unit
-  ansible.builtin.template:
-    src: continuum-agent.service.j2
-    dest: /etc/systemd/system/continuum-agent.service
-    owner: root
-    group: root
-    mode: '0644'
-  notify:
-    - reload systemd
-    - restart continuum-agent
+- name: Cut over service + nginx (transactional)
+  block:
+    - name: Install continuum-agent systemd unit
+      ansible.builtin.template:
+        src: continuum-agent.service.j2
+        dest: /etc/systemd/system/continuum-agent.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify:
+        - reload systemd
+        - restart continuum-agent
 
-- name: Enable and start continuum-agent
-  ansible.builtin.systemd:
-    name: continuum-agent
-    enabled: true
-    state: started
-    daemon_reload: true
+    - name: Enable and start continuum-agent
+      ansible.builtin.systemd:
+        name: continuum-agent
+        enabled: true
+        state: started
+        daemon_reload: true
 
-- name: Render nginx fragment for /continuum
-  ansible.builtin.template:
-    src: continuum.nginx.conf.j2
-    dest: "/opt/torii/nginx-fragments/continuum.conf"
-    owner: root
-    group: root
-    mode: '0644'
-  notify: reload nginx
+    - name: Render nginx fragment for /continuum
+      ansible.builtin.template:
+        src: continuum.nginx.conf.j2
+        dest: "/opt/torii/nginx-fragments/continuum.conf"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: reload nginx
 
-- name: Register /continuum with torii launcher
-  ansible.builtin.shell: |
-    set -eo pipefail
-    source /opt/torii/env
-    /usr/local/bin/torii register continuum "Continuum" "{{ continuum_mount_path }}" "App builder + agent"
-  args:
-    executable: /bin/bash
-  changed_when: true
+    - name: Register /continuum with torii launcher
+      ansible.builtin.shell: |
+        set -eo pipefail
+        source /opt/torii/env
+        /usr/local/bin/torii register continuum "Continuum" "{{ continuum_mount_path }}" "App builder + agent"
+      args:
+        executable: /bin/bash
+      changed_when: true
 
-- name: Set launcher root_app if requested
-  ansible.builtin.shell: |
-    set -eo pipefail
-    source /opt/torii/env
-    /usr/local/bin/torii set-root {{ torii_root_app | quote }}
-  args:
-    executable: /bin/bash
-  when: torii_root_app is defined
-  changed_when: true
+    - name: Set launcher root_app if requested
+      ansible.builtin.shell: |
+        set -eo pipefail
+        source /opt/torii/env
+        /usr/local/bin/torii set-root {{ torii_root_app | quote }}
+      args:
+        executable: /bin/bash
+      when: torii_root_app is defined
+      changed_when: true
 
-- name: Wait for agent to answer /api/health
-  ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ continuum_agent_port }}/api/health"
-    status_code: 200
-  register: agent_health
-  retries: 15
-  delay: 2
-  until: agent_health.status == 200
+    - name: Wait for agent to answer /api/health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ continuum_agent_port }}/api/health"
+        status_code: 200
+      register: agent_health
+      retries: 15
+      delay: 2
+      until: agent_health.status == 200
+  rescue:
+    - name: Surface backup path + recovery command on cutover failure
+      ansible.builtin.fail:
+        msg: >-
+          Continuum cutover FAILED. Your pre-deploy state is intact at
+          {{ continuum_backup_dir }} (root-only 0700). No secret was printed.
+          RECOVERY: restore the agent dir from the backup label under that path
+          (cp -a {{ continuum_backup_dir }}/<label>/{config.yaml,memory,ciphertexts,pending}
+          {{ continuum_agent_dir }}/), then `systemctl restart {{ continuum_service }}`.
+          If you were adopting a standalone install, you can instead re-enable it:
+          `systemctl enable --now {{ continuum_standalone_service }}`.
