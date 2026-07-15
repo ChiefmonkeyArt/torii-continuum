@@ -22,6 +22,8 @@ function emptyState() {
     milestones: [], // events kind 30080
     todos: [],      // events kind 30081
     files: [],      // events kind 30082
+    columns: [],    // events kind 30083 (board columns)
+    cards: [],      // events kind 30084 (board cards)
     marketTasks: [],// events kind 30090
     routstr: null,  // event kind 30091
   };
@@ -49,7 +51,12 @@ export function initStore() {
   const loaded = loadRaw();
   if (loaded && Array.isArray(loaded.projects) && loaded.projects.length > 0) {
     state = { ...emptyState(), ...loaded };
-    // Guarantee shape after schema evolution
+    // Guarantee shape after schema evolution. Older persisted state predates
+    // the Kanban board (kinds 30083/30084); coerce the arrays so board reads
+    // never touch `undefined`. Existing projects get their default columns
+    // lazily on first board access (see ensureBoard) — no destructive rewrite.
+    if (!Array.isArray(state.columns)) state.columns = [];
+    if (!Array.isArray(state.cards)) state.cards = [];
     if (!Array.isArray(state.marketTasks) || state.marketTasks.length === 0) {
       state.marketTasks = seedMarketTasks();
     }
@@ -133,6 +140,8 @@ export function deleteProject(slug) {
   state.milestones = state.milestones.filter((m) => m.content.projectSlug !== slug);
   state.todos = state.todos.filter((t) => t.content.projectSlug !== slug);
   state.files = state.files.filter((f) => f.content.projectSlug !== slug);
+  state.columns = state.columns.filter((c) => c.content.projectSlug !== slug);
+  state.cards = state.cards.filter((c) => c.content.projectSlug !== slug);
   persist();
   notify();
 }
@@ -190,6 +199,281 @@ export function filesFor(slug) {
   return state.files
     .filter((f) => f.content.projectSlug === slug)
     .sort((a, b) => a.content.path.localeCompare(b.content.path));
+}
+
+// --- Kanban board (columns 30083, cards 30084) ---
+
+// Limits keep the persisted payload bounded (localStorage is finite and the
+// whole state is JSON-serialised on every write) and defend the render path
+// from pathological input. They are generous for real use but hard caps.
+export const BOARD_LIMITS = Object.freeze({
+  MAX_COLUMNS: 20,
+  MAX_CARDS_PER_COLUMN: 200,
+  COLUMN_NAME: 40,
+  CARD_TITLE: 120,
+  CARD_DESCRIPTION: 2000,
+  CARD_ASSIGNEE: 80,
+});
+
+const DEFAULT_COLUMNS = ['Todo', 'Doing', 'Done'];
+
+function cleanText(value, max) {
+  // Collapse control chars (incl. newlines for single-line fields when max is
+  // small) is left to callers; here we only trim and clamp length. Rendering
+  // is always via textContent (see views/util.js h()), so this is about
+  // payload size, not escaping.
+  return String(value == null ? '' : value).trim().slice(0, max);
+}
+
+/**
+ * Lazily materialise the three default columns (Todo, Doing, Done) for a
+ * project the first time its board is touched. This is what makes migration
+ * safe: existing projects (and freshly created ones) gain a board on demand
+ * without a bulk rewrite of persisted state, and every project is guaranteed
+ * the same starting columns. Isolated per project by `projectSlug`.
+ */
+export function ensureBoard(slug) {
+  const has = state.columns.some((c) => c.content.projectSlug === slug);
+  if (has) return;
+  DEFAULT_COLUMNS.forEach((name, index) => {
+    state.columns.push(makeColumnEvent(slug, name, index));
+  });
+  persist();
+}
+
+function makeColumnEvent(slug, name, order) {
+  const id = newId('col');
+  return makeEvent({
+    kind: KIND.BOARD_COLUMN,
+    d: `${slug}:col:${id}`,
+    content: { projectSlug: slug, id, name, order, createdAt: nowSec() },
+    tags: [['a', `${KIND.PROJECT}:${slug}`], ['t', 'continuum-board-column']],
+  });
+}
+
+export function boardColumnsFor(slug) {
+  ensureBoard(slug);
+  return state.columns
+    .filter((c) => c.content.projectSlug === slug)
+    .sort((a, b) => a.content.order - b.content.order);
+}
+
+export function cardsFor(slug, columnId) {
+  return state.cards
+    .filter((c) => c.content.projectSlug === slug && c.content.columnId === columnId)
+    .sort((a, b) => a.content.order - b.content.order);
+}
+
+function getColumn(slug, columnId) {
+  return state.columns.find(
+    (c) => c.content.projectSlug === slug && c.content.id === columnId,
+  ) || null;
+}
+
+// Rewrite the `order` field of a column's cards to a dense 0..n-1 sequence,
+// preserving their current relative order. Keeps move/insert math simple and
+// stops `order` values from drifting.
+function reindexCards(slug, columnId) {
+  cardsFor(slug, columnId).forEach((card, i) => { card.content.order = i; });
+}
+
+export function addColumn(slug, name) {
+  ensureBoard(slug);
+  const clean = cleanText(name, BOARD_LIMITS.COLUMN_NAME);
+  if (!clean) throw new Error('Column needs a name.');
+  const cols = boardColumnsFor(slug);
+  if (cols.length >= BOARD_LIMITS.MAX_COLUMNS) {
+    throw new Error(`A board can have at most ${BOARD_LIMITS.MAX_COLUMNS} columns.`);
+  }
+  const ev = makeColumnEvent(slug, clean, cols.length);
+  state.columns.push(ev);
+  persist();
+  notify();
+  return ev;
+}
+
+export function renameColumn(slug, columnId, name) {
+  const col = getColumn(slug, columnId);
+  if (!col) throw new Error('No such column.');
+  const clean = cleanText(name, BOARD_LIMITS.COLUMN_NAME);
+  if (!clean) throw new Error('Column needs a name.');
+  col.content.name = clean;
+  col.created_at = nowSec();
+  persist();
+  notify();
+  return col;
+}
+
+export function reorderColumns(slug, orderedIds) {
+  const cols = boardColumnsFor(slug);
+  const known = new Set(cols.map((c) => c.content.id));
+  // Only accept a permutation of the existing ids — ignore unknown/missing.
+  const valid = orderedIds.filter((id) => known.has(id));
+  if (valid.length !== cols.length) return; // refuse partial/foreign lists
+  const rank = new Map(valid.map((id, i) => [id, i]));
+  cols.forEach((c) => { c.content.order = rank.get(c.content.id); });
+  persist();
+  notify();
+}
+
+/**
+ * Move a column one slot left/right. Convenience for the accessible
+ * (keyboard/mobile) reorder controls, which can't drag.
+ */
+export function moveColumn(slug, columnId, direction) {
+  const cols = boardColumnsFor(slug);
+  const idx = cols.findIndex((c) => c.content.id === columnId);
+  if (idx < 0) return;
+  const target = direction === 'left' ? idx - 1 : idx + 1;
+  if (target < 0 || target >= cols.length) return;
+  const ids = cols.map((c) => c.content.id);
+  [ids[idx], ids[target]] = [ids[target], ids[idx]];
+  reorderColumns(slug, ids);
+}
+
+/**
+ * Delete a column without ever losing cards. If the column holds cards the
+ * caller MUST pass `moveToColumnId` (an existing sibling) so they are relocated
+ * first; otherwise we throw and the UI blocks the delete. Also refuses to
+ * remove the final column so a board is never left with nowhere to put cards.
+ */
+export function deleteColumn(slug, columnId, moveToColumnId = null) {
+  const col = getColumn(slug, columnId);
+  if (!col) throw new Error('No such column.');
+  const cols = boardColumnsFor(slug);
+  if (cols.length <= 1) throw new Error('A board needs at least one column.');
+  const cards = cardsFor(slug, columnId);
+  if (cards.length > 0) {
+    if (!moveToColumnId || moveToColumnId === columnId) {
+      throw new Error('Move this column\'s cards before deleting it.');
+    }
+    const dest = getColumn(slug, moveToColumnId);
+    if (!dest) throw new Error('Choose a valid destination column.');
+    let base = cardsFor(slug, moveToColumnId).length;
+    for (const card of cards) {
+      card.content.columnId = moveToColumnId;
+      card.content.order = base++;
+      card.created_at = nowSec();
+    }
+  }
+  state.columns = state.columns.filter((c) => c !== col);
+  // Close the order gap left by the removed column.
+  boardColumnsFor(slug).forEach((c, i) => { c.content.order = i; });
+  persist();
+  notify();
+}
+
+export function addCard(slug, columnId, { title, description = '', assignee = '', dueDate = null } = {}) {
+  const col = getColumn(slug, columnId);
+  if (!col) throw new Error('No such column.');
+  const cleanTitle = cleanText(title, BOARD_LIMITS.CARD_TITLE);
+  if (!cleanTitle) throw new Error('A card needs a title.');
+  const existing = cardsFor(slug, columnId);
+  if (existing.length >= BOARD_LIMITS.MAX_CARDS_PER_COLUMN) {
+    throw new Error(`A column can hold at most ${BOARD_LIMITS.MAX_CARDS_PER_COLUMN} cards.`);
+  }
+  const id = newId('card');
+  const ev = makeEvent({
+    kind: KIND.BOARD_CARD,
+    d: `${slug}:card:${id}`,
+    content: {
+      projectSlug: slug,
+      columnId,
+      id,
+      title: cleanTitle,
+      description: cleanText(description, BOARD_LIMITS.CARD_DESCRIPTION),
+      assignee: cleanText(assignee, BOARD_LIMITS.CARD_ASSIGNEE),
+      dueDate: normalizeDueDate(dueDate),
+      order: existing.length,
+      createdAt: nowSec(),
+      updatedAt: nowSec(),
+    },
+    tags: [['a', `${KIND.PROJECT}:${slug}`], ['t', 'continuum-board-card']],
+  });
+  state.cards.push(ev);
+  persist();
+  notify();
+  return ev;
+}
+
+function getCard(slug, cardId) {
+  return state.cards.find(
+    (c) => c.content.projectSlug === slug && c.content.id === cardId,
+  ) || null;
+}
+
+// Accept only YYYY-MM-DD (the <input type="date"> value) or null. Anything
+// else is dropped rather than stored, so a card's dueDate is always safe to
+// render and compare.
+function normalizeDueDate(value) {
+  if (!value) return null;
+  const s = String(value).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+export function updateCard(slug, cardId, patch = {}) {
+  const card = getCard(slug, cardId);
+  if (!card) throw new Error('No such card.');
+  const c = card.content;
+  if ('title' in patch) {
+    const t = cleanText(patch.title, BOARD_LIMITS.CARD_TITLE);
+    if (!t) throw new Error('A card needs a title.');
+    c.title = t;
+  }
+  if ('description' in patch) c.description = cleanText(patch.description, BOARD_LIMITS.CARD_DESCRIPTION);
+  if ('assignee' in patch) c.assignee = cleanText(patch.assignee, BOARD_LIMITS.CARD_ASSIGNEE);
+  if ('dueDate' in patch) c.dueDate = normalizeDueDate(patch.dueDate);
+  c.updatedAt = nowSec();
+  card.created_at = nowSec();
+  persist();
+  notify();
+  return card;
+}
+
+export function deleteCard(slug, cardId) {
+  const card = getCard(slug, cardId);
+  if (!card) return;
+  const { columnId } = card.content;
+  state.cards = state.cards.filter((c) => c !== card);
+  reindexCards(slug, columnId);
+  persist();
+  notify();
+}
+
+/**
+ * Move a card to `toColumnId` at position `toIndex` (clamped). Works for both
+ * intra-column reordering and cross-column moves, and is the single primitive
+ * behind drag-drop AND the accessible arrow-button controls. Reindexes both
+ * the source and destination columns so `order` stays dense.
+ */
+export function moveCard(slug, cardId, toColumnId, toIndex = Number.MAX_SAFE_INTEGER) {
+  const card = getCard(slug, cardId);
+  if (!card) throw new Error('No such card.');
+  const dest = getColumn(slug, toColumnId);
+  if (!dest) throw new Error('No such destination column.');
+  const fromColumnId = card.content.columnId;
+
+  if (fromColumnId !== toColumnId
+      && cardsFor(slug, toColumnId).length >= BOARD_LIMITS.MAX_CARDS_PER_COLUMN) {
+    throw new Error(`A column can hold at most ${BOARD_LIMITS.MAX_CARDS_PER_COLUMN} cards.`);
+  }
+
+  // Pull the card out of its current column ordering.
+  card.content.columnId = toColumnId;
+  card.content.order = -1; // temporary: sorts first within destination
+  reindexCards(slug, fromColumnId);
+
+  // Reinsert at the requested slot within the destination column.
+  const destCards = cardsFor(slug, toColumnId).filter((c) => c !== card);
+  const clamped = Math.max(0, Math.min(toIndex, destCards.length));
+  destCards.splice(clamped, 0, card);
+  destCards.forEach((c, i) => { c.content.order = i; });
+  card.created_at = nowSec();
+  card.content.updatedAt = nowSec();
+
+  persist();
+  notify();
+  return card;
 }
 
 // --- Marketplace ---

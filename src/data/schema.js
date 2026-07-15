@@ -12,6 +12,8 @@
  *   30080 — Continuum Milestone    (addressable, `d` = project:milestone-id)
  *   30081 — Continuum Todo         (addressable, `d` = project:todo-id)
  *   30082 — Continuum File-ref     (addressable, `d` = project:file-path)
+ *   30083 — Continuum Board column (addressable, `d` = project:col:column-id)
+ *   30084 — Continuum Board card   (addressable, `d` = project:card:card-id)
  *   30090 — Marketplace task-listing
  *   30091 — Routstr wallet + prefs (addressable, `d` = 'default')
  *
@@ -25,6 +27,8 @@ export const KIND = Object.freeze({
   MILESTONE: 30080,
   TODO: 30081,
   FILE: 30082,
+  BOARD_COLUMN: 30083,
+  BOARD_CARD: 30084,
   MARKET_TASK: 30090,
   ROUTSTR: 30091,
 });

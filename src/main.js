@@ -22,6 +22,7 @@ import { renderAbout } from './views/landing.js';
 import { renderLogin } from './views/login.js';
 import { renderProjects } from './views/projects.js';
 import { renderProjectHome } from './views/projectHome.js';
+import { renderBoard } from './views/board.js';
 import { renderMarketplace } from './views/marketplace.js';
 import { renderRoutstr } from './views/routstr.js';
 import { renderDashboard } from './views/dashboard.js';
@@ -55,6 +56,7 @@ function boot() {
   route('/about', () => { setLandingMode(true); renderAbout(mainContent()); });
   route('/projects', () => { setLandingMode(false); renderProjects(mainContent()); renderSidebar(); });
   route('/projects/:slug', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug); renderSidebar(); });
+  route('/projects/:slug/board', ({ slug }) => { setLandingMode(false); renderBoard(mainContent(), slug); renderSidebar(); });
   route('/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent()); renderSidebar(); });
   route('/routstr', () => { setLandingMode(false); renderRoutstr(mainContent()); renderSidebar(); });
   // Protected: a logged-out visitor (incl. a refresh/deep-link) is bounced to

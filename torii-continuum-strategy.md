@@ -26,7 +26,7 @@ Continuum is not a game. It is not a shooter, a world builder, or a chat client.
 Long-term, Continuum is the piece that makes "self-sovereign AI + self-sovereign identity + self-sovereign value" a real daily-driver experience rather than three separate demos.
 
 - **Personal AI without a platform.** No cloud vendor holds the memory. No SaaS holds the account. The agent runs where the user runs it (VPS, later Linux/Mac clients), signs nothing on its own, and treats every publish as human-approved.
-- **Project engine on Nostr.** Projects (kind-30078), todos (kind-30081), and later marketplace tasks (kind-30090) become first-class citizens the agent can read, draft, and — with explicit user approval — write.
+- **Project engine on Nostr.** Projects (kind-30078), todos (kind-30081), Kanban boards (columns kind-30083 / cards kind-30084, shipped v0.2.45-alpha), and later marketplace tasks (kind-30090) become first-class citizens the agent can read, draft, and — with explicit user approval — write. The board is per-project, local-first, and Nostr-shaped like everything else — no external service, ready to flip to signed relay events with zero re-shaping.
 - **Privacy-first by construction.** All Nostr writes are gift-wrapped (NIP-17) by default. The plaintext code path is absent, not disabled. Local storage stays under `chmod 700`. Prompt bodies do not appear in logs.
 - **Bitcoin-native model layer.** Model inference is paid per-request in Cashu via Routstr — no API-key custody, no monthly SaaS bill, no lock-in to a single provider.
 - **The gateway to Torii.** Continuum is the piece that gives Quest, Plebeian.Market, and future Torii apps a shared memory, a shared agent, and a shared privacy posture.

@@ -26,6 +26,7 @@ export function renderProjectHome(mount, slug) {
     h('span', { class: 'mono', text: slug }),
   ]);
   mount.appendChild(crumbs);
+  mount.appendChild(renderProjectTabs(slug, 'overview'));
 
   // Header
   const ms = milestonesFor(slug);
@@ -204,6 +205,31 @@ renderTodos.refresh = function refresh(slug) {
   const mount = document.getElementById('main-content');
   renderProjectHome(mount, slug);
 };
+
+/**
+ * The per-project view switcher (Overview · Board). Shared by projectHome and
+ * the Kanban board so the multi-view navigation is identical on both. Rendered
+ * as real links/buttons with aria-current for the active tab.
+ */
+export function renderProjectTabs(slug, active) {
+  const tab = (id, label, path) => {
+    const el = h('div', {
+      class: `view-tab ${active === id ? 'active' : ''}`,
+      role: 'tab',
+      tabindex: 0,
+      'aria-selected': active === id ? 'true' : 'false',
+    }, [label]);
+    el.addEventListener('click', () => navigate(path));
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
+    });
+    return el;
+  };
+  return h('div', { class: 'view-tabs', role: 'tablist', 'aria-label': 'Project views' }, [
+    tab('overview', 'Overview', `/projects/${slug}`),
+    tab('board', 'Board', `/projects/${slug}/board`),
+  ]);
+}
 
 function openInSource(p) {
   if (p.content.sourceUrl) {

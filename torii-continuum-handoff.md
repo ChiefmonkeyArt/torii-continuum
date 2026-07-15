@@ -63,11 +63,12 @@ Paste this whole block at the start of a new Perplexity Computer session to resu
 - `src/shell.js` — sidebar, theme toggle, footer note ("Local-first…").
 - `src/router.js` — hash router.
 - `src/views/projects.js` — Projects list.
-- `src/views/projectHome.js` — single project page (milestones + todos).
+- `src/views/projectHome.js` — single project page (milestones + todos). Exports `renderProjectTabs(slug, active)` — the Overview · Board view switcher shared with the board.
+- `src/views/board.js` — per-project Kanban board (columns 30083 / cards 30084): default Todo/Doing/Done, custom columns, drag + accessible arrow moves, card modal. Route `#/projects/:slug/board`.
 - `src/views/marketplace.js` — bounty rows, "ours" highlighting.
 - `src/views/dashboard.js` — oversight cards + by-project progress.
 - `src/views/routstr.js` — Routstr AI model picker + Cashu wallet mock.
-- `src/data/{schema,store,seed}.js` — mock nostr-shaped event store.
+- `src/data/{schema,store,seed}.js` — mock nostr-shaped event store. Board logic (columns/cards CRUD, `moveCard`, `ensureBoard`, `BOARD_LIMITS`) lives in `store.js`; tested by `src/data/board.test.js`.
 - `src/styles/theme.css` — HSL tokens, both themes.
 - `src/styles/layout.css` — sidebar + page-header (amber eyebrow + display title).
 - `src/styles/pages.css` — cards, milestones, todos, marketplace rows.
