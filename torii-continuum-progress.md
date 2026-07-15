@@ -9,6 +9,28 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.44-alpha — APP-ROUTING: application-first root (login + dashboard), sales page isolated to #/about
+
+Frontend-only release (no agent code changed; onboarding preview stays **v0.1.20-preview**). The root (`/continuum/`) was the marketing/sales page; it is now the application. Fulfils the operator ask: *"separate out that sales page from the root of continuum and replace it with a login page and the dashboard."*
+
+**1. Root is application-first.** A pure guard layer (`src/nav-guard.js`) decides root behaviour: **logged in → redirect to `#/dashboard`; logged out → render a branded Amber login page in place at root.** The root never renders the sales page.
+
+**2. Dedicated login page (`src/views/login.js`).** A branded Continuum Amber surface (shared torii mark, amber-on-bronze), full-bleed inside `landing-mode`. It drives the **existing NIP-07 / Plebeian Signer flow** via `startLogin()` — no password auth invented, no key material in the DOM. Small non-primary links lead to `#/about` and the read-only demo shell.
+
+**3. Sales/marketing isolated to `#/about`.** The former landing view (`src/views/landing.js`) is reframed and exported as `renderAbout`; it is reachable only from the non-primary About link and is **never** the root or an onboarding-completion target. `toriiSvg` is exported from it and reused by the login page.
+
+**4. Dashboard protected, no loops.** `#/dashboard` is guarded by `guardRedirect('/dashboard', …)`: a logged-out visitor (including a refresh or a deep link) is bounced to the login page at root. Because root renders login **in place** (it never itself bounces when logged out), `protected → root → login` is terminal — no redirect loop. Session-drop while on a protected view (sign-out / 401 expiry) reactively returns to login via the `continuum:session-changed` listener.
+
+**5. Onboarding handoff preserved.** `adoptOnboardingSession()` still runs before first render, so a freshly onboarded operator arriving at `/continuum/#/dashboard` with a live `torii.session` is adopted into `continuum.session.v1` and lands authenticated on the dashboard — no login bounce. Demo shell views (`#/projects`, `#/marketplace`, `#/routstr`) and all Amber navigation are preserved.
+
+**No external requests.** No Google/gstatic/Fontshare/CDN/analytics added; login/about use only local/system assets and inline SVG. Verified by the (rebuilding) `test/no-external-cdn.test.js` and per-source assertions in the new suite.
+
+**Browser QA note:** the sandbox has no headless/headed browser and no jsdom/happy-dom, so an interactive `#/dashboard` walkthrough could not be run here. The routing/auth contract is instead proven by (a) the exhaustive pure guard-decision tests and (b) source-structure locks on `main.js`/views that pin the app-first mapping and sales-page isolation, plus the rebuilding no-external-request scan. The guards run on every router resolve — including the initial resolve, which is exactly what a refresh / deep link triggers — so refresh and deep-link behaviour is covered by the same decision layer.
+
+**Changes:** new `src/nav-guard.js` (pure guard decisions), new `src/views/login.js`, `src/views/landing.js` (`renderLanding → renderAbout`, `toriiSvg` exported, header reframed), `src/main.js` (app-first routes + `/about` + dashboard guard + reactive session handling), `src/styles/landing.css` (login-page styling), new `test/app-routing-auth.test.js` (20 tests). Root `package.json` **0.2.43-alpha → 0.2.44-alpha**.
+
+**Tests / build / audit (all green):** `vitest run` **795/795** (775 prior + 20 new); agent `node --test` **104/104**; `continuum-adopt.test.sh` 188, installer-preflight 18, shared-parent 10, signal 9, nginx-install 13; root `npm run build` clean, `dist/` free of external loading vectors (only the inert Plebeian-Signer store anchor remains); `npm audit --omit=dev` 0 vulns (root + agent). Code + PR only — **not merged, tagged, or deployed.**
+
 ## v0.2.43-alpha — OPS-HARDENING: encode three live-discovered cutover corrections
 
 Ops-only release (no app/agent code paths changed; onboarding preview stays **v0.1.20-preview**). The v0.2.42-alpha cutover succeeded manually on the live box, but three environment realities had to be worked around by hand. This release encodes all three permanently so a clean re-run needs no manual steps.

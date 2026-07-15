@@ -2,17 +2,24 @@
  * Continuum — app entry.
  * Boots store → mounts shell → registers routes → starts router → mounts chat.
  *
- * Landing route ('/') renders full-bleed inside main, and toggles a
- * `landing-mode` class on #app to hide sidebar + chat dock. Every other
- * route restores the standard shell.
+ * Application-first routing: the root ('/') is the app, never the sales page.
+ *   • logged out  → branded login page rendered in place at root;
+ *   • logged in   → redirect straight to #/dashboard.
+ * The sales/marketing surface is isolated behind the explicit '#/about' route.
+ * Login and About render full-bleed inside `landing-mode` (sidebar + chat dock
+ * hidden). Every other route restores the standard shell. Protected views
+ * (see nav-guard) bounce logged-out visitors to the login page without loops.
  */
 import { initStore } from './data/store.js';
 import { mountShell, mainContent, renderSidebar, applyStoredTheme } from './shell.js';
-import { route, startRouter, currentRoute } from './router.js';
+import { route, startRouter, currentRoute, navigate } from './router.js';
 import { mountChat } from './chat.js';
 import { adoptOnboardingSession } from './data/agent.js';
+import { isSessionLive } from './auth.js';
+import { rootTarget, guardRedirect, isProtectedPattern } from './nav-guard.js';
 
-import { renderLanding } from './views/landing.js';
+import { renderAbout } from './views/landing.js';
+import { renderLogin } from './views/login.js';
 import { renderProjects } from './views/projects.js';
 import { renderProjectHome } from './views/projectHome.js';
 import { renderMarketplace } from './views/marketplace.js';
@@ -38,22 +45,43 @@ function boot() {
   mountShell(root);
 
   // Routes
-  route('/', () => { setLandingMode(true); renderLanding(mainContent()); });
+  // Root is application-first: authed → dashboard, else render login in place.
+  route('/', () => {
+    const target = rootTarget(isSessionLive());
+    if (target) { navigate(target); return; }
+    setLandingMode(true); renderLogin(mainContent());
+  });
+  // Sales/marketing content, isolated. Never the root, never onboarding done.
+  route('/about', () => { setLandingMode(true); renderAbout(mainContent()); });
   route('/projects', () => { setLandingMode(false); renderProjects(mainContent()); renderSidebar(); });
   route('/projects/:slug', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug); renderSidebar(); });
   route('/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent()); renderSidebar(); });
   route('/routstr', () => { setLandingMode(false); renderRoutstr(mainContent()); renderSidebar(); });
-  route('/dashboard', () => { setLandingMode(false); renderDashboard(mainContent()); renderSidebar(); });
+  // Protected: a logged-out visitor (incl. a refresh/deep-link) is bounced to
+  // the login page at root. rootTarget keeps that terminal (no loop).
+  route('/dashboard', () => {
+    const redirect = guardRedirect('/dashboard', isSessionLive());
+    if (redirect) { navigate(redirect); return; }
+    setLandingMode(false); renderDashboard(mainContent()); renderSidebar();
+  });
 
   startRouter();
   mountChat(root);
 
-  // Re-render sidebar when session changes so the login/logout button stays honest
+  // React to session changes so the shell and route stay honest.
   document.addEventListener('continuum:session-changed', () => {
     renderSidebar();
-    // If we're on landing, re-render it so its CTAs reflect the new state
     const cr = currentRoute();
-    if (cr && cr.pattern === '/') renderLanding(mainContent());
+    if (!cr) return;
+    const authed = isSessionLive();
+    if (cr.pattern === '/') {
+      // Just logged in at the login page → go to the app; else re-render login.
+      if (authed) navigate('/dashboard');
+      else renderLogin(mainContent());
+    } else if (isProtectedPattern(cr.pattern) && !authed) {
+      // Session dropped (e.g. expired / signed out) while on a protected view.
+      navigate('/');
+    }
   });
 
   // Prevent double-tap zoom on the chat button on iOS

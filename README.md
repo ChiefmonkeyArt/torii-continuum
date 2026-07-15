@@ -8,7 +8,8 @@ Continuum treats every project like a nostr identity: portable, signable, yours.
 
 **Frontend (`src/`)**
 
-- **Landing page** at `#/` — marketing surface with the sovereignty story, torii-arch hero, promises grid, freedom-tech pillars, live status roadmap. Click through to the demo, or Login with Nostr.
+- **Application-first root** at `#/` — logged out, root renders a dedicated branded Amber **login page** in place (NIP-07 / Plebeian Signer, no password auth, no secrets in the DOM); logged in (valid `continuum.session.v1`, or a safely-adopted onboarding session), root routes straight to `#/dashboard`. Routing/auth decisions live in the pure `src/nav-guard.js`; `#/dashboard` is guarded and expired/invalid sessions return to login without a loop.
+- **About / Discover** at `#/about` — the marketing surface (sovereignty story, torii-arch hero, promises grid, freedom-tech pillars, live status roadmap) now isolated behind an explicit route, reachable from small non-primary links on the login page. Never the app root or an onboarding completion target.
 - **Projects** — list, create, open. Import from GitHub or ngit. Cascades to sessions/milestones/todos/files.
 - **Project home** — milestones ladder, session log, live todo list, files created.
 - **Marketplace** — open AI-work tasks. Yours highlighted amber.

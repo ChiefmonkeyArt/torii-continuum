@@ -1,0 +1,209 @@
+/**
+ * App-routing / auth slice (v0.2.44-alpha).
+ *
+ * Continuum's root is application-first: logged out → branded login page in
+ * place at root; logged in → dashboard. The sales/marketing page is isolated
+ * behind an explicit #/about route and is never the root or an onboarding
+ * completion target. Protected views bounce logged-out visitors to login
+ * without a redirect loop.
+ *
+ * No jsdom/happy-dom is available in this environment, so the routing contract
+ * is proven two ways:
+ *   1. the pure guard-decision layer (src/nav-guard.js) — exhaustively;
+ *   2. the wiring itself (src/main.js, views) — via source-structure assertions
+ *      that lock the app-first mapping and the sales-page isolation in place,
+ *      mirroring the repo's existing template/regression-lock test style.
+ * Session adoption is exercised end-to-end against the real agent helpers with
+ * an in-memory localStorage stub.
+ */
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+import {
+  PROTECTED_PATTERNS,
+  ROOT_PATH,
+  LOGIN_PATH,
+  DASHBOARD_PATH,
+  isProtectedPattern,
+  rootTarget,
+  guardRedirect,
+} from '../src/nav-guard.js';
+import { adoptOnboardingSession, getStoredToken, isLoggedIn } from '../src/data/agent.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SRC = join(__dirname, '..', 'src');
+const read = (p) => readFileSync(join(SRC, p), 'utf8');
+// Strip line comments + block comments so a mention in a doc-comment never
+// satisfies (or trips) a structural assertion about actual code.
+const stripComments = (s) =>
+  s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+const future = Math.floor(Date.now() / 1000) + 3600;
+const past = Math.floor(Date.now() / 1000) - 3600;
+const pubkey = 'a'.repeat(64);
+const liveToken = `1000.${future}.${pubkey}.deadbeefsig`;
+const deadToken = `1000.${past}.${pubkey}.deadbeefsig`;
+
+function makeStorageStub() {
+  const map = new Map();
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => { map.set(k, String(v)); },
+    removeItem: (k) => { map.delete(k); },
+    clear: () => map.clear(),
+    _map: map,
+  };
+}
+
+describe('nav-guard: unauthenticated root → login', () => {
+  it('renders login in place at root (no redirect) when logged out', () => {
+    expect(rootTarget(false)).toBeNull();
+  });
+  it('login is rendered at root, not a separate hash route', () => {
+    expect(LOGIN_PATH).toBe(ROOT_PATH);
+  });
+});
+
+describe('nav-guard: authenticated root → dashboard', () => {
+  it('redirects root straight to the dashboard when logged in', () => {
+    expect(rootTarget(true)).toBe(DASHBOARD_PATH);
+    expect(DASHBOARD_PATH).toBe('/dashboard');
+  });
+});
+
+describe('nav-guard: dashboard protection', () => {
+  it('marks /dashboard protected', () => {
+    expect(isProtectedPattern('/dashboard')).toBe(true);
+    expect(PROTECTED_PATTERNS).toContain('/dashboard');
+  });
+  it('bounces a logged-out visitor from /dashboard to login', () => {
+    expect(guardRedirect('/dashboard', false)).toBe(LOGIN_PATH);
+  });
+  it('lets a logged-in visitor render /dashboard', () => {
+    expect(guardRedirect('/dashboard', true)).toBeNull();
+  });
+});
+
+describe('nav-guard: no redirect loop', () => {
+  it('protected→login is terminal (root renders login in place, never bounces)', () => {
+    // Unauthed: dashboard → login (root); root → render-in-place (null). No cycle.
+    const bounce = guardRedirect('/dashboard', false);
+    expect(bounce).toBe(ROOT_PATH);
+    expect(rootTarget(false)).toBeNull();
+  });
+});
+
+describe('nav-guard: #/about is public, isolated, never protected', () => {
+  it('does not protect /about (sales content is reachable logged out)', () => {
+    expect(isProtectedPattern('/about')).toBe(false);
+    expect(guardRedirect('/about', false)).toBeNull();
+  });
+  it('does not protect the demo shell views', () => {
+    for (const p of ['/projects', '/marketplace', '/routstr']) {
+      expect(isProtectedPattern(p)).toBe(false);
+      expect(guardRedirect(p, false)).toBeNull();
+    }
+  });
+});
+
+describe('onboarding session adoption → authenticated root', () => {
+  let stub;
+  beforeEach(() => { stub = makeStorageStub(); globalThis.localStorage = stub; });
+  afterEach(() => { delete globalThis.localStorage; });
+
+  it('adopts a live onboarding session so root resolves to the dashboard', () => {
+    stub.setItem('torii.session', JSON.stringify({ token: liveToken, pubkey, method: 'nip07' }));
+    expect(isLoggedIn()).toBe(false);
+    expect(adoptOnboardingSession()).toBe(true);
+    expect(getStoredToken()).toBe(liveToken);
+    // Now authed → root sends the operator to the dashboard, not a login bounce.
+    expect(rootTarget(isLoggedIn())).toBe(DASHBOARD_PATH);
+  });
+
+  it('a dead onboarding token is ignored → root stays on login', () => {
+    stub.setItem('torii.session', JSON.stringify({ token: deadToken, pubkey, method: 'nip07' }));
+    expect(adoptOnboardingSession()).toBe(false);
+    expect(isLoggedIn()).toBe(false);
+    expect(rootTarget(isLoggedIn())).toBeNull(); // render login
+  });
+});
+
+describe('expired/invalid session → login', () => {
+  let stub;
+  beforeEach(() => { stub = makeStorageStub(); globalThis.localStorage = stub; });
+  afterEach(() => { delete globalThis.localStorage; });
+
+  it('an expired SPA token is not live → root renders login and dashboard bounces', () => {
+    stub.setItem('continuum.session.v1', deadToken);
+    expect(isLoggedIn()).toBe(false);
+    expect(rootTarget(isLoggedIn())).toBeNull();
+    expect(guardRedirect('/dashboard', isLoggedIn())).toBe(LOGIN_PATH);
+  });
+
+  it('a live SPA token keeps root→dashboard and dashboard allowed', () => {
+    stub.setItem('continuum.session.v1', liveToken);
+    expect(isLoggedIn()).toBe(true);
+    expect(rootTarget(isLoggedIn())).toBe(DASHBOARD_PATH);
+    expect(guardRedirect('/dashboard', isLoggedIn())).toBeNull();
+  });
+});
+
+describe('wiring: main.js maps the application-first shell (source lock)', () => {
+  const main = stripComments(read('main.js'));
+
+  it('root route renders the login page via rootTarget, not the sales page', () => {
+    expect(main).toMatch(/route\(\s*'\/'\s*,/);
+    expect(main).toMatch(/rootTarget\(/);
+    expect(main).toMatch(/renderLogin\(/);
+    // The root handler must not render the About/sales content.
+    const rootHandler = main.slice(main.indexOf("route('/',"), main.indexOf("route('/about'"));
+    expect(rootHandler).not.toMatch(/renderAbout/);
+  });
+
+  it('about route renders the sales content and is separate from root', () => {
+    const aboutHandler = main.slice(main.indexOf("route('/about'"), main.indexOf("route('/projects'"));
+    expect(aboutHandler).toMatch(/renderAbout\(/);
+  });
+
+  it('dashboard route is guarded by guardRedirect before rendering', () => {
+    const dash = main.slice(main.indexOf("route('/dashboard'"));
+    expect(dash).toMatch(/guardRedirect\(\s*'\/dashboard'/);
+    expect(dash.indexOf('guardRedirect')).toBeLessThan(dash.indexOf('renderDashboard'));
+  });
+
+  it('root no longer imports or renders the legacy renderLanding symbol', () => {
+    expect(main).not.toMatch(/renderLanding/);
+  });
+});
+
+describe('wiring: sales-page isolation + no external requests in new views', () => {
+  it('login view is a dedicated surface, not the sales content', () => {
+    const login = read('views/login.js');
+    expect(login).toMatch(/export function renderLogin/);
+    expect(login).toMatch(/startLogin/); // uses existing NIP-07 flow
+    // No password field / secret handling invented.
+    expect(login).not.toMatch(/type=["']password["']/i);
+    expect(login).not.toMatch(/\bnsec\b\s*[:=]/i);
+  });
+
+  it('sales content lives only in the About view (renderAbout export)', () => {
+    const about = read('views/landing.js');
+    expect(about).toMatch(/export function renderAbout/);
+    expect(about).not.toMatch(/export function renderLanding/);
+  });
+
+  it('new view sources contain no external loading vector (Google/CDN/etc.)', () => {
+    for (const f of ['views/login.js', 'views/landing.js', 'nav-guard.js', 'main.js']) {
+      const src = read(f);
+      // No preconnect/script/style to any external host.
+      const loaders = [...src.matchAll(/(?:@import\s+url\(|\bimport\(|\bfetch\(|\.src\s*=\s*|new\s+Image[^;]*\.src\s*=\s*)\s*["'`]?(https?:\/\/[^"'`)\s]+)/gi)];
+      expect(loaders.length).toBe(0);
+      // Belt and braces: no google/gstatic/fontshare/CDN host referenced as a resource.
+      for (const host of ['fonts.googleapis.com', 'fonts.gstatic.com', 'googleapis.com', 'gstatic.com', 'api.fontshare.com', 'unpkg.com', 'jsdelivr.net', 'cdnjs']) {
+        expect(src.includes(host)).toBe(false);
+      }
+    }
+  });
+});

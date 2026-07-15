@@ -1,9 +1,12 @@
 /**
- * Landing view — public marketing surface for continuum-torii.pplx.app.
+ * About / Discover view — the sales/marketing surface, isolated behind the
+ * explicit `#/about` route.
  *
- * This is what a visitor sees before they click "Try demo" (routes to the
- * app shell at #/projects) or "Login" (NIP-07 flow via Plebeian Signer,
- * only meaningful when a self-hosted agent is reachable).
+ * Continuum is application-first: the root (`/continuum/`) renders the login
+ * page (logged out) or the dashboard (logged in), never this page. This
+ * content is reachable only from a small non-primary "About" link on the
+ * login and settings surfaces, and is never used as onboarding completion or
+ * as the app root.
  *
  * Voice: nostr-native, sovereignty-first, quietly confident. No hero-video
  * theatrics; no crypto-bro shouting. Torii amber on warm bronze, matching
@@ -32,7 +35,7 @@ import { isAgentConfigured } from '../data/agent.js';
  * shading is done with linear gradients + a warm drop-shadow filter so the
  * mark stays readable at both 32px (favicon) and hero size.
  */
-function toriiSvg() {
+export function toriiSvg() {
   const root = svg('svg', {
     class: 'landing-torii-svg',
     viewBox: '0 0 220 260',
@@ -243,7 +246,7 @@ const STATUS = [
   { s: 'later',   t: 'NIP-34 repo announcement (post-PoC)' },
 ];
 
-export function renderLanding(mount) {
+export function renderAbout(mount) {
   clear(mount);
 
   const loggedIn = isSessionLive();
