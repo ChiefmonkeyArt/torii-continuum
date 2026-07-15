@@ -208,24 +208,19 @@ renderTodos.refresh = function refresh(slug) {
 
 /**
  * The per-project view switcher (Overview · Board). Shared by projectHome and
- * the Kanban board so the multi-view navigation is identical on both. Rendered
- * as real links/buttons with aria-current for the active tab.
+ * the Kanban board so the multi-view navigation is identical on both. These are
+ * genuine hash-route links, so they use real <a href> navigation semantics
+ * inside a <nav> landmark (not the ARIA tab pattern, which would demand full
+ * arrow-key/aria-controls tab management for a control that just navigates).
+ * The active link is marked with aria-current="page".
  */
 export function renderProjectTabs(slug, active) {
   const tab = (id, label, path) => {
-    const el = h('div', {
-      class: `view-tab ${active === id ? 'active' : ''}`,
-      role: 'tab',
-      tabindex: 0,
-      'aria-selected': active === id ? 'true' : 'false',
-    }, [label]);
-    el.addEventListener('click', () => navigate(path));
-    el.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
-    });
-    return el;
+    const attrs = { class: `view-tab ${active === id ? 'active' : ''}`, href: `#${path}` };
+    if (active === id) attrs['aria-current'] = 'page';
+    return h('a', attrs, [label]);
   };
-  return h('div', { class: 'view-tabs', role: 'tablist', 'aria-label': 'Project views' }, [
+  return h('nav', { class: 'view-tabs', 'aria-label': 'Project views' }, [
     tab('overview', 'Overview', `/projects/${slug}`),
     tab('board', 'Board', `/projects/${slug}/board`),
   ]);

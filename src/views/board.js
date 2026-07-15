@@ -140,9 +140,13 @@ function renderCard(slug, card, columns, colIndex, cardIndex, cardCount) {
   if (c.assignee) footer.push(h('span', { class: 'pill card-assignee', text: c.assignee }));
   if (c.dueDate) footer.push(h('span', { class: `pill card-due ${isOverdue(c.dueDate) ? 'danger' : ''}`, text: c.dueDate }));
 
-  // Accessible move controls (keyboard + touch): shift between columns and
-  // reorder within a column without dragging.
+  // Card actions: an explicit Edit button (keyboard + screen-reader reachable)
+  // plus accessible move controls that shift between columns and reorder within
+  // a column without dragging. These are real <button>s and, because the card
+  // container is a plain non-interactive <div>, they are not nested under any
+  // role="button" — so each is an independent, correctly-labelled control.
   const moves = h('div', { class: 'card-moves' }, [
+    iconBtn('✎', `Edit card: ${c.title}`, () => openCardEditor(slug, colId, card)),
     iconBtn('‹', 'Move to previous column', () => {
       const prev = columns[colIndex - 1];
       if (prev) { safeMove(slug, c.id, prev.content.id); }
@@ -158,9 +162,6 @@ function renderCard(slug, card, columns, colIndex, cardIndex, cardCount) {
   const el = h('div', {
     class: 'board-card',
     draggable: 'true',
-    tabindex: 0,
-    role: 'button',
-    'aria-label': `Card: ${c.title}. Press Enter to edit.`,
     dataset: { cardId: c.id },
   }, [
     h('div', { class: 'card-title', text: c.title }),
@@ -170,13 +171,12 @@ function renderCard(slug, card, columns, colIndex, cardIndex, cardCount) {
     moves,
   ]);
 
+  // Mouse convenience only: clicking the card body (not a control) opens the
+  // editor. Keyboard/AT users reach the same action via the Edit button above,
+  // so the container itself carries no interactive role.
   el.addEventListener('click', (e) => {
-    // Ignore clicks that originated on the move buttons.
     if (e.target.closest('.card-moves')) return;
     openCardEditor(slug, colId, card);
-  });
-  el.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); openCardEditor(slug, colId, card); }
   });
   el.addEventListener('dragstart', (e) => {
     dragState.cardId = c.id;
