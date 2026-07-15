@@ -50,7 +50,7 @@ Ubuntu 22 / 24 host
 │   ├── launcher at /
 │   └── sidecar (127.0.0.1:8780)
 ├── continuum
-│   ├── /continuum/ (static SPA, served from /home/continuum/app/dist)
+│   ├── /continuum/ (static SPA, served from public webroot /var/www/torii/continuum)
 │   ├── /continuum/api/ → 127.0.0.1:8787 (agent)
 │   └── continuum-agent.service (systemd, hardened)
 └── (optional) ollama
@@ -280,8 +280,12 @@ permanently so a clean re-run needs no manual steps.
    files `0644`) via an atomic staged swap that keeps the prior webroot as a
    timestamped backup for rollback. Only the static bundle is copied out — the
    app/agent **source and encrypted state stay private** under
-   `/home/continuum/app`. The nginx templates alias the public webroot and serve
-   assets from a clean prefix `location` (no fragile regex-alias, no `/home`).
+   `/home/continuum/app`. A **single** `location /continuum/` prefix alias serves
+   both the SPA entry and the hashed `assets/*` bundle. The earlier nested
+   `location /continuum/assets/` block re-mapped the path and returned 404 for the
+   hashed `.js`/`.css` (a black page); it has been removed so `try_files` on the
+   parent alias serves assets directly and only genuine misses fall back to
+   `index.html`. No regex-alias, no `/home` traversal.
 
 The cutover `rescue` now also **rolls the webroot back** from its backup and
 reloads nginx on failure. Re-running against the now-live v0.2.42 Ansible layout
@@ -294,17 +298,43 @@ New tunables in `roles/continuum/defaults/main.yml`: `continuum_webroot`,
 and `continuum_register_name` / `_display` / `_desc`.
 
 **Upgrade the now-live v0.2.42 Ansible box to v0.2.43-alpha** (vault-free; the
-live config + funded key are preserved byte-for-byte):
+live config + funded key are preserved byte-for-byte).
+
+On the live box the v0.2.42 checkout sits at `/opt/deploy/torii-continuum-v0.2.42-alpha`
+and the promoted app lives at `/home/continuum/app`. Rather than mutating that
+checkout in place, do a **fresh, version-specific clone** of the final tag (after
+this PR merges and `v0.2.43-alpha` is tagged) into a parallel dir, then run the
+same localhost, vault-free `existing-ansible` redeploy. The role re-detects the
+live layout and preserves state; a fresh dir keeps the previous release intact for
+an instant rollback.
 
 ```bash
-DIR=/opt/torii/src/torii-continuum
-sudo git -C "$DIR" fetch --all --prune
-sudo git -C "$DIR" checkout hardening-live-corrections-v0.2.43-alpha
-sudo git -C "$DIR" pull --ff-only
-cd "$DIR/ops/ansible"
-# inventory.yml + group_vars/all.yml already exist from the v0.2.42 deploy;
-# just bump continuum_version to v0.2.43-alpha, then:
+# After merge + tag. (Pre-merge, replace `--branch v0.2.43-alpha` with
+# `--branch hardening-live-corrections-v0.2.43-alpha`.)
+SRC=/opt/deploy/torii-continuum-v0.2.43-alpha
+sudo git clone --depth 1 --branch v0.2.43-alpha \
+  https://github.com/ChiefmonkeyArt/torii-continuum.git "$SRC"
+cd "$SRC/ops/ansible"
+
+# Localhost, no SSH, no vault. NO vault.yml is created or referenced.
+cat > inventory.yml <<'YAML'
+all:
+  children:
+    torii:
+      hosts:
+        localhost:
+          ansible_connection: local
+YAML
+mkdir -p group_vars
+cat > group_vars/all.yml <<'YAML'
+torii_domain: chiefmonkey.art
+continuum_version: v0.2.43-alpha
+YAML
+
+# existing-ansible redeploy: preserves config + funded key, republishes the
+# public webroot (prior bundle kept as a timestamped backup), registers via flags.
 sudo ansible-playbook -i inventory.yml site.yml --tags continuum
+
 # validate
 sudo nginx -t && sudo systemctl status continuum-agent --no-pager
 curl -sf http://127.0.0.1:8787/api/health

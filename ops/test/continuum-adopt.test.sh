@@ -734,21 +734,26 @@ grep -q 'alias {{ continuum_webroot }}/;' "$NGINX_J2" \
 grep -v '^[[:space:]]*#' "$NGINX_J2" | grep -q '/home/' \
   && bad "nginx.j2: STILL references /home in a directive (nginx cannot traverse it -> HTTP 500)" \
   || ok "nginx.j2: no /home traversal in any served directive"
-# assets served via a prefix location (not a fragile regex alias)
-grep -q 'location {{ continuum_mount_path }}/assets/ {' "$NGINX_J2" \
-  && ok "nginx.j2: assets via a prefix location" || bad "nginx.j2: no assets prefix location"
-grep -q 'alias {{ continuum_webroot }}/assets/;' "$NGINX_J2" \
-  && ok "nginx.j2: assets alias the public webroot" || bad "nginx.j2: assets not aliased to webroot"
-# SPA fallback + API proxy still correct on the subpath
+# REGRESSION LOCK: the nested assets location caused hashed .js/.css to 404 (the
+# live black page). A SINGLE parent alias must serve both the SPA entry and the
+# hashed bundle — there must be NO `location .../assets/` block in either template.
+grep -v '^[[:space:]]*#' "$NGINX_J2" | grep -Eq 'location[[:space:]]+\S*/assets/' \
+  && bad "nginx.j2: STILL has a nested assets location (404 regression / black page)" \
+  || ok "nginx.j2: no nested assets location (parent alias serves the bundle)"
+grep -v '^[[:space:]]*#' "$NGINX_J2" | grep -q 'alias {{ continuum_webroot }}/assets/;' \
+  && bad "nginx.j2: STILL aliases a nested assets dir" \
+  || ok "nginx.j2: no nested assets alias"
+# SPA fallback + API proxy still correct on the subpath (parent alias serves assets)
 grep -q 'try_files $uri $uri/ {{ continuum_mount_path }}/index.html;' "$NGINX_J2" \
   && ok "nginx.j2: subpath SPA fallback to index.html preserved" || bad "nginx.j2: SPA fallback broken"
 grep -q 'proxy_pass http://{{ continuum_agent_host }}:{{ continuum_agent_port }}/api/;' "$NGINX_J2" \
   && ok "nginx.j2: API reverse-proxy to the agent preserved" || bad "nginx.j2: API proxy broken"
-# the annotated source template mirrors the public-webroot pattern
-grep -q 'location /continuum/assets/ {' "$NGINX_TPL" \
-  && ok "nginx.tpl: assets via a prefix location" || bad "nginx.tpl: no assets prefix location"
-grep -q '@CONTINUUM_DIST@/assets/;' "$NGINX_TPL" \
-  && ok "nginx.tpl: assets alias the dist placeholder" || bad "nginx.tpl: assets not aliased"
+# the annotated source template mirrors the single-alias pattern (no nested block)
+grep -v '^[[:space:]]*#' "$NGINX_TPL" | grep -Eq 'location[[:space:]]+\S*/assets/' \
+  && bad "nginx.tpl: STILL has a nested assets location (404 regression)" \
+  || ok "nginx.tpl: no nested assets location"
+grep -q 'try_files $uri $uri/ /continuum/index.html;' "$NGINX_TPL" \
+  && ok "nginx.tpl: single parent alias + SPA fallback" || bad "nginx.tpl: SPA fallback broken"
 grep -Eq 'location ~\* /continuum/assets' "$NGINX_TPL" \
   && bad "nginx.tpl: STILL uses the fragile regex-alias for assets" \
   || ok "nginx.tpl: fragile regex-alias for assets removed"

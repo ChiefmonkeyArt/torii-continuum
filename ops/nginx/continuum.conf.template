@@ -17,19 +17,15 @@
 # from a 0750 home returns HTTP 500 because nginx cannot descend into it. Only the
 # built static files are published there; source + encrypted state stay private.
 
+# Single prefix alias serves BOTH the SPA entry and the Vite hashed bundle under
+# /continuum/assets/*. There is deliberately NO nested `location /continuum/assets/`
+# block: a nested alias + try_files re-mapped the path and returned 404 for hashed
+# .js/.css in production (the black page). try_files checks real files first, so
+# assets are served directly and only genuine misses fall through to the SPA entry.
 location /continuum/ {
     alias @CONTINUUM_DIST@/;
     index index.html;
     try_files $uri $uri/ /continuum/index.html;
-}
-
-# Vite hashed assets — long-cache. Prefix location (not a regex alias); the mount
-# prefix is stripped by alias so files resolve under the webroot.
-location /continuum/assets/ {
-    alias @CONTINUUM_DIST@/assets/;
-    expires 30d;
-    add_header Cache-Control "public, immutable";
-    try_files $uri =404;
 }
 
 # Agent API — mount-prefix stripped before proxy_pass

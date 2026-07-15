@@ -10,19 +10,16 @@
 # home returns HTTP 500. The playbook rsyncs only the built static files here
 # (root:root, dirs 0755 / files 0644); the app/agent source and encrypted state
 # stay private under /home/{{ continuum_user }}/app.
+# Single prefix alias serves BOTH the SPA entry and the Vite hashed bundle under
+# {{ continuum_mount_path }}/assets/*. There is deliberately NO nested
+# `location {{ continuum_mount_path }}/assets/` block: a nested alias + try_files
+# re-mapped the path and returned 404 for hashed .js/.css in production (the black
+# page). try_files checks real files first, so assets are served directly and only
+# genuine misses fall through to the SPA entry.
 location {{ continuum_mount_path }}/ {
     alias {{ continuum_webroot }}/;
     index index.html;
     try_files $uri $uri/ {{ continuum_mount_path }}/index.html;
-}
-
-# Vite hashed assets — long-cache. Prefix location (not a fragile regex alias);
-# the mount prefix is stripped by alias so files resolve under the webroot.
-location {{ continuum_mount_path }}/assets/ {
-    alias {{ continuum_webroot }}/assets/;
-    expires 30d;
-    add_header Cache-Control "public, immutable";
-    try_files $uri =404;
 }
 
 # Agent API — mount-prefix stripped before proxy_pass.
