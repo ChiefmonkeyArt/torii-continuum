@@ -383,6 +383,59 @@ rollback_webroot() {
   return 0
 }
 
+# ── normalize_root_app <requested> ──────────────────────────────────────────────
+#   Maps a group_vars root-app selector to the value the installed Torii CLI
+#   actually accepts for `torii set-root`. The launcher that owns "/" is NOT a
+#   registered app, so the CLI represents it as the sentinel `none`. Passing a
+#   name like `launcher` makes the API return 404 {error: app_not_installed,
+#   name: launcher} and the deploy rolls back. So legacy/empty/null selectors and
+#   the common launcher synonyms all normalize to `none`; an explicit registered
+#   app name (continuum, quest, plebeian, …) passes through UNCHANGED and is only
+#   ever set when an operator deliberately configures it.
+#   Prints exactly one token on stdout.
+normalize_root_app() {
+  local v="${1:-}"
+  v="$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "$v" in
+    ""|none|null|"~"|launcher|torii|torii-base|base|root|home|homepage|default)
+      echo "none" ;;
+    *) echo "$v" ;;
+  esac
+}
+
+# ── set_root_safe <torii_bin> <requested> [env_file] ─────────────────────────────
+#   Idempotently points the Torii launcher root at the NORMALIZED selector.
+#   - normalizes <requested> (launcher/empty/null → none) so a default install
+#     never 404s the way `torii set-root launcher` did live;
+#   - if <env_file> is given and exists, sources it first (the admin token the CLI
+#     needs lives at /opt/torii/env) — the token value is never printed;
+#   - skips the call when the current root already equals the target (queried via
+#     `torii get-root`; if that subcommand is unavailable the query is treated as
+#     unknown and set-root runs, which is idempotent for `none`);
+#   - warns (stderr only) when the effective target is `continuum`, because making
+#     Continuum own "/" takes the Torii Suite launcher off the root — discouraged.
+#   Returns 0 on success/skip so a default install never trips the role's rescue
+#   rollback. Never prints secrets.
+set_root_safe() {
+  local bin="$1" requested="${2:-}" env_file="${3:-}"
+  if [ -n "$env_file" ] && [ -f "$env_file" ]; then
+    # shellcheck disable=SC1090
+    . "$env_file"
+  fi
+  local effective; effective="$(normalize_root_app "$requested")"
+  if [ "$effective" = "continuum" ]; then
+    echo "WARNING: pointing the Torii root at Continuum — the Torii Suite launcher will no longer own '/'. This is discouraged; the safe default is 'none' (launcher at root)." >&2
+  fi
+  local current=""
+  current="$("$bin" get-root 2>/dev/null || true)"
+  current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  if [ -n "$current" ] && [ "$current" = "$effective" ]; then
+    echo "root-app already '$effective'; skipping set-root"
+    return 0
+  fi
+  "$bin" set-root "$effective"
+}
+
 # ── CLI dispatcher (only when executed, not when sourced) ───────────────────────
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   set -euo pipefail
@@ -397,10 +450,12 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     rollback)        rollback_release "$@" ;;
     config-action)   config_action "$@" ;;
     config-drift)    config_drift "$@" ;;
+    normalize-root)  normalize_root_app "$@" ;;
+    set-root-safe)   set_root_safe "$@" ;;
     deploy-webroot)  deploy_webroot "$@" ;;
     rollback-webroot) rollback_webroot "$@" ;;
     *)
-      echo "usage: continuum-adopt.sh {detect|authoritative|backup|migrate|stage-reset|promote|rollback|config-action|config-drift|deploy-webroot|rollback-webroot} ..." >&2
+      echo "usage: continuum-adopt.sh {detect|authoritative|backup|migrate|stage-reset|promote|rollback|config-action|config-drift|normalize-root|set-root-safe|deploy-webroot|rollback-webroot} ..." >&2
       exit 2 ;;
   esac
 fi

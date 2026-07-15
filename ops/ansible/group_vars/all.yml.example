@@ -20,7 +20,14 @@ torii_letsencrypt_email: "you@example.com"       # required by certbot
 # ─────────────────────────────────────────────────────────────
 torii_base_repo: "https://github.com/ChiefmonkeyArt/torii-base.git"
 torii_base_version: "main"                         # branch, tag, or commit
-torii_root_app: "launcher"                         # launcher | continuum | plebeian | quest
+# Which app owns "/". The Torii Suite launcher is the sentinel `none` (it is NOT
+# a registered app — `torii set-root launcher` returns 404 app_not_installed).
+# Leave as `none` so the launcher owns the root. Legacy/empty values and the
+# synonym `launcher` are normalized to `none` by the continuum role, so an old
+# inventory won't break. Set a REGISTERED app name (e.g. quest) only if you
+# deliberately want that app at "/". Continuum is intentionally NOT the default
+# homepage — pointing the root at `continuum` is discouraged (the role warns).
+torii_root_app: "none"                             # none (launcher) | quest | plebeian | continuum(discouraged)
 
 # ─────────────────────────────────────────────────────────────
 # Continuum

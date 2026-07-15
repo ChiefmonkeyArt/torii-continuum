@@ -465,15 +465,21 @@
         executable: /bin/bash
       changed_when: true
 
-    - name: Set launcher root_app if requested
-      ansible.builtin.shell: |
-        set -eo pipefail
-        source /opt/torii/env
-        /usr/local/bin/torii set-root {{ torii_root_app | quote }}
-      args:
-        executable: /bin/bash
-      when: torii_root_app is defined
-      changed_when: true
+    # The installed Torii CLI accepts `torii set-root <registered-name|none>`.
+    # The Torii Suite launcher that owns "/" is NOT a registered app — it is the
+    # sentinel `none`. A live v0.2.43 rerun with the old default `launcher`
+    # returned 404 {error: app_not_installed, name: launcher} and rolled the
+    # deploy back. set_root_safe normalizes legacy/empty/launcher → none (an
+    # explicit registered app still passes through when deliberately set),
+    # sources the admin token from /opt/torii/env, skips when the root already
+    # matches, and returns 0 for the default so it never trips the rescue.
+    # Continuum is deliberately NOT made the root here.
+    - name: Point the Torii launcher root at the desired app (normalized to none by default)
+      ansible.builtin.script: >-
+        {{ continuum_adopt_lib }} set-root-safe /usr/local/bin/torii
+        {{ torii_root_app | default('none') | quote }} /opt/torii/env
+      register: continuum_set_root
+      changed_when: "'skipping set-root' not in continuum_set_root.stdout"
 
     - name: Wait for agent to answer /api/health
       ansible.builtin.uri:

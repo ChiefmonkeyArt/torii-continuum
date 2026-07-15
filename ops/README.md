@@ -341,6 +341,34 @@ curl -sf http://127.0.0.1:8787/api/health
 curl -sf https://chiefmonkey.art/continuum/api/health
 ```
 
+### Root-app selector correction (v0.2.44-alpha)
+
+A live v0.2.43 rerun surfaced one more exact bug: the shipped default
+`torii_root_app: launcher` made the role run `torii set-root launcher`, and the
+installed CLI/API answered **404 `{error: app_not_installed, name: launcher}`** —
+so the whole cutover rolled back. The Torii Suite launcher that owns `/` is **not
+a registered app**; the CLI represents it as the sentinel **`none`**. (The correct
+manual rerun is `-e torii_root_app=none`; the rollback itself worked.)
+
+v0.2.44-alpha fixes this permanently:
+
+- `group_vars/all.yml.example` now defaults to **`torii_root_app: "none"`** (launcher
+  at root), with a comment that a registered app name is only for deliberate use
+  and that Continuum-as-root is discouraged.
+- The role no longer calls `set-root` raw. It goes through
+  `continuum-adopt.sh set-root-safe`, which **normalizes** legacy/empty/`launcher`
+  (and synonyms `torii`/`base`/`root`/`home`/`homepage`/`default`) to `none`, sources
+  the admin token from `/opt/torii/env` silently, **skips** the call when the root
+  already matches (`torii get-root`), and returns 0 for the default so a normal
+  install can never trip the rescue rollback. An explicit **registered** app name
+  still passes through unchanged; pointing the root at `continuum` emits a
+  discouraged-choice warning but is honoured when set deliberately.
+- **Continuum is never made the root by its own installer** — the launcher keeps `/`.
+
+No override is needed anymore for a default install; `set-root none` is idempotent.
+The `continuum-adopt` test suite grew to **219** assertions, including a mock CLI
+that reproduces the exact live 404 and proves `launcher` normalizes to `none`.
+
 ---
 
 ## Standalone agent install (`install-agent.sh`)
