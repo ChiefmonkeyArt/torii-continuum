@@ -307,6 +307,82 @@ config_drift() {
   if [ "$ha" = "$hb" ]; then echo "same"; else echo "differ"; fi
 }
 
+# ── deploy_webroot <src_dist> <webroot> <stage> <backup> ────────────────────────
+#   Publishes the built static SPA to a PUBLIC webroot that nginx (www-data) can
+#   traverse, WITHOUT exposing the private app/agent source or encrypted state.
+#   nginx cannot descend into /home/<user> (0750 home + the unit's ProtectHome),
+#   so aliasing the SPA out of the private app dir returns HTTP 500 — this copies
+#   ONLY the static bundle out to a world-traversable location.
+#
+#   Transactional: the bundle is copied into a clean <stage> dir (perms normalised
+#   to dirs 0755 / files 0644, owned root:root when running as root), then the live
+#   <webroot> — if present — is MOVED to <backup> (never deleted) and <stage> is
+#   atomically renamed into place. Refuses obviously dangerous targets. Idempotent
+#   enough to re-run: each run stages fresh and keeps the prior tree as backup.
+deploy_webroot() {
+  local src="$1" webroot="$2" stage="$3" backup="$4"
+  [ -n "$src" ] && [ -n "$webroot" ] && [ -n "$stage" ] && [ -n "$backup" ] \
+    || { echo "deploy_webroot: missing args" >&2; return 2; }
+  [ -d "$src" ] || { echo "deploy_webroot: source dist $src missing" >&2; return 1; }
+  local t
+  for t in "$webroot" "$stage"; do
+    case "$t" in
+      /|""|/var|/var/www|/home|/root|/opt|/opt/torii|/usr|/etc)
+        echo "deploy_webroot: refusing unsafe target '$t'" >&2; return 2 ;;
+    esac
+  done
+
+  rm -rf -- "$stage" 2>/dev/null || { echo "deploy_webroot: cannot clear stage $stage" >&2; return 1; }
+  mkdir -p "$stage" 2>/dev/null || { echo "deploy_webroot: cannot create stage $stage" >&2; return 1; }
+  # Copy CONTENTS of the dist dir (not the dir itself) into the stage.
+  cp -a "${src}/." "${stage}/" 2>/dev/null \
+    || { echo "deploy_webroot: cannot copy $src -> $stage" >&2; return 1; }
+
+  find "$stage" -type d -exec chmod 0755 {} + 2>/dev/null \
+    || { echo "deploy_webroot: cannot chmod dirs" >&2; return 1; }
+  find "$stage" -type f -exec chmod 0644 {} + 2>/dev/null \
+    || { echo "deploy_webroot: cannot chmod files" >&2; return 1; }
+
+  if [ "$(id -u)" = "0" ]; then
+    chown -R root:root "$stage" 2>/dev/null \
+      || { echo "deploy_webroot: chown root:root failed" >&2; return 1; }
+    echo "deploy_webroot: chowned $stage -> root:root"
+  else
+    echo "deploy_webroot: chown skipped (uid=$(id -u))"
+  fi
+
+  if [ -e "$webroot" ]; then
+    [ -e "$backup" ] && { echo "deploy_webroot: backup $backup already exists" >&2; return 1; }
+    mv -- "$webroot" "$backup" 2>/dev/null \
+      || { echo "deploy_webroot: cannot back up $webroot -> $backup" >&2; return 1; }
+    echo "deploy_webroot: backed up $webroot -> $backup"
+  fi
+  mv -- "$stage" "$webroot" 2>/dev/null \
+    || { echo "deploy_webroot: cannot promote $stage -> $webroot" >&2; return 1; }
+  echo "deploy_webroot: ok $webroot"
+  return 0
+}
+
+# ── rollback_webroot <webroot> <backup> ─────────────────────────────────────────
+#   Undo a webroot promotion: discard the just-promoted tree and restore the prior
+#   webroot from its backup. Used by the role's rescue path when a cutover fails
+#   after the static swap. Requires the backup to exist (that is the state to
+#   restore); refuses otherwise so it never invents an empty webroot.
+rollback_webroot() {
+  local webroot="$1" backup="$2"
+  [ -n "$webroot" ] && [ -n "$backup" ] || { echo "rollback_webroot: missing args" >&2; return 2; }
+  [ -d "$backup" ] || { echo "rollback_webroot: no backup at $backup (nothing to restore)" >&2; return 1; }
+  case "$webroot" in
+    /|""|/var|/var/www|/home|/root|/opt|/opt/torii|/usr|/etc)
+      echo "rollback_webroot: refusing unsafe target '$webroot'" >&2; return 2 ;;
+  esac
+  rm -rf -- "$webroot" 2>/dev/null || { echo "rollback_webroot: cannot remove $webroot" >&2; return 1; }
+  mv -- "$backup" "$webroot" 2>/dev/null \
+    || { echo "rollback_webroot: cannot restore $backup -> $webroot" >&2; return 1; }
+  echo "rollback_webroot: restored $webroot from $backup"
+  return 0
+}
+
 # ── CLI dispatcher (only when executed, not when sourced) ───────────────────────
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   set -euo pipefail
@@ -321,8 +397,10 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     rollback)        rollback_release "$@" ;;
     config-action)   config_action "$@" ;;
     config-drift)    config_drift "$@" ;;
+    deploy-webroot)  deploy_webroot "$@" ;;
+    rollback-webroot) rollback_webroot "$@" ;;
     *)
-      echo "usage: continuum-adopt.sh {detect|authoritative|backup|migrate|stage-reset|promote|rollback|config-action|config-drift} ..." >&2
+      echo "usage: continuum-adopt.sh {detect|authoritative|backup|migrate|stage-reset|promote|rollback|config-action|config-drift|deploy-webroot|rollback-webroot} ..." >&2
       exit 2 ;;
   esac
 fi

@@ -9,6 +9,22 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.43-alpha — OPS-HARDENING: encode three live-discovered cutover corrections
+
+Ops-only release (no app/agent code paths changed; onboarding preview stays **v0.1.20-preview**). The v0.2.42-alpha cutover succeeded manually on the live box, but three environment realities had to be worked around by hand. This release encodes all three permanently so a clean re-run needs no manual steps.
+
+**1. Torii CLI `register` uses flags, not positionals.** The installed CLI is `torii register <name> [--display …] [--desc …] [--version …]`; the old positional form failed live with `unknown flag: Continuum`. The role now calls `torii register {{ continuum_register_name }} --display … --desc … --version <bare-semver>`, deriving the bare version from `continuum_version` via `regex_replace('^v','')`. New `continuum_register_name` / `_display` / `_desc` defaults.
+
+**2. `MemoryDenyWriteExecute` must be `no` for Node 22.** V8 JITs with W^X memory; `MemoryDenyWriteExecute=yes` makes the kernel refuse the mprotect and V8 aborts on startup (fatal `SetPermissions` / errno 12 / `SIGTRAP`). The rendered `continuum-agent.service.j2` now sets `MemoryDenyWriteExecute=no` with an inline rationale, retaining every other compatible directive (`NoNewPrivileges`, the `Protect*` set, `RestrictNamespaces`, `LockPersonality`, empty `CapabilityBoundingSet`). The role runs a **Node V8 JIT smoke test** under the rendered MDWE value (transient `systemd-run` scope) before starting the real service, so a reintroduced `=yes` fails fast instead of crash-looping.
+
+**3. nginx cannot traverse `/home/continuum`.** The `0750` home + the unit's `ProtectHome` mean www-data cannot descend into it, so aliasing the SPA out of the private app dir returned HTTP 500. The build is now published to a **public webroot `/var/www/torii/continuum`** (root-owned, dirs `0755` / files `0644`) via `deploy_webroot` — an atomic staged swap that keeps the prior webroot as a timestamped backup. Only the static bundle is copied out; the app/agent **source + encrypted state stay private** under `/home/continuum/app`. The nginx templates alias the public webroot and serve assets from a clean prefix `location` (no regex-alias, no `/home`).
+
+**Transactionality:** the cutover `rescue` now also rolls the webroot back from its backup (`rollback_webroot`) and reloads nginx on failure. Re-running against the now-live v0.2.42 Ansible layout is idempotent — re-detects `existing-ansible`, **preserves** config (never rotates `session_secret`, never touches the funded key), re-publishes the webroot keeping the prior bundle as backup.
+
+**Changes:** `ops/lib/continuum-adopt.sh` (+`deploy_webroot`, +`rollback_webroot`, +CLI cases); `roles/continuum/defaults/main.yml` (+webroot + register vars); `roles/continuum/templates/continuum-agent.service.j2` (MDWE=no + rationale); `roles/continuum/templates/continuum.nginx.conf.j2` + `ops/nginx/continuum.conf.template` (public webroot, prefix assets location); `roles/continuum/tasks/main.yml` (flag register, webroot deploy, V8 smoke, webroot rollback in rescue); `ops/test/continuum-adopt.test.sh` (**117 → 188** assertions); `ops/README.md` (new v0.2.43 subsection + upgrade command). Versions bumped root + agent `package.json` + both lockfiles `0.2.42-alpha → 0.2.43-alpha`.
+
+**Tests / build / audit (all green):** `continuum-adopt.test.sh` **188/188**; installer-preflight/shared-parent/signal + nginx-install regressions; `bash -n` clean on all `ops/*.sh` + `ops/lib/*.sh`; role YAML parses; agent `node --test`; root `npm run build`; `vitest run`; `npm audit --omit=dev` 0 vulns (root + agent).
+
 ## v0.2.42-alpha — OPS-HARDENING: transactional adoption/cutover + partial-adoption recovery
 
 Ops-only release (no app/agent code paths changed; onboarding preview stays **v0.1.20-preview**). Fixes the live v0.2.41-alpha adoption failure: the role migrated live state *into* `/home/continuum/app/agent` and only *then* ran `ansible.builtin.git` into `/home/continuum/app` — cloning into a directory already populated with runtime state. That aborted, leaving the box with the **original standalone layout intact** AND a **partial, non-git `/home/continuum/app`** holding a copy of the state. The role now re-architects adoption to be transactional and idempotently recoverable from exactly that state.

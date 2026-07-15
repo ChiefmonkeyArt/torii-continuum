@@ -532,6 +532,276 @@ grep -q 'continuum_quarantine_dir:' "$DEFAULTS" \
 grep -q 'continuum_failed_release_dir:' "$DEFAULTS" \
   && ok "defaults: failed-release dir defined" || bad "defaults: no failed-release dir"
 
+# ── 12. deploy_webroot (public static publish; atomic + backup-preserving) ────
+# nginx (www-data) cannot traverse a 0750 home, so the SPA must be published to a
+# world-traversable public webroot owned by root (dirs 0755 / files 0644). Only the
+# built static bundle is copied out; source + encrypted state stay private.
+dw_src="${WORK}/dw/dist"; dw_root="${WORK}/dw/webroot"
+dw_stage="${WORK}/dw/webroot.staging"; dw_bak="${WORK}/dw/webroot.backup"
+mkdir -p "$dw_src/assets"
+echo '<!doctype html>' > "$dw_src/index.html"
+echo 'body{}' > "$dw_src/assets/app.css"
+deploy_webroot "$dw_src" "$dw_root" "$dw_stage" "$dw_bak" >/dev/null 2>&1 \
+  && ok "deploy_webroot: returns 0 on a clean publish" || bad "deploy_webroot: non-zero"
+[[ -f "$dw_root/index.html" && -f "$dw_root/assets/app.css" ]] \
+  && ok "deploy_webroot: SPA bundle published into the webroot" || bad "deploy_webroot: bundle missing"
+[[ ! -d "$dw_stage" ]] \
+  && ok "deploy_webroot: staging consumed by the atomic swap" || bad "deploy_webroot: staging residue"
+# perms: dirs 0755 (world-traversable), files 0644 (world-readable) — nginx can serve
+[[ "$(stat -c '%a' "$dw_root")" == "755" ]] \
+  && ok "deploy_webroot: webroot dir is 0755 (nginx-traversable)" || bad "deploy_webroot: dir not 0755"
+[[ "$(stat -c '%a' "$dw_root/assets")" == "755" ]] \
+  && ok "deploy_webroot: asset dir is 0755" || bad "deploy_webroot: asset dir not 0755"
+[[ "$(stat -c '%a' "$dw_root/index.html")" == "644" ]] \
+  && ok "deploy_webroot: index.html is 0644 (world-readable)" || bad "deploy_webroot: file not 0644"
+[[ "$(stat -c '%a' "$dw_root/assets/app.css")" == "644" ]] \
+  && ok "deploy_webroot: asset file is 0644" || bad "deploy_webroot: asset not 0644"
+
+# re-publish: prior webroot is MOVED to backup (never deleted), new bundle swapped in
+echo '<!doctype html><!--v2-->' > "$dw_src/index.html"
+deploy_webroot "$dw_src" "$dw_root" "${WORK}/dw/webroot.staging2" "${WORK}/dw/webroot.backup2" >/dev/null 2>&1 \
+  && ok "deploy_webroot: re-publish returns 0" || bad "deploy_webroot: re-publish non-zero"
+grep -q 'v2' "$dw_root/index.html" \
+  && ok "deploy_webroot: new bundle is live after re-publish" || bad "deploy_webroot: new bundle not live"
+grep -q '<!doctype html>' "${WORK}/dw/webroot.backup2/index.html" \
+  && ok "deploy_webroot: prior webroot preserved as backup (never deleted)" \
+  || bad "deploy_webroot: prior webroot lost"
+# refuses to clobber an existing backup
+if deploy_webroot "$dw_src" "$dw_root" "${WORK}/dw/s3" "${WORK}/dw/webroot.backup2" >/dev/null 2>&1; then
+  bad "deploy_webroot: did NOT refuse to overwrite an existing backup"
+else
+  ok "deploy_webroot: refuses when the backup dir already exists"
+fi
+# refuses dangerous webroot/stage targets
+for danger in / /var /var/www /home /root /opt /opt/torii /usr /etc; do
+  if deploy_webroot "$dw_src" "$danger" "${WORK}/dw/sx" "${WORK}/dw/bx" >/dev/null 2>&1; then
+    bad "deploy_webroot: did NOT refuse dangerous webroot '$danger'"
+  else
+    ok "deploy_webroot: refuses dangerous webroot '$danger'"
+  fi
+done
+# missing source dist => non-zero (nothing published)
+if deploy_webroot "${WORK}/dw/nope" "${WORK}/dw/wr2" "${WORK}/dw/s4" "${WORK}/dw/b4" >/dev/null 2>&1; then
+  bad "deploy_webroot: succeeded with a missing source dist"
+else
+  ok "deploy_webroot: non-zero when the source dist is absent"
+fi
+
+# ── 12b. rollback_webroot (restore prior webroot from backup) ─────────────────
+rw_root="${WORK}/rw/webroot"; rw_bak="${WORK}/rw/webroot.backup"
+mkdir -p "$rw_root" "$rw_bak"
+echo "FAILED-NEW-SPA" > "$rw_root/index.html"
+echo "PRIOR-GOOD-SPA" > "$rw_bak/index.html"
+rollback_webroot "$rw_root" "$rw_bak" >/dev/null 2>&1 \
+  && ok "rollback_webroot: returns 0 when a backup exists" || bad "rollback_webroot: non-zero"
+grep -q "PRIOR-GOOD-SPA" "$rw_root/index.html" \
+  && ok "rollback_webroot: prior webroot restored from backup" || bad "rollback_webroot: not restored"
+[[ ! -e "$rw_bak" ]] \
+  && ok "rollback_webroot: backup consumed by the restore" || bad "rollback_webroot: backup residue"
+# no backup => non-zero (nothing to restore; never invents an empty webroot)
+if rollback_webroot "${WORK}/rw/wr2" "${WORK}/rw/missing" >/dev/null 2>&1; then
+  bad "rollback_webroot: succeeded with no backup to restore"
+else
+  ok "rollback_webroot: non-zero when there is no backup to restore"
+fi
+# refuses dangerous webroot target even with a backup present
+mkdir -p "${WORK}/rw/bak3"
+if rollback_webroot /var/www "${WORK}/rw/bak3" >/dev/null 2>&1; then
+  bad "rollback_webroot: did NOT refuse a dangerous webroot target"
+else
+  ok "rollback_webroot: refuses a dangerous webroot target"
+fi
+
+# ── 13. Torii CLI register parser contract (flags, not positionals) ───────────
+# The installed CLI is `torii register <name> [--display ..] [--desc ..] [--version ..]`.
+# The old positional form failed live with `unknown flag: Continuum`. A mock parser
+# pins that contract so the role can never regress to positional args.
+mock_torii="${WORK}/bin/torii"
+mkdir -p "${WORK}/bin"
+cat > "$mock_torii" <<'MOCK'
+#!/usr/bin/env bash
+# Minimal stand-in for the real torii CLI register subcommand parser.
+[ "$1" = "register" ] || { echo "unknown command: $1" >&2; exit 2; }
+shift
+name=""
+[ $# -gt 0 ] && case "$1" in --*) : ;; *) name="$1"; shift ;; esac
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --display) shift; disp="$1" ;;
+    --desc)    shift; desc="$1" ;;
+    --version) shift; ver="$1" ;;
+    --*)       echo "unknown flag: ${1#--}" >&2; exit 2 ;;
+    *)         echo "unknown flag: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+[ -n "$name" ] || { echo "missing name" >&2; exit 2; }
+echo "registered name=$name display=${disp:-} desc=${desc:-} version=${ver:-}"
+MOCK
+chmod +x "$mock_torii"
+# The OLD positional invocation must fail exactly as observed live.
+if perr="$("$mock_torii" register continuum "Continuum" "/continuum" "App builder + agent" 2>&1)"; then
+  bad "register contract: positional form unexpectedly succeeded"
+else
+  echo "$perr" | grep -q "unknown flag: Continuum" \
+    && ok "register contract: positional form fails with 'unknown flag: Continuum' (live bug reproduced)" \
+    || bad "register contract: positional form failed but not with the expected message"
+fi
+# The NEW flag invocation the role uses must succeed and carry the bare version.
+if pout="$("$mock_torii" register continuum --display "Continuum" --desc "App builder + agent" --version "0.2.43-alpha" 2>&1)"; then
+  echo "$pout" | grep -q "name=continuum" && echo "$pout" | grep -q "version=0.2.43-alpha" \
+    && ok "register contract: flag form succeeds with bare --version" \
+    || bad "register contract: flag form succeeded but output wrong ($pout)"
+else
+  bad "register contract: flag form failed ($pout)"
+fi
+
+# ── 13b. Anti-drift: role register task uses flags + bare version ─────────────
+grep -q 'torii register {{ continuum_register_name | quote }}' "$ROLE" \
+  && ok "role: register uses the CLI name arg from a var" || bad "role: register name not var-driven"
+grep -q -- '--display {{ continuum_register_display | quote }}' "$ROLE" \
+  && ok "role: register passes --display flag" || bad "role: register missing --display flag"
+grep -q -- '--desc {{ continuum_register_desc | quote }}' "$ROLE" \
+  && ok "role: register passes --desc flag" || bad "role: register missing --desc flag"
+grep -q "regex_replace('\^v', '')" "$ROLE" \
+  && ok "role: register --version strips the leading v (bare semver)" \
+  || bad "role: register version not stripped to bare semver"
+# the OLD positional form must be gone (ignore commented-out example lines)
+grep -v '^[[:space:]]*#' "$ROLE" | grep -q 'torii register continuum "Continuum"' \
+  && bad "role: STILL uses the broken positional register form" \
+  || ok "role: no positional register form remains"
+
+# ── 14. systemd unit: Node-compatible MemoryDenyWriteExecute + hardening ──────
+UNIT="${REPO_ROOT}/ops/ansible/roles/continuum/templates/continuum-agent.service.j2"
+grep -q '^MemoryDenyWriteExecute=no$' "$UNIT" \
+  && ok "unit: MemoryDenyWriteExecute=no (Node 22 V8 JIT can map W^X)" \
+  || bad "unit: MemoryDenyWriteExecute is not 'no'"
+grep -Eq '^MemoryDenyWriteExecute=(yes|true)$' "$UNIT" \
+  && bad "unit: MemoryDenyWriteExecute is yes/true (would SIGTRAP Node on startup)" \
+  || ok "unit: MemoryDenyWriteExecute is never yes/true"
+grep -q 'SetPermissions' "$UNIT" \
+  && ok "unit: documents WHY MDWE must stay off (V8 SetPermissions failure)" \
+  || bad "unit: no rationale for MDWE=no"
+# maximal compatible hardening retained
+grep -q '^NoNewPrivileges=true$' "$UNIT" \
+  && ok "unit: retains NoNewPrivileges=true" || bad "unit: lost NoNewPrivileges"
+for d in ProtectKernelTunables ProtectKernelModules ProtectControlGroups RestrictNamespaces LockPersonality; do
+  grep -q "^${d}=true$" "$UNIT" \
+    && ok "unit: retains ${d}=true" || bad "unit: lost ${d}"
+done
+grep -q '^CapabilityBoundingSet=$' "$UNIT" \
+  && ok "unit: retains empty CapabilityBoundingSet (drops all caps)" || bad "unit: lost cap-bounding drop"
+
+# ── 14b. Node V8 JIT smoke under the rendered MDWE constraint (if node present) ─
+# The exact failure was V8 aborting on startup under MemoryDenyWriteExecute=yes.
+# Prove a real Node here can compile a WASM module (exercises the JIT / W^X path).
+if command -v node >/dev/null 2>&1; then
+  if node -e "new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0])); process.exit(0)" >/dev/null 2>&1; then
+    ok "v8 smoke: Node compiles a WASM module (JIT path works)"
+  else
+    bad "v8 smoke: Node failed to compile a trivial WASM module"
+  fi
+  # If systemd-run is available, prove the *rendered* MDWE value does not break Node.
+  if command -v systemd-run >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
+    mdwe="$(sed -n -E 's/^MemoryDenyWriteExecute=(.*)$/\1/p' "$UNIT" | head -n1)"
+    if systemd-run --quiet --pipe --wait --property=MemoryDenyWriteExecute="${mdwe:-no}" \
+         "$(command -v node)" -e "new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0]))" >/dev/null 2>&1; then
+      ok "v8 smoke: Node starts under the rendered MemoryDenyWriteExecute=${mdwe}"
+    else
+      bad "v8 smoke: Node failed under rendered MDWE=${mdwe} (regression!)"
+    fi
+  else
+    ok "v8 smoke: systemd-run constraint check skipped (needs root+systemd-run)"
+  fi
+else
+  ok "v8 smoke: skipped (node not installed in sandbox)"
+fi
+
+# ── 14c. Anti-drift: role smoke-tests Node under the rendered MDWE constraint ──
+grep -q 'Smoke-test Node V8 JIT' "$ROLE" \
+  && ok "role: smoke-tests Node V8 under the unit constraint before starting the service" \
+  || bad "role: no Node V8 smoke test"
+grep -q 'systemd-run' "$ROLE" \
+  && ok "role: V8 smoke runs under a transient systemd scope" || bad "role: V8 smoke not under systemd-run"
+
+# ── 15. nginx templates: public webroot, no home traversal, valid subpath ─────
+NGINX_J2="${REPO_ROOT}/ops/ansible/roles/continuum/templates/continuum.nginx.conf.j2"
+NGINX_TPL="${REPO_ROOT}/ops/nginx/continuum.conf.template"
+# the rendered fragment must alias the PUBLIC webroot, never a /home path
+grep -q 'alias {{ continuum_webroot }}/;' "$NGINX_J2" \
+  && ok "nginx.j2: SPA aliases the public webroot var" || bad "nginx.j2: SPA not aliased to webroot"
+# only DIRECTIVE lines matter — comments explaining the rationale may say /home
+grep -v '^[[:space:]]*#' "$NGINX_J2" | grep -q '/home/' \
+  && bad "nginx.j2: STILL references /home in a directive (nginx cannot traverse it -> HTTP 500)" \
+  || ok "nginx.j2: no /home traversal in any served directive"
+# assets served via a prefix location (not a fragile regex alias)
+grep -q 'location {{ continuum_mount_path }}/assets/ {' "$NGINX_J2" \
+  && ok "nginx.j2: assets via a prefix location" || bad "nginx.j2: no assets prefix location"
+grep -q 'alias {{ continuum_webroot }}/assets/;' "$NGINX_J2" \
+  && ok "nginx.j2: assets alias the public webroot" || bad "nginx.j2: assets not aliased to webroot"
+# SPA fallback + API proxy still correct on the subpath
+grep -q 'try_files $uri $uri/ {{ continuum_mount_path }}/index.html;' "$NGINX_J2" \
+  && ok "nginx.j2: subpath SPA fallback to index.html preserved" || bad "nginx.j2: SPA fallback broken"
+grep -q 'proxy_pass http://{{ continuum_agent_host }}:{{ continuum_agent_port }}/api/;' "$NGINX_J2" \
+  && ok "nginx.j2: API reverse-proxy to the agent preserved" || bad "nginx.j2: API proxy broken"
+# the annotated source template mirrors the public-webroot pattern
+grep -q 'location /continuum/assets/ {' "$NGINX_TPL" \
+  && ok "nginx.tpl: assets via a prefix location" || bad "nginx.tpl: no assets prefix location"
+grep -q '@CONTINUUM_DIST@/assets/;' "$NGINX_TPL" \
+  && ok "nginx.tpl: assets alias the dist placeholder" || bad "nginx.tpl: assets not aliased"
+grep -Eq 'location ~\* /continuum/assets' "$NGINX_TPL" \
+  && bad "nginx.tpl: STILL uses the fragile regex-alias for assets" \
+  || ok "nginx.tpl: fragile regex-alias for assets removed"
+
+# ── 16. Anti-drift: role publishes the static webroot transactionally ─────────
+grep -q 'continuum_adopt_lib }} deploy-webroot' "$ROLE" \
+  && ok "role: publishes the SPA via deploy-webroot" || bad "role: no deploy-webroot call"
+grep -q 'continuum_adopt_lib }} rollback-webroot' "$ROLE" \
+  && ok "role: can roll the webroot back on failure" || bad "role: no rollback-webroot call"
+grep -q 'continuum_webroot_swapped' "$ROLE" \
+  && ok "role: tracks webroot swap to gate rescue rollback" || bad "role: no webroot swap tracking"
+grep -q 'continuum_webroot_parent' "$ROLE" \
+  && ok "role: ensures the public webroot parent exists" || bad "role: no webroot parent task"
+# webroot deploy must copy FROM the app dist, never expose the private home
+grep -q '{{ continuum_app_dir | quote }}/dist' "$ROLE" \
+  && ok "role: publishes only the built dist (private source stays home)" \
+  || bad "role: webroot deploy source not the built dist"
+
+# ── 16b. Defaults sanity (v0.2.43-alpha webroot + register vars) ──────────────
+grep -q 'continuum_webroot:' "$DEFAULTS" \
+  && ok "defaults: public webroot defined" || bad "defaults: no webroot"
+grep -q 'continuum_webroot_parent: "/var/www/torii"' "$DEFAULTS" \
+  && ok "defaults: webroot parent is a public /var/www path" || bad "defaults: webroot parent wrong"
+grep -q 'continuum_webroot_backup:' "$DEFAULTS" \
+  && ok "defaults: webroot backup (rollback) defined" || bad "defaults: no webroot backup"
+grep -q 'continuum_register_display: "Continuum"' "$DEFAULTS" \
+  && ok "defaults: register display name defined" || bad "defaults: no register display"
+
+# ── 17. Existing-ansible upgrade is idempotent (v0.2.42 layout, no re-adopt) ──
+# After a successful v0.2.42 cutover the box is a git-backed Ansible install. A
+# re-run must detect existing-ansible (NOT re-adopt), preserve config (no rotation),
+# and the webroot re-publish must keep the prior webroot as a backup.
+up_app="${WORK}/upgrade/app"; up_a="${WORK}/upgrade/app/agent"; up_s="${WORK}/upgrade/standalone"
+mkdir -p "$up_app/.git" "$up_a" "$up_s"       # git-backed app, standalone gone
+make_standalone "$up_a"                         # agent carries the live funded state
+[[ "$(layout_detect "$up_app" "$up_a" "$up_s")" == "mode=existing-ansible" ]] \
+  && ok "upgrade: v0.2.42 git-backed layout re-detects as existing-ansible (no re-adopt)" \
+  || bad "upgrade: re-detected wrong mode"
+[[ "$(config_action existing-ansible false)" == "preserve" ]] \
+  && ok "upgrade: config preserved on re-run (funded key untouched)" || bad "upgrade: config not preserved"
+[[ "$(authoritative_state_dir existing-ansible "$up_a" "$up_s")" == "$up_a" ]] \
+  && ok "upgrade: authoritative state stays the live agent dir" || bad "upgrade: wrong authoritative on upgrade"
+# webroot re-publish on upgrade keeps the prior bundle as a backup
+up_src="${WORK}/upgrade/dist"; up_wr="${WORK}/upgrade/webroot"
+mkdir -p "$up_src"; echo "v43" > "$up_src/index.html"
+mkdir -p "$up_wr"; echo "v42" > "$up_wr/index.html"     # prior live webroot
+deploy_webroot "$up_src" "$up_wr" "${WORK}/upgrade/stage" "${WORK}/upgrade/backup" >/dev/null 2>&1 \
+  && ok "upgrade: webroot re-publish returns 0" || bad "upgrade: webroot re-publish non-zero"
+grep -q 'v43' "$up_wr/index.html" \
+  && ok "upgrade: new SPA live after re-publish" || bad "upgrade: new SPA not live"
+grep -q 'v42' "${WORK}/upgrade/backup/index.html" \
+  && ok "upgrade: prior SPA kept as rollback backup" || bad "upgrade: prior SPA not backed up"
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 printf '\n[continuum-adopt.test] pass=%d fail=%d\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || exit 1
