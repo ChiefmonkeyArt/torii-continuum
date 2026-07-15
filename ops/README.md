@@ -120,6 +120,59 @@ ansible-playbook -i inventory.yml site.yml --ask-vault-pass --tags ollama,contin
 
 ---
 
+## Adopting a standalone install with Ansible (v0.2.40-alpha)
+
+If a box already runs the **standalone** agent (`install-agent.sh` →
+`/opt/torii/continuum-agent`, unit `torii-continuum-agent.service`, port 8787)
+and you now want Ansible to manage it, the continuum role adopts it **safely and
+without ever asking you to display, copy, or paste `session_secret`,
+`admin_npub`, or any key**. You do not touch secrets at all.
+
+What the role does, in order, on `--tags continuum`:
+
+1. **Detects** the layout (`fresh` | `adopt-standalone` | `existing-ansible`)
+   via `ops/lib/continuum-adopt.sh`. An already-populated Ansible layout always
+   wins — adoption never runs on top of a migrated tree.
+2. **Backs up** `config.yaml` + `memory/` + `ciphertexts/` + `pending/` from
+   both layouts to a **timestamped root-only `0700`** dir under
+   `/root/continuum-backup-<UTC>/` *before any mutation*. This is **fail-closed**:
+   if the backup can't be written, the play aborts and nothing is changed.
+3. On **adopt-standalone**: stops + disables `torii-continuum-agent.service`
+   (freeing port 8787 so the two units never double-bind), then **migrates the
+   existing `config.yaml` and encrypted state verbatim** into
+   `/home/continuum/app/agent/`. The live `session_secret` is copied
+   byte-for-byte — never regenerated — so the funded Routstr key stays decryptable.
+4. **Never overwrites** an existing `config.yaml` on a routine deploy. A fresh
+   config is rendered from vault **only** on a genuinely fresh install. If your
+   vault `session_secret` differs from the live one, the role **preserves the
+   live config** and prints a safe `differ` notice that reveals **no value**.
+5. Wraps the service + nginx cutover in a transactional block; on failure it
+   prints the backup path and an exact recovery command instead of leaving a
+   half-migrated box.
+
+Run it exactly like a normal deploy — no extra flags, no secret handling:
+
+```bash
+cd torii-continuum/ops/ansible
+ansible-playbook -i inventory.yml site.yml --ask-vault-pass --tags continuum
+```
+
+**Deliberate secret rotation (rare, dangerous).** Rotating `session_secret`
+re-encrypts nothing and *orphans an already-funded Routstr key*. It is therefore
+OFF by default. Only when you truly intend it, opt in per-run:
+
+```bash
+ansible-playbook -i inventory.yml site.yml --ask-vault-pass --tags continuum \
+  -e continuum_allow_config_rotation=true
+```
+
+Adoption tunables live in `roles/continuum/defaults/main.yml`
+(`continuum_standalone_dir`, `continuum_standalone_service`,
+`continuum_backup_root`, `continuum_allow_config_rotation`) and rarely need
+changing. The logic is unit-tested in `ops/test/continuum-adopt.test.sh`.
+
+---
+
 ## Standalone agent install (`install-agent.sh`)
 
 The Ansible playbook above provisions a whole box. If you already have a

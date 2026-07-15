@@ -9,6 +9,59 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.40-alpha — OPS-HARDENING: safe standalone→Ansible adoption, no config clobber, fail-closed backups
+
+Ops-only release (no app/agent code paths changed; onboarding preview stays
+**v0.1.20-preview**). Fixes the dangerous deployment mismatch found while
+preparing the live v0.2.39-alpha rollout: the continuum Ansible role cloned to
+`/home/continuum/app` and **re-rendered `config.yaml` / `session_secret`
+unconditionally on every run**, while the live standalone installer uses
+`/opt/torii/continuum-agent` + unit `torii-continuum-agent.service`. Running the
+old role over a live standalone box would have overwritten the session_secret
+(orphaning the funded Routstr key, which is encrypted at rest under a key derived
+from that secret) and/or double-bound port 8787.
+
+**What changed.** The risky detect/backup/migrate/config-decision logic is
+factored into a sourceable, unit-tested shell lib
+`ops/lib/continuum-adopt.sh` (mirrors the `node-version.sh` "no side effects on
+source" convention), and the role `roles/continuum/tasks/main.yml` is now a thin
+guarded orchestrator that calls it:
+
+- **Layout detection** — `fresh | adopt-standalone | existing-ansible`. An
+  already-populated Ansible layout always wins, so adoption never clobbers a
+  migrated tree.
+- **Fail-closed backup before any mutation** — `config.yaml` + `memory/` +
+  `ciphertexts/` + `pending/` from both layouts are copied to a timestamped
+  root-only `0700` dir `/root/continuum-backup-<UTC>/`. If the backup can't be
+  written, the play aborts and nothing is touched.
+- **Standalone adoption** — stops + disables `torii-continuum-agent.service`
+  (freeing 8787), then migrates the existing config + encrypted state **verbatim**
+  into the Ansible layout. `session_secret` is copied byte-for-byte, never
+  regenerated, so the funded key stays decryptable. Migration is idempotent
+  (never overwrites an artefact already present at the destination).
+- **No routine config clobber** — config.yaml is rendered from vault **only** on
+  a genuinely fresh install, or when the operator explicitly opts in with
+  `-e continuum_allow_config_rotation=true` (OFF by default). On a preserve, a
+  one-way `session_secret` drift check reports only `same`/`differ` and prints
+  **no secret value**; a `differ` result surfaces a safe "rotation pending"
+  notice rather than silently rotating.
+- **Untracked encrypted state can't be deleted by the checkout/build** — the git
+  module's `force:true` resets only tracked files; `memory/`, `ciphertexts/`,
+  `pending/`, `config.yaml` are gitignored, so a re-checkout leaves them intact.
+- **Transactional cutover** — service + nginx + launcher registration + health
+  probe run in a `block`; on failure a `rescue` prints the backup path and an
+  exact recovery command (restore-from-backup, or re-enable the standalone unit).
+
+New `roles/continuum/defaults/main.yml` holds the safe non-secret tunables
+(`continuum_standalone_dir`, `continuum_standalone_service`,
+`continuum_backup_root`, `continuum_allow_config_rotation: false`). Secret-touching
+tasks carry `no_log: true`. All logic is pinned by `ops/test/continuum-adopt.test.sh`
+(44 hermetic assertions: detection precedence, fail-closed backup, verbatim +
+idempotent migration, config-action matrix, no-secret drift, permissions, and
+anti-drift greps that the role wires the lib in the safe order). Docs: new
+"Adopting a standalone install with Ansible" runbook in `ops/README.md`. Operator
+handles **no secrets** at any point.
+
 ## v0.2.39-alpha — ONBOARDING-GATING + APP-MOUNT: real claimed-state Step-3 gating, dup-pay race closed, completion lands on the actual app dashboard
 
 Onboarding preview bumped to **v0.1.20-preview** (`preview-assets/onboarding-v0.1.20/`).

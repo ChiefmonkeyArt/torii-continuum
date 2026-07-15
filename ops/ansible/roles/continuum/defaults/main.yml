@@ -1,0 +1,28 @@
+---
+# Role: continuum — default variables for standalone→Ansible adoption.
+#
+# These are SAFE, non-secret defaults. Domain/version/user come from
+# group_vars/all.yml; the values below only govern the adoption + backup +
+# config-preservation behaviour and rarely need overriding.
+
+# Where a prior standalone install (ops/install-agent.sh) lives, and the unit it
+# runs under. If this layout is detected and the Ansible layout is not yet
+# populated, the role adopts it: stop/disable this unit, back up + migrate its
+# state (config + encrypted key) into the Ansible layout VERBATIM.
+continuum_standalone_dir: "/opt/torii/continuum-agent"
+continuum_standalone_service: "torii-continuum-agent"
+
+# The systemd unit the Ansible layout runs under.
+continuum_service: "continuum-agent"
+
+# Root-only directory under which timestamped pre-mutation backups are written.
+# Each run creates <root>/continuum-backup-<UTC-timestamp>/ (mode 0700).
+continuum_backup_root: "/root"
+
+# HARD SAFETY GATE. When false (the default), the role will NEVER overwrite an
+# existing config.yaml or change session_secret / admin_npub / cashu mints. It
+# renders a fresh config ONLY on a genuinely fresh install. Set true ONLY when
+# you deliberately intend to rotate an existing secret — doing so re-encrypts
+# nothing and WILL orphan an already-funded Routstr key. Opt in per-run:
+#   ansible-playbook ... -e continuum_allow_config_rotation=true
+continuum_allow_config_rotation: false
