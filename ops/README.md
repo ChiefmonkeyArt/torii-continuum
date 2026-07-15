@@ -130,9 +130,10 @@ without ever asking you to display, copy, or paste `session_secret`,
 
 What the role does, in order, on `--tags continuum`:
 
-1. **Detects** the layout (`fresh` | `adopt-standalone` | `existing-ansible`)
-   via `ops/lib/continuum-adopt.sh`. An already-populated Ansible layout always
-   wins — adoption never runs on top of a migrated tree.
+1. **Detects** the layout (`fresh` | `adopt-standalone` | `partial-adoption` |
+   `existing-ansible`) via `ops/lib/continuum-adopt.sh`. A real git-backed Ansible
+   layout always wins — adoption never runs on top of it. A non-git app dir that
+   carries state is a `partial-adoption` to be recovered, not built on top of.
 2. **Backs up** `config.yaml` + `memory/` + `ciphertexts/` + `pending/` from
    both layouts to a **timestamped root-only `0700`** dir under
    `/root/continuum-backup-<UTC>/` *before any mutation*. This is **fail-closed**:
@@ -208,10 +209,47 @@ ansible-playbook -i inventory.yml site.yml --ask-vault-pass --tags continuum \
   -e continuum_allow_config_rotation=true
 ```
 
+### Transactional cutover + partial-adoption recovery (v0.2.42-alpha)
+
+An earlier adoption failed because it migrated live state *into*
+`/home/continuum/app/agent` and only *then* tried to `git clone` into
+`/home/continuum/app` — cloning into a directory already populated with runtime
+state. That left the box with the **original standalone layout intact** *and* a
+**partial, non-git `/home/continuum/app`** holding a copy of the state. From
+v0.2.42-alpha the role is fully transactional and recovers from exactly that
+state, idempotently:
+
+1. **Detects `partial-adoption` explicitly** — agent dir has state but the app
+   dir has no `.git` while the standalone is still present. It is never mistaken
+   for a valid Ansible install, and the **untouched standalone** remains the
+   authoritative state source (not the partial copy).
+2. **Builds in a clean staging dir** (`/home/continuum/app.staging`) — the
+   `git checkout` + `npm ci` + `vite build` all happen there while the **old unit
+   keeps serving traffic**. A clone/build failure leaves the running install
+   completely untouched.
+3. **Copies authoritative state in only after a successful build**, then stops
+   the old unit (freeing 8787 for the shortest possible window) and **atomically
+   swaps** staging into `/home/continuum/app`. Any pre-existing app dir — a valid
+   Ansible tree *or* the partial non-git tree — is **moved to a timestamped
+   `app.quarantine-<UTC>` dir, never deleted**.
+4. On **any cutover or health-check failure** the `rescue` stops the new unit,
+   rolls an existing-Ansible tree back from quarantine (or re-enables the
+   original standalone unit for adopt/partial), and prints the backup +
+   quarantine paths with an exact, **secret-free** recovery command.
+
+To recover the **current partial-adoption VPS** (original standalone still
+serving, partial non-git `/home/continuum/app` present), run the vault-free
+invocation above with `continuum_version: v0.2.42-alpha`. The role will detect
+`partial-adoption`, back up both layouts, build in staging while the standalone
+keeps running, migrate the standalone's live config + funded key verbatim, and
+atomically promote — quarantining the partial tree. Re-running after any failure
+is safe and idempotent.
+
 Adoption tunables live in `roles/continuum/defaults/main.yml`
 (`continuum_standalone_dir`, `continuum_standalone_service`,
-`continuum_backup_root`, `continuum_allow_config_rotation`) and rarely need
-changing. The logic is unit-tested in `ops/test/continuum-adopt.test.sh`.
+`continuum_backup_root`, `continuum_allow_config_rotation`,
+`continuum_release_dir`, `continuum_quarantine_dir`) and rarely need changing.
+The logic is unit-tested in `ops/test/continuum-adopt.test.sh`.
 
 ---
 

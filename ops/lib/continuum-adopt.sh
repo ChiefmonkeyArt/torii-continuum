@@ -27,6 +27,29 @@
 #   4. decide whether config.yaml may be (re)rendered at all — only on a genuinely
 #      fresh install, or when the operator has explicitly opted into rotation.
 #
+# TRANSACTIONAL ORDERING (v0.2.42-alpha)
+# --------------------------------------
+# A prior adoption failed because it migrated live state INTO /home/<user>/app/agent
+# and only THEN tried to `git clone` into /home/<user>/app — cloning into a
+# directory already populated with runtime state. That left the box with the
+# original standalone layout AND a partial, non-git /home/<user>/app holding a
+# COPY of the state. To make adoption safe and re-runnable this module now also:
+#
+#   5. detects that partial-adoption state EXPLICITLY (agent dir has state but
+#      app dir has no .git, standalone still present) — never mistaking it for a
+#      valid existing-Ansible install;
+#   6. builds every git checkout/npm/build step in a CLEAN staging/release dir
+#      that never holds authoritative state, so a clone/build can be retried or
+#      wiped without risking real state;
+#   7. copies authoritative live state into the staged release only AFTER a
+#      successful checkout+build, then atomically swaps the release into place,
+#      quarantining (never deleting) any pre-existing app dir; and
+#   8. can roll a failed promotion back to the quarantined directory.
+#
+# The standalone service is kept RUNNING through all preflight work (clone, npm,
+# build, config decisions) and is stopped only immediately before the final
+# state copy + atomic cutover, so port 8787 is freed for the shortest window.
+#
 # Every function here is one-way about secrets: session_secret / admin_npub values
 # are NEVER printed. Drift detection reports only the words "same" or "differ".
 #
@@ -42,22 +65,57 @@ readonly CONTINUUM_STANDALONE_SERVICE="torii-continuum-agent"
 # session_secret; the three dirs carry the encrypted key + wallet + drafts.
 readonly CONTINUUM_STATE_ITEMS=(config.yaml memory ciphertexts pending)
 
-# ── layout_detect <ansible_agent_dir> <standalone_dir> ──────────────────────────
+# ── layout_detect <app_dir> <agent_dir> <standalone_dir> ────────────────────────
 #   Prints exactly one of:
-#     mode=existing-ansible   the Ansible layout already has a config.yaml
-#     mode=adopt-standalone   no Ansible config, but standalone state exists
-#     mode=fresh              neither layout has state
-#   Precedence matters: an existing Ansible install always wins (we must never
-#   re-adopt on top of an already-migrated tree and clobber it).
+#     mode=existing-ansible   app_dir IS a git checkout (.git) AND agent has config
+#     mode=partial-adoption   agent dir has state but app_dir has NO .git — a
+#                             half-migrated tree from a failed adoption. NEVER
+#                             treated as a valid existing-Ansible install.
+#     mode=adopt-standalone   no Ansible-side state, but standalone state exists
+#     mode=fresh              nothing anywhere
+#   Precedence matters:
+#     * a real git-backed Ansible install wins (never re-adopt over it);
+#     * a NON-git app dir carrying state is a partial adoption to be recovered,
+#       not an install to build on top of (that was the v0.2.41 failure mode).
 layout_detect() {
-  local ansible_dir="$1" standalone_dir="$2"
-  if [ -f "${ansible_dir}/config.yaml" ]; then
+  local app_dir="$1" agent_dir="$2" standalone_dir="$3"
+  local agent_has_state=false standalone_has_state=false
+  { [ -f "${agent_dir}/config.yaml" ] || [ -d "${agent_dir}/memory" ]; } && agent_has_state=true
+  { [ -f "${standalone_dir}/config.yaml" ] || [ -d "${standalone_dir}/memory" ]; } && standalone_has_state=true
+
+  if [ -d "${app_dir}/.git" ] && [ -f "${agent_dir}/config.yaml" ]; then
     echo "mode=existing-ansible"
-  elif [ -f "${standalone_dir}/config.yaml" ] || [ -d "${standalone_dir}/memory" ]; then
+  elif [ "$agent_has_state" = true ] && [ ! -d "${app_dir}/.git" ]; then
+    echo "mode=partial-adoption"
+  elif [ "$standalone_has_state" = true ]; then
     echo "mode=adopt-standalone"
   else
     echo "mode=fresh"
   fi
+}
+
+# ── authoritative_state_dir <mode> <agent_dir> <standalone_dir> ─────────────────
+#   Prints the directory whose config.yaml + encrypted state is AUTHORITATIVE
+#   (the live, funded one) for a given mode — the single source that must be
+#   copied verbatim into a freshly built release. Prints empty for fresh.
+#     existing-ansible -> the agent dir (the running Ansible install)
+#     adopt-standalone -> the standalone dir
+#     partial-adoption -> the standalone dir if it still carries state (it is the
+#                         untouched, still-running original), else the partial
+#                         agent-dir copy as a last resort.
+authoritative_state_dir() {
+  local mode="$1" agent_dir="$2" standalone_dir="$3"
+  case "$mode" in
+    existing-ansible) echo "$agent_dir" ;;
+    adopt-standalone) echo "$standalone_dir" ;;
+    partial-adoption)
+      if [ -f "${standalone_dir}/config.yaml" ] || [ -d "${standalone_dir}/memory" ]; then
+        echo "$standalone_dir"
+      else
+        echo "$agent_dir"
+      fi ;;
+    *) echo "" ;;
+  esac
 }
 
 # ── backup_state <backup_dir> <src_dir> [<src_dir> ...] ─────────────────────────
@@ -147,11 +205,79 @@ config_action() {
   local mode="$1" allow="${2:-false}"
   case "$mode" in
     fresh) echo "render" ;;
-    existing-ansible|adopt-standalone)
+    existing-ansible|adopt-standalone|partial-adoption)
       if [ "$allow" = "true" ]; then echo "rotate"; else echo "preserve"; fi
       ;;
     *) echo "preserve" ;;
   esac
+}
+
+# ── stage_reset <release_dir> ───────────────────────────────────────────────────
+#   Guarantees a CLEAN, empty staging/release dir for the git checkout + build.
+#   The release dir NEVER holds authoritative state (state is only copied in AFTER
+#   the build, immediately before cutover), so wiping it on every run is safe and
+#   makes a retried adoption idempotent. Refuses obviously dangerous targets.
+stage_reset() {
+  local rel="$1"
+  [ -n "$rel" ] || { echo "stage_reset: no release dir given" >&2; return 2; }
+  case "$rel" in
+    /|""|/home|/root|/opt|/opt/torii) echo "stage_reset: refusing unsafe target '$rel'" >&2; return 2 ;;
+  esac
+  rm -rf -- "$rel" 2>/dev/null || { echo "stage_reset: cannot clear $rel" >&2; return 1; }
+  mkdir -p "$rel" 2>/dev/null || { echo "stage_reset: cannot create $rel" >&2; return 1; }
+  echo "stage_reset: ok $rel"
+  return 0
+}
+
+# ── promote_release <release_dir> <app_dir> <quarantine_dir> ────────────────────
+#   Atomically swaps a freshly built staging release into the live app path. If
+#   app_dir already exists (a valid Ansible install OR a partial non-git tree) it
+#   is MOVED to quarantine_dir first — NEVER deleted, so its state survives for
+#   backup/inspection. Both moves are renames (atomic when on one filesystem).
+#   Idempotent: if the release dir is already gone but app_dir is a promoted git
+#   checkout, it is a no-op success (a re-run after a completed promotion).
+promote_release() {
+  local rel="$1" app="$2" quar="$3"
+  [ -n "$rel" ] && [ -n "$app" ] && [ -n "$quar" ] \
+    || { echo "promote_release: missing args" >&2; return 2; }
+  if [ ! -d "$rel" ]; then
+    if [ -d "${app}/.git" ]; then echo "promote_release: already promoted (no staging present)"; return 0; fi
+    echo "promote_release: staging $rel missing and $app is not a promoted checkout" >&2
+    return 1
+  fi
+  if [ -e "$app" ]; then
+    [ -e "$quar" ] && { echo "promote_release: quarantine $quar already exists" >&2; return 1; }
+    mv -- "$app" "$quar" 2>/dev/null \
+      || { echo "promote_release: cannot quarantine $app -> $quar" >&2; return 1; }
+    echo "promote_release: quarantined $app -> $quar"
+  fi
+  mv -- "$rel" "$app" 2>/dev/null \
+    || { echo "promote_release: cannot move $rel -> $app" >&2; return 1; }
+  echo "promote_release: promoted $rel -> $app"
+  return 0
+}
+
+# ── rollback_release <app_dir> <quarantine_dir> [failed_dir] ────────────────────
+#   Undo a promotion: move the just-promoted (failed) app aside to failed_dir
+#   (or, if none given, leave it in place and refuse to clobber), then restore the
+#   quarantined original back to app_dir. Used by the role's rescue path so a
+#   failed cutover of an EXISTING install returns to its previous tree. Never
+#   deletes state.
+rollback_release() {
+  local app="$1" quar="$2" failed="${3:-}"
+  [ -n "$app" ] && [ -n "$quar" ] || { echo "rollback_release: missing args" >&2; return 2; }
+  [ -d "$quar" ] || { echo "rollback_release: no quarantine at $quar (nothing to restore)" >&2; return 1; }
+  if [ -e "$app" ]; then
+    [ -n "$failed" ] || { echo "rollback_release: $app present and no failed_dir given" >&2; return 1; }
+    [ -e "$failed" ] && { echo "rollback_release: failed_dir $failed already exists" >&2; return 1; }
+    mv -- "$app" "$failed" 2>/dev/null \
+      || { echo "rollback_release: cannot move failed $app -> $failed" >&2; return 1; }
+    echo "rollback_release: moved failed release $app -> $failed"
+  fi
+  mv -- "$quar" "$app" 2>/dev/null \
+    || { echo "rollback_release: cannot restore $quar -> $app" >&2; return 1; }
+  echo "rollback_release: restored $app from $quar"
+  return 0
 }
 
 # ── session_secret_of <config.yaml> ─────────────────────────────────────────────
@@ -186,13 +312,17 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   set -euo pipefail
   cmd="${1:-}"; shift || true
   case "$cmd" in
-    detect)        layout_detect "$@" ;;
-    backup)        backup_state "$@" ;;
-    migrate)       migrate_state "$@" ;;
-    config-action) config_action "$@" ;;
-    config-drift)  config_drift "$@" ;;
+    detect)          layout_detect "$@" ;;
+    authoritative)   authoritative_state_dir "$@" ;;
+    backup)          backup_state "$@" ;;
+    migrate)         migrate_state "$@" ;;
+    stage-reset)     stage_reset "$@" ;;
+    promote)         promote_release "$@" ;;
+    rollback)        rollback_release "$@" ;;
+    config-action)   config_action "$@" ;;
+    config-drift)    config_drift "$@" ;;
     *)
-      echo "usage: continuum-adopt.sh {detect|backup|migrate|config-action|config-drift} ..." >&2
+      echo "usage: continuum-adopt.sh {detect|authoritative|backup|migrate|stage-reset|promote|rollback|config-action|config-drift} ..." >&2
       exit 2 ;;
   esac
 fi

@@ -60,30 +60,195 @@ EOF
   echo '{"draft":1}' > "$d/pending/evt.json"
 }
 
-# ── 1. layout_detect ─────────────────────────────────────────────────────────
-fresh_a="${WORK}/fresh/agent"; fresh_s="${WORK}/fresh/standalone"
-mkdir -p "$fresh_a" "$fresh_s"
-[[ "$(layout_detect "$fresh_a" "$fresh_s")" == "mode=fresh" ]] \
+# ── 1. layout_detect (3-arg: app_dir agent_dir standalone_dir) ────────────────
+fresh_app="${WORK}/fresh/app"; fresh_a="${WORK}/fresh/agent"; fresh_s="${WORK}/fresh/standalone"
+mkdir -p "$fresh_app" "$fresh_a" "$fresh_s"
+[[ "$(layout_detect "$fresh_app" "$fresh_a" "$fresh_s")" == "mode=fresh" ]] \
   && ok "detect: nothing present => fresh" || bad "detect fresh"
 
-adopt_s="${WORK}/adopt/standalone"; adopt_a="${WORK}/adopt/agent"
-make_standalone "$adopt_s"; mkdir -p "$adopt_a"
-[[ "$(layout_detect "$adopt_a" "$adopt_s")" == "mode=adopt-standalone" ]] \
-  && ok "detect: standalone state only => adopt-standalone" || bad "detect adopt"
+# adopt-standalone: standalone has state, agent empty, app dir has NO .git
+adopt_app="${WORK}/adopt/app"; adopt_s="${WORK}/adopt/standalone"; adopt_a="${WORK}/adopt/agent"
+make_standalone "$adopt_s"; mkdir -p "$adopt_a" "$adopt_app"
+[[ "$(layout_detect "$adopt_app" "$adopt_a" "$adopt_s")" == "mode=adopt-standalone" ]] \
+  && ok "detect: standalone state only, no app/.git => adopt-standalone" || bad "detect adopt"
 
-exi_a="${WORK}/existing/agent"; exi_s="${WORK}/existing/standalone"
-make_standalone "$exi_s"; mkdir -p "$exi_a"
+# existing-ansible: app IS a git checkout AND agent has config -> wins over standalone
+exi_app="${WORK}/existing/app"; exi_a="${WORK}/existing/agent"; exi_s="${WORK}/existing/standalone"
+make_standalone "$exi_s"; mkdir -p "$exi_a" "$exi_app/.git"
 cp "$exi_s/config.yaml" "$exi_a/config.yaml"   # ansible layout already populated
-[[ "$(layout_detect "$exi_a" "$exi_s")" == "mode=existing-ansible" ]] \
-  && ok "detect: ansible config present wins over standalone => existing-ansible" \
+[[ "$(layout_detect "$exi_app" "$exi_a" "$exi_s")" == "mode=existing-ansible" ]] \
+  && ok "detect: app/.git + agent config wins over standalone => existing-ansible" \
   || bad "detect existing-ansible precedence"
 
-# standalone with ONLY memory/ (no config) still adopts
-adopt2_s="${WORK}/adopt2/standalone"; adopt2_a="${WORK}/adopt2/agent"
-mkdir -p "$adopt2_s/memory" "$adopt2_a"
-[[ "$(layout_detect "$adopt2_a" "$adopt2_s")" == "mode=adopt-standalone" ]] \
+# standalone with ONLY memory/ (no config), app has no .git, agent empty => adopt
+adopt2_app="${WORK}/adopt2/app"; adopt2_s="${WORK}/adopt2/standalone"; adopt2_a="${WORK}/adopt2/agent"
+mkdir -p "$adopt2_s/memory" "$adopt2_a" "$adopt2_app"
+[[ "$(layout_detect "$adopt2_app" "$adopt2_a" "$adopt2_s")" == "mode=adopt-standalone" ]] \
   && ok "detect: standalone memory/ without config => adopt-standalone" \
   || bad "detect adopt via memory-only"
+
+# partial-adoption: agent dir carries state, app dir has NO .git, standalone still
+# present. This is the EXACT v0.2.41 failure fingerprint and must NOT be classified
+# as a valid existing-ansible install.
+part_app="${WORK}/partial/app"; part_a="${WORK}/partial/agent"; part_s="${WORK}/partial/standalone"
+make_standalone "$part_s"          # original standalone untouched, still running
+mkdir -p "$part_app"               # app dir exists but is NOT a git checkout
+make_standalone "$part_a"          # agent dir holds the half-migrated copy
+[[ "$(layout_detect "$part_app" "$part_a" "$part_s")" == "mode=partial-adoption" ]] \
+  && ok "detect: agent state + app without .git + standalone => partial-adoption" \
+  || bad "detect partial-adoption"
+
+# partial-adoption is recognised even when the app dir does not exist yet at all
+part2_app="${WORK}/partial2/app"; part2_a="${WORK}/partial2/agent"; part2_s="${WORK}/partial2/standalone"
+make_standalone "$part2_s"; make_standalone "$part2_a"   # no app dir created
+[[ "$(layout_detect "$part2_app" "$part2_a" "$part2_s")" == "mode=partial-adoption" ]] \
+  && ok "detect: agent state + absent app dir => partial-adoption" \
+  || bad "detect partial-adoption (absent app dir)"
+
+# ── 1b. authoritative_state_dir ──────────────────────────────────────────────
+[[ "$(authoritative_state_dir existing-ansible "$exi_a" "$exi_s")" == "$exi_a" ]] \
+  && ok "authoritative: existing-ansible => agent dir" || bad "authoritative existing"
+[[ "$(authoritative_state_dir adopt-standalone "$adopt_a" "$adopt_s")" == "$adopt_s" ]] \
+  && ok "authoritative: adopt-standalone => standalone dir" || bad "authoritative adopt"
+# partial with the standalone still holding state => standalone is authoritative
+[[ "$(authoritative_state_dir partial-adoption "$part_a" "$part_s")" == "$part_s" ]] \
+  && ok "authoritative: partial + standalone state => standalone (untouched original)" \
+  || bad "authoritative partial->standalone"
+# partial where the standalone lost its state => fall back to the agent-dir copy
+pfb_a="${WORK}/pfb/agent"; pfb_s="${WORK}/pfb/standalone"
+make_standalone "$pfb_a"; mkdir -p "$pfb_s"
+[[ "$(authoritative_state_dir partial-adoption "$pfb_a" "$pfb_s")" == "$pfb_a" ]] \
+  && ok "authoritative: partial + empty standalone => agent copy (last resort)" \
+  || bad "authoritative partial->agent fallback"
+[[ -z "$(authoritative_state_dir fresh "$fresh_a" "$fresh_s")" ]] \
+  && ok "authoritative: fresh => empty" || bad "authoritative fresh empty"
+
+# ── 1c. stage_reset (clean staging; refuses dangerous targets) ────────────────
+st="${WORK}/stage/app.staging"
+mkdir -p "$st"; echo "STALE" > "$st/stale.txt"      # leftover from a prior failed run
+stage_reset "$st" >/dev/null 2>&1 \
+  && ok "stage_reset: returns 0 on a normal target" || bad "stage_reset: non-zero"
+[[ -d "$st" && ! -e "$st/stale.txt" ]] \
+  && ok "stage_reset: wipes stale contents, leaves an empty dir" || bad "stage_reset: not clean"
+for danger in / /home /root /opt /opt/torii; do
+  if stage_reset "$danger" >/dev/null 2>&1; then
+    bad "stage_reset: did NOT refuse dangerous target '$danger'"
+  else
+    ok "stage_reset: refuses dangerous target '$danger'"
+  fi
+done
+
+# ── 1d. promote_release (atomic swap + quarantine; never deletes state) ───────
+# clean adoption: no pre-existing app dir -> staging simply becomes app
+pr1_rel="${WORK}/prom1/app.staging"; pr1_app="${WORK}/prom1/app"; pr1_q="${WORK}/prom1/app.quarantine"
+mkdir -p "$pr1_rel/agent"; echo "NEWBUILD" > "$pr1_rel/marker"
+promote_release "$pr1_rel" "$pr1_app" "$pr1_q" >/dev/null 2>&1 \
+  && ok "promote: clean adoption returns 0" || bad "promote: clean non-zero"
+[[ -f "$pr1_app/marker" && ! -d "$pr1_rel" ]] \
+  && ok "promote: staging moved into app (no residue)" || bad "promote: staging not moved"
+[[ ! -e "$pr1_q" ]] \
+  && ok "promote: no quarantine created when app absent" || bad "promote: spurious quarantine"
+
+# pre-existing app (partial non-git tree) -> quarantined, never deleted
+pr2_rel="${WORK}/prom2/app.staging"; pr2_app="${WORK}/prom2/app"; pr2_q="${WORK}/prom2/app.quarantine"
+mkdir -p "$pr2_rel/agent"; echo "NEWBUILD" > "$pr2_rel/marker"
+mkdir -p "$pr2_app/agent/ciphertexts"; echo "OLD-PARTIAL-STATE" > "$pr2_app/agent/ciphertexts/routstr.key.enc"
+promote_release "$pr2_rel" "$pr2_app" "$pr2_q" >/dev/null 2>&1 \
+  && ok "promote: pre-existing app returns 0" || bad "promote: pre-existing non-zero"
+[[ -f "$pr2_app/marker" ]] \
+  && ok "promote: new build promoted into app" || bad "promote: new build not in app"
+grep -qr "OLD-PARTIAL-STATE" "$pr2_q" \
+  && ok "promote: prior app quarantined (state preserved, never deleted)" \
+  || bad "promote: prior app state lost"
+
+# refuses to clobber an existing quarantine dir
+pr3_rel="${WORK}/prom3/app.staging"; pr3_app="${WORK}/prom3/app"; pr3_q="${WORK}/prom3/app.quarantine"
+mkdir -p "$pr3_rel" "$pr3_app" "$pr3_q"
+if promote_release "$pr3_rel" "$pr3_app" "$pr3_q" >/dev/null 2>&1; then
+  bad "promote: did NOT refuse to overwrite an existing quarantine"
+else
+  ok "promote: refuses when the quarantine dir already exists"
+fi
+
+# idempotent: staging already gone but app is a promoted git checkout -> no-op success
+pr4_rel="${WORK}/prom4/app.staging"; pr4_app="${WORK}/prom4/app"; pr4_q="${WORK}/prom4/app.quarantine"
+mkdir -p "$pr4_app/.git"
+promote_release "$pr4_rel" "$pr4_app" "$pr4_q" >/dev/null 2>&1 \
+  && ok "promote: idempotent no-op when already promoted (git checkout, no staging)" \
+  || bad "promote: not idempotent after a completed promotion"
+
+# ── 1e. rollback_release (undo a promotion from quarantine) ───────────────────
+# existing-ansible cutover failed: app is the failed new tree, quarantine the prior
+rb_app="${WORK}/rb/app"; rb_q="${WORK}/rb/app.quarantine"; rb_f="${WORK}/rb/app.failed"
+mkdir -p "$rb_app/agent"; echo "FAILED-NEW" > "$rb_app/marker"
+mkdir -p "$rb_q/agent/ciphertexts"; echo "PRIOR-GOOD-STATE" > "$rb_q/agent/ciphertexts/routstr.key.enc"
+rollback_release "$rb_app" "$rb_q" "$rb_f" >/dev/null 2>&1 \
+  && ok "rollback: returns 0 with a failed_dir given" || bad "rollback: non-zero"
+grep -qr "PRIOR-GOOD-STATE" "$rb_app" \
+  && ok "rollback: prior tree restored to app from quarantine" || bad "rollback: prior not restored"
+grep -qr "FAILED-NEW" "$rb_f" \
+  && ok "rollback: failed new tree moved aside (never deleted)" || bad "rollback: failed tree lost"
+[[ ! -e "$rb_q" ]] \
+  && ok "rollback: quarantine consumed by the restore" || bad "rollback: quarantine residue"
+# refuses to clobber a present app when no failed_dir is given
+rb2_app="${WORK}/rb2/app"; rb2_q="${WORK}/rb2/app.quarantine"
+mkdir -p "$rb2_app" "$rb2_q"
+if rollback_release "$rb2_app" "$rb2_q" >/dev/null 2>&1; then
+  bad "rollback: did NOT refuse to clobber app without a failed_dir"
+else
+  ok "rollback: refuses to clobber a present app without a failed_dir"
+fi
+# nothing to restore (no quarantine) => non-zero
+rb3_app="${WORK}/rb3/app"; rb3_q="${WORK}/rb3/app.quarantine"
+mkdir -p "$rb3_app"
+if rollback_release "$rb3_app" "$rb3_q" "${WORK}/rb3/failed" >/dev/null 2>&1; then
+  bad "rollback: succeeded with no quarantine to restore"
+else
+  ok "rollback: non-zero when there is no quarantine to restore"
+fi
+
+# ── 1f. End-to-end: partial-adoption recovery is transactional + safe ─────────
+# Reproduce the live v0.2.41 fingerprint: original standalone intact, PLUS a
+# partial non-git app dir holding a COPY of the state. Recovery must build in a
+# CLEAN staging dir, copy the AUTHORITATIVE (standalone) state in AFTER the build,
+# atomically swap, and quarantine the partial tree — funded key + session_secret
+# intact, original standalone left untouched on disk.
+e2e="${WORK}/e2e"
+e2e_std="${e2e}/opt/torii/continuum-agent"        # original standalone (authoritative)
+e2e_app="${e2e}/home/continuum/app"               # partial non-git app
+e2e_agent="${e2e_app}/agent"
+e2e_stage="${e2e}/home/continuum/app.staging"
+e2e_q="${e2e}/home/continuum/app.quarantine-STAMP"
+make_standalone "$e2e_std"
+make_standalone "$e2e_agent"                       # partial migrated copy (app has no .git)
+echo "PARTIAL-DIVERGED" >> "$e2e_agent/memory/wallet/state.json"
+
+e2e_mode="$(layout_detect "$e2e_app" "$e2e_agent" "$e2e_std")"
+[[ "$e2e_mode" == "mode=partial-adoption" ]] \
+  && ok "e2e: live fingerprint detected as partial-adoption" || bad "e2e: mode=$e2e_mode"
+e2e_auth="$(authoritative_state_dir partial-adoption "$e2e_agent" "$e2e_std")"
+[[ "$e2e_auth" == "$e2e_std" ]] \
+  && ok "e2e: authoritative source is the untouched standalone (not the partial copy)" \
+  || bad "e2e: wrong authoritative source ($e2e_auth)"
+# build in a clean staging dir (simulate the git checkout + build output)
+stage_reset "$e2e_stage" >/dev/null 2>&1
+mkdir -p "${e2e_stage}/agent"; echo "dist" > "${e2e_stage}/dist.marker"
+# copy authoritative state into staging AFTER the 'build'
+migrate_state "$e2e_auth" "${e2e_stage}/agent" "$(id -un)" >/dev/null 2>&1
+# atomic swap; the partial non-git app must be quarantined, not deleted
+promote_release "$e2e_stage" "$e2e_app" "$e2e_q" >/dev/null 2>&1 \
+  && ok "e2e: staged release atomically promoted" || bad "e2e: promote failed"
+[[ -f "${e2e_app}/dist.marker" && -d "${e2e_app}/agent" ]] \
+  && ok "e2e: promoted app carries the freshly built tree + agent state" || bad "e2e: app tree wrong"
+diff -q "$e2e_std/config.yaml" "${e2e_app}/agent/config.yaml" >/dev/null \
+  && ok "e2e: promoted config.yaml is byte-for-byte the authoritative standalone config" \
+  || bad "e2e: config not byte-equal"
+grep -qr "FUNDED-KEY-CIPHERTEXT" "${e2e_app}/agent/ciphertexts" \
+  && ok "e2e: funded key retained in the promoted tree" || bad "e2e: funded key lost"
+grep -qr "FUNDED-KEY-CIPHERTEXT" "$e2e_q" \
+  && ok "e2e: partial tree preserved in quarantine (never deleted)" || bad "e2e: partial tree lost"
+grep -qr "FUNDED-KEY-CIPHERTEXT" "$e2e_std/ciphertexts" \
+  && ok "e2e: original standalone left intact on disk" || bad "e2e: standalone disturbed"
 
 # ── 2. backup_state ────────────────────────────────────────────────────────
 bkroot="${WORK}/backups/run1"
@@ -165,6 +330,10 @@ echo "$mout" | grep -q "$SECRET" \
   && ok "config_action: existing + explicit opt-in => rotate" || bad "config_action rotate"
 [[ "$(config_action adopt-standalone true)" == "rotate" ]] \
   && ok "config_action: adopt + explicit opt-in => rotate" || bad "config_action adopt rotate"
+[[ "$(config_action partial-adoption false)" == "preserve" ]] \
+  && ok "config_action: partial-adoption + no rotation => preserve" || bad "config_action partial preserve"
+[[ "$(config_action partial-adoption true)" == "rotate" ]] \
+  && ok "config_action: partial-adoption + explicit opt-in => rotate" || bad "config_action partial rotate"
 
 # ── 5. config_drift (reveals no secret) ──────────────────────────────────────
 cfgA="${WORK}/drift/a.yaml"; cfgB="${WORK}/drift/b.yaml"; cfgC="${WORK}/drift/c.yaml"
@@ -253,9 +422,9 @@ fail_closed() {        # <action> <present> -> "true"/"false"
   && ok "vault-free: partial vars => false" || bad "vault-free: partial truth"
 
 # adopt-standalone, vault-free: preserve, candidate SKIPPED, NOT fail-closed
-va_s="${WORK}/vaultfree/standalone"; va_a="${WORK}/vaultfree/agent"
-make_standalone "$va_s"; mkdir -p "$va_a"
-[[ "$(layout_detect "$va_a" "$va_s")" == "mode=adopt-standalone" ]] \
+va_app="${WORK}/vaultfree/app"; va_s="${WORK}/vaultfree/standalone"; va_a="${WORK}/vaultfree/agent"
+make_standalone "$va_s"; mkdir -p "$va_a" "$va_app"
+[[ "$(layout_detect "$va_app" "$va_a" "$va_s")" == "mode=adopt-standalone" ]] \
   && ok "vault-free adopt: detects adopt-standalone" || bad "vault-free adopt: detect"
 va_mode="adopt-standalone"
 va_present="$(vault_vars_present "" "")"          # no vault vars in scope
@@ -324,6 +493,44 @@ grep -Eq "admin_npub \| default\(''\)" "$ROLE" \
 grep -q 'Fail closed when config render/rotation is required but vault vars are absent' "$ROLE" \
   && ok "role: fresh/rotation without vault vars fails closed" \
   || bad "role: no fail-closed guard for missing vault vars"
+
+# ── 10. Anti-drift: the role must be transactional (v0.2.42-alpha) ────────────
+grep -q 'continuum_adopt_lib }} stage-reset' "$ROLE" \
+  && ok "role: resets a clean staging dir via the lib" || bad "role: no stage-reset call"
+grep -q 'continuum_adopt_lib }} authoritative' "$ROLE" \
+  && ok "role: resolves the authoritative state dir via the lib" || bad "role: no authoritative call"
+grep -q 'continuum_adopt_lib }} promote' "$ROLE" \
+  && ok "role: promotes staging atomically via the lib" || bad "role: no promote call"
+grep -q 'continuum_adopt_lib }} rollback' "$ROLE" \
+  && ok "role: can roll a failed cutover back via the lib" || bad "role: no rollback call"
+# clone/build must target the STAGING dir, never the live app dir
+grep -q 'dest: "{{ continuum_release_dir }}"' "$ROLE" \
+  && ok "role: git clone targets the staging dir (never the live app)" \
+  || bad "role: clone does not target staging"
+grep -q 'chdir: "{{ continuum_release_dir }}"' "$ROLE" \
+  && ok "role: npm/build run in staging" || bad "role: build not in staging"
+# state is copied into the STAGED agent before promotion (not the live app)
+grep -q 'continuum_release_agent_dir' "$ROLE" \
+  && ok "role: state is copied into the staged agent before promotion" \
+  || bad "role: state not staged before promotion"
+# promotion + rescue rollback are gated on a swap-tracking fact
+grep -q 'continuum_swapped' "$ROLE" \
+  && ok "role: tracks swap state to gate the rescue rollback" || bad "role: no swap tracking"
+# partial-adoption must be handled as a distinct mode
+grep -q 'partial-adoption' "$ROLE" \
+  && ok "role: handles partial-adoption explicitly" || bad "role: partial-adoption not handled"
+# the OLD unit must keep running through the build (stop is inside the cutover block)
+grep -q 'Stop the old unit to free port' "$ROLE" \
+  && ok "role: stops the old unit only at cutover (kept running through build)" \
+  || bad "role: old-unit stop not at cutover"
+
+# ── 11. Defaults sanity (v0.2.42-alpha staging/quarantine vars) ───────────────
+grep -q 'continuum_release_dir:' "$DEFAULTS" \
+  && ok "defaults: staging/release dir defined" || bad "defaults: no release dir"
+grep -q 'continuum_quarantine_dir:' "$DEFAULTS" \
+  && ok "defaults: quarantine dir defined" || bad "defaults: no quarantine dir"
+grep -q 'continuum_failed_release_dir:' "$DEFAULTS" \
+  && ok "defaults: failed-release dir defined" || bad "defaults: no failed-release dir"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 printf '\n[continuum-adopt.test] pass=%d fail=%d\n' "$pass" "$fail"

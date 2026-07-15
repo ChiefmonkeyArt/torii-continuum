@@ -1,41 +1,42 @@
 ---
 # Role: continuum — installs the Continuum SPA + agent under /home/{{ continuum_user }}/.
 #
-# SAFETY MODEL (v0.2.40-alpha hardening)
-# --------------------------------------
+# SAFETY MODEL (v0.2.40/41/42-alpha hardening)
+# --------------------------------------------
 # The agent's funded Routstr key + character ciphertexts are encrypted at rest
 # with a key DERIVED FROM session_secret. Overwriting config.yaml with a fresh
 # session_secret, or pointing the service at an empty state dir, ORPHANS that key
 # irrecoverably. So this role:
 #
-#   1. Detects which layout already exists (existing-ansible | adopt-standalone |
-#      fresh) via the sourceable lib ops/lib/continuum-adopt.sh.
+#   1. Detects which layout already exists (existing-ansible | partial-adoption |
+#      adopt-standalone | fresh) via ops/lib/continuum-adopt.sh.
 #   2. Backs up config + encrypted state to a timestamped root-only 0700 dir
 #      BEFORE any mutation. Fail-closed: no backup, no deploy.
-#   3. On adopt-standalone: stops+disables the standalone unit (freeing port
-#      {{ continuum_agent_port }}), then migrates its state + config VERBATIM into
-#      the Ansible layout — session_secret is copied, never regenerated.
+#   3. Builds the git checkout + npm + vite build in a CLEAN staging/release dir
+#      that NEVER holds authoritative state, with the OLD service still running.
 #   4. Renders config.yaml ONLY on a fresh install, or when the operator has
-#      explicitly set continuum_allow_config_rotation=true. Otherwise the existing
-#      config is preserved untouched; a drift against vault is reported as a safe
-#      "differ" warning that prints NO secret value.
+#      explicitly set continuum_allow_config_rotation=true.
+#   5. Stops the old unit only immediately before the final state copy + atomic
+#      cutover, copies authoritative state VERBATIM into the staged release, then
+#      atomically swaps the release into place — quarantining (never deleting)
+#      any pre-existing app dir.
+#   6. Wraps the cutover in block/rescue: on failure it stops the new unit,
+#      restores the previous layout (re-enables the standalone unit, or rolls the
+#      quarantined Ansible tree back), and surfaces the backup + quarantine paths
+#      plus an exact recovery command — no secret printed.
 #
-# VAULT-FREE ADOPTION (v0.2.41-alpha)
-# -----------------------------------
-# Adopting or redeploying an EXISTING install (adopt-standalone / existing-ansible)
-# preserves config.yaml byte-for-byte and needs NO vault vars and NO vault
-# password. The drift diagnostic renders a candidate from config.yaml.j2 (which
-# references admin_npub/session_secret), so it is guarded behind
-# continuum_vault_vars_present and simply SKIPPED when those vars are absent —
-# no undefined-variable evaluation occurs. Only a fresh install or an explicit
-# rotation requires the vault vars, and their absence then fails closed with a
-# clear, non-secret message before any state is mutated.
-#   5. Wraps the service + nginx cutover in block/rescue: on failure it surfaces
-#      the backup path and an exact recovery command instead of leaving a
-#      half-migrated box.
+# WHY v0.2.42 EXISTS
+# ------------------
+# The v0.2.41 role migrated live state INTO /home/<user>/app/agent and only THEN
+# ran `git clone` into /home/<user>/app — cloning into a directory already
+# populated with runtime state. On the live box that failed, leaving the original
+# standalone layout intact AND a partial, non-git /home/<user>/app holding a COPY
+# of the state. v0.2.42 fixes the ordering (build in staging first, copy + swap
+# last) and adds explicit partial-adoption detection + recovery, so re-running
+# after that exact failure is idempotent and completes cleanly.
 #
-# Layout on disk (Ansible):
-#   /home/continuum/app/                <- git checkout of torii-continuum
+# Layout on disk (Ansible, after a successful cutover):
+#   /home/continuum/app/                <- promoted git checkout of torii-continuum
 #                        dist/          <- vite build output (served by nginx)
 #                        agent/
 #                          config.yaml  <- preserved/migrated (chmod 600)
@@ -43,12 +44,17 @@
 #                          ciphertexts/ <- encrypted funded key + character
 #                          pending/     <- draft events awaiting signature
 
-- name: Resolve paths + backup timestamp
+- name: Resolve paths + backup/cutover timestamp
   ansible.builtin.set_fact:
+    continuum_stamp: "{{ ansible_date_time.iso8601_basic_short | default(lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ')) }}"
     continuum_app_dir: "/home/{{ continuum_user }}/app"
     continuum_agent_dir: "/home/{{ continuum_user }}/app/agent"
+    continuum_release_agent_dir: "{{ continuum_release_dir }}/agent"
     continuum_adopt_lib: "{{ playbook_dir }}/../lib/continuum-adopt.sh"
-    continuum_backup_dir: "{{ continuum_backup_root }}/continuum-backup-{{ ansible_date_time.iso8601_basic_short | default(lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ')) }}"
+
+- name: Resolve backup dir (uses the run timestamp)
+  ansible.builtin.set_fact:
+    continuum_backup_dir: "{{ continuum_backup_root }}/continuum-backup-{{ continuum_stamp }}"
 
 - name: Ensure continuum OS user exists
   ansible.builtin.user:
@@ -58,18 +64,11 @@
     home: "/home/{{ continuum_user }}"
     create_home: true
 
-- name: Ensure app checkout directory exists
-  ansible.builtin.file:
-    path: "{{ continuum_app_dir }}"
-    state: directory
-    owner: "{{ continuum_user }}"
-    group: "{{ continuum_user }}"
-    mode: '0750'
-
-# ── 1. Detect layout ────────────────────────────────────────────────────────
+# ── 1. Detect layout (app_dir .git presence disambiguates partial adoption) ──
 - name: Detect existing install layout
   ansible.builtin.script: >-
     {{ continuum_adopt_lib }} detect
+    {{ continuum_app_dir | quote }}
     {{ continuum_agent_dir | quote }}
     {{ continuum_standalone_dir | quote }}
   register: continuum_detect
@@ -83,10 +82,33 @@
   ansible.builtin.debug:
     msg: "Continuum install mode: {{ continuum_mode }}"
 
+- name: Resolve the authoritative live state dir for this mode
+  ansible.builtin.script: >-
+    {{ continuum_adopt_lib }} authoritative
+    {{ continuum_mode | quote }}
+    {{ continuum_agent_dir | quote }}
+    {{ continuum_standalone_dir | quote }}
+  register: continuum_auth
+  changed_when: false
+
+- name: Record authoritative state dir
+  ansible.builtin.set_fact:
+    continuum_authoritative_dir: "{{ continuum_auth.stdout | trim }}"
+
+# The unit that currently owns port {{ continuum_agent_port }} and must be stopped
+# at cutover: the standalone unit for adopt/partial modes, the Ansible unit for an
+# in-place update, none on a fresh install.
+- name: Record the unit to stop at cutover
+  ansible.builtin.set_fact:
+    continuum_old_service: >-
+      {{ continuum_standalone_service
+         if continuum_mode in ['adopt-standalone', 'partial-adoption']
+         else (continuum_service if continuum_mode == 'existing-ansible' else '') }}
+
 # ── 2. Back up ALL state before any mutation (fail-closed) ───────────────────
-# Sources: both the standalone dir and the Ansible agent dir (whichever have
-# state). backup_state creates the 0700 backup dir and copies config.yaml +
-# memory/ + ciphertexts/ + pending/. A non-zero return aborts the whole run.
+# Sources: the standalone dir AND the Ansible agent dir (a partial adoption has
+# state in both). backup_state creates the 0700 backup dir and copies config.yaml
+# + memory/ + ciphertexts/ + pending/. A non-zero return aborts the whole run.
 - name: Back up config + encrypted state before mutating (fail-closed)
   ansible.builtin.script: >-
     {{ continuum_adopt_lib }} backup
@@ -102,73 +124,7 @@
   ansible.builtin.debug:
     msg: "State backup written to {{ continuum_backup_dir }} (root-only 0700). Recovery: cp -a {{ continuum_backup_dir }}/<label>/* into the agent dir and restart {{ continuum_service }}."
 
-# ── 3. Adopt a standalone install (stop old unit, migrate state) ─────────────
-- name: Adopt standalone install
-  when: continuum_mode == 'adopt-standalone'
-  block:
-    - name: Stop + disable the standalone unit (free port {{ continuum_agent_port }})
-      ansible.builtin.systemd:
-        name: "{{ continuum_standalone_service }}"
-        state: stopped
-        enabled: false
-      failed_when: false
-
-    - name: Migrate standalone state + config into the Ansible layout (verbatim)
-      ansible.builtin.script: >-
-        {{ continuum_adopt_lib }} migrate
-        {{ continuum_standalone_dir | quote }}
-        {{ continuum_agent_dir | quote }}
-        {{ continuum_user | quote }}
-      register: continuum_migrate
-      changed_when: "'copied' in continuum_migrate.stdout"
-      failed_when: continuum_migrate.rc != 0
-      no_log: true
-
-# ── 4. Sync code + build (untracked state survives: it is gitignored) ────────
-# force:true resets only TRACKED files; memory/ ciphertexts/ pending/ config.yaml
-# are gitignored, so the checkout/build can never delete migrated encrypted state.
-- name: Clone (or update) torii-continuum
-  ansible.builtin.git:
-    repo: "{{ continuum_repo }}"
-    dest: "{{ continuum_app_dir }}"
-    version: "{{ continuum_version }}"
-    force: true
-    depth: 1
-  become_user: "{{ continuum_user }}"
-  register: continuum_git
-
-- name: Install npm dependencies (dev + prod, needed for vite build)
-  ansible.builtin.command:
-    cmd: npm ci
-    chdir: "{{ continuum_app_dir }}"
-  become_user: "{{ continuum_user }}"
-  environment:
-    NODE_ENV: development
-  when: continuum_git.changed
-  register: npm_install
-  changed_when: npm_install.rc == 0
-
-- name: Build Continuum SPA with base-path awareness
-  ansible.builtin.command:
-    cmd: npm run build
-    chdir: "{{ continuum_app_dir }}"
-  become_user: "{{ continuum_user }}"
-  environment:
-    NODE_ENV: production
-    VITE_AGENT_URL: "{{ continuum_vite_agent_url }}"
-  when: continuum_git.changed
-  register: continuum_build
-  changed_when: continuum_build.rc == 0
-
-- name: Install agent production dependencies
-  ansible.builtin.command:
-    cmd: npm ci --omit=dev
-    chdir: "{{ continuum_agent_dir }}"
-  become_user: "{{ continuum_user }}"
-  args:
-    creates: "{{ continuum_agent_dir }}/node_modules"
-
-# ── 5. Config decision — render ONLY on fresh install or explicit rotation ────
+# ── 3. Config decision — render ONLY on fresh install or explicit rotation ────
 - name: Decide config.yaml action
   ansible.builtin.script: >-
     {{ continuum_adopt_lib }} config-action
@@ -181,91 +137,121 @@
   ansible.builtin.set_fact:
     continuum_config_action: "{{ continuum_cfg_action.stdout | trim }}"
 
-# Are the vault-backed config vars present in scope? Evaluated with the default
-# filter so an UNDEFINED var never raises — a missing vault.yml (and thus no
-# vault password) simply yields false. Only admin_npub + session_secret are
-# required to render config.yaml; cashu_mints has a template default and
-# torii_domain is asserted non-secret in site.yml.
+# Vault-backed config vars present in scope? Evaluated with the default filter so
+# an UNDEFINED var never raises — a missing vault.yml simply yields false.
 - name: Determine whether vault-backed config vars are present
   ansible.builtin.set_fact:
     continuum_vault_vars_present: >-
       {{ (admin_npub | default('') | string | length > 0)
          and (session_secret | default('') | string | length > 0) }}
 
-# Fail CLOSED before writing any config when a render/rotate is required but the
-# vault vars are absent. This is the fresh-install (and explicit-rotation) guard:
-# no secret is printed, and no existing state has been mutated at this point.
+# Fail CLOSED before touching anything when a render/rotate is required but the
+# vault vars are absent. No secret is printed and no state has been mutated.
 - name: Fail closed when config render/rotation is required but vault vars are absent
   ansible.builtin.fail:
     msg: >-
       Continuum '{{ continuum_config_action }}' requires the config vars
       admin_npub and session_secret to be defined (normally via an
       ansible-vault group_vars/vault.yml loaded with --ask-vault-pass). They are
-      NOT defined, so the deploy is stopping BEFORE writing any config and BEFORE
-      mutating any state. No secret value was read or printed. A FRESH install
-      must supply these vars; an explicit rotation
-      (continuum_allow_config_rotation=true) must also supply them. Adopting or
-      redeploying an EXISTING install does not need them — the live config.yaml
-      is preserved byte-for-byte.
+      NOT defined, so the deploy is stopping BEFORE building or mutating any
+      state. No secret value was read or printed. A FRESH install must supply
+      these vars; an explicit rotation (continuum_allow_config_rotation=true)
+      must also supply them. Adopting or redeploying an EXISTING install does not
+      need them — the live config.yaml is preserved byte-for-byte.
   when:
     - continuum_config_action in ['render', 'rotate']
     - not (continuum_vault_vars_present | bool)
 
-- name: Render agent config.yaml (fresh install or explicit rotation)
-  ansible.builtin.template:
-    src: config.yaml.j2
-    dest: "{{ continuum_agent_dir }}/config.yaml"
+# ── 4. PREFLIGHT — build into a CLEAN staging dir; OLD service stays running ──
+# Nothing here touches the live layout or the running unit. A clone/npm/build
+# failure leaves the original standalone (or Ansible) install serving traffic.
+- name: Reset the staging/release dir (clean slate — never holds live state)
+  ansible.builtin.script: >-
+    {{ continuum_adopt_lib }} stage-reset {{ continuum_release_dir | quote }}
+  register: continuum_stage_reset
+  changed_when: "'ok' in continuum_stage_reset.stdout"
+
+- name: Own the staging dir as the continuum user
+  ansible.builtin.file:
+    path: "{{ continuum_release_dir }}"
+    state: directory
     owner: "{{ continuum_user }}"
     group: "{{ continuum_user }}"
-    mode: '0600'
-  when: continuum_config_action in ['render', 'rotate']
-  no_log: true
-  notify: restart continuum-agent
+    mode: '0750'
 
-# When preserving, optionally detect (without revealing) whether the vault secret
-# has drifted from the live config, so the operator learns a rotation is pending.
-# This diagnostic is SKIPPED entirely when the vault vars are absent: it renders a
-# candidate from config.yaml.j2 (which references admin_npub/session_secret), so
-# without those vars it would raise undefined-variable errors. A vault-free adopt
-# or redeploy therefore preserves the live config and simply prints a notice.
-- name: Note that drift diagnostics are skipped without vault vars (no secret, no clobber)
-  ansible.builtin.debug:
-    msg: >-
-      Existing config.yaml PRESERVED byte-for-byte. Vault config vars
-      (admin_npub/session_secret) are not in scope, so the drift diagnostic was
-      skipped. This is expected for a vault-free adoption or redeploy. Backup at
-      {{ continuum_backup_dir }} (root-only 0700).
-  when:
-    - continuum_config_action == 'preserve'
-    - not (continuum_vault_vars_present | bool)
+- name: Clone (or check out) torii-continuum INTO STAGING
+  ansible.builtin.git:
+    repo: "{{ continuum_repo }}"
+    dest: "{{ continuum_release_dir }}"
+    version: "{{ continuum_version }}"
+    force: true
+    depth: 1
+  become_user: "{{ continuum_user }}"
+  register: continuum_git
 
-- name: Render candidate config to a temp path for drift check (no clobber)
+- name: Install npm dependencies in staging (dev + prod, needed for vite build)
+  ansible.builtin.command:
+    cmd: npm ci
+    chdir: "{{ continuum_release_dir }}"
+  become_user: "{{ continuum_user }}"
+  environment:
+    NODE_ENV: development
+  register: npm_install
+  changed_when: npm_install.rc == 0
+
+- name: Build Continuum SPA in staging (base-path aware)
+  ansible.builtin.command:
+    cmd: npm run build
+    chdir: "{{ continuum_release_dir }}"
+  become_user: "{{ continuum_user }}"
+  environment:
+    NODE_ENV: production
+    VITE_AGENT_URL: "{{ continuum_vite_agent_url }}"
+  register: continuum_build
+  changed_when: continuum_build.rc == 0
+
+- name: Install agent production dependencies in staging
+  ansible.builtin.command:
+    cmd: npm ci --omit=dev
+    chdir: "{{ continuum_release_agent_dir }}"
+  become_user: "{{ continuum_user }}"
+  args:
+    creates: "{{ continuum_release_agent_dir }}/node_modules"
+
+# Optional (guarded) drift diagnostic: when the vault vars ARE present, render a
+# candidate config to a ROOT-ONLY temp path (never into staging/app) and compare
+# its session_secret against the authoritative live config, so the operator learns
+# a rotation is pending. Skipped entirely without vault vars — no undefined-var
+# evaluation, no candidate on disk.
+- name: Render candidate config to a root-only temp path for drift check
   ansible.builtin.template:
     src: config.yaml.j2
-    dest: "{{ continuum_agent_dir }}/.config.candidate.yaml"
-    owner: "{{ continuum_user }}"
-    group: "{{ continuum_user }}"
+    dest: "{{ continuum_backup_dir }}/.config.candidate.yaml"
+    owner: root
+    group: root
     mode: '0600'
   when:
     - continuum_config_action == 'preserve'
     - continuum_vault_vars_present | bool
+    - continuum_authoritative_dir | length > 0
   no_log: true
 
-- name: Compare live config vs vault candidate (reveals no value)
+- name: Compare authoritative live config vs vault candidate (reveals no value)
   ansible.builtin.script: >-
     {{ continuum_adopt_lib }} config-drift
-    {{ continuum_agent_dir | quote }}/config.yaml
-    {{ continuum_agent_dir | quote }}/.config.candidate.yaml
+    {{ continuum_authoritative_dir | quote }}/config.yaml
+    {{ continuum_backup_dir | quote }}/.config.candidate.yaml
   register: continuum_drift
   changed_when: false
   when:
     - continuum_config_action == 'preserve'
     - continuum_vault_vars_present | bool
+    - continuum_authoritative_dir | length > 0
   no_log: true
 
 - name: Remove the candidate config (never left on disk)
   ansible.builtin.file:
-    path: "{{ continuum_agent_dir }}/.config.candidate.yaml"
+    path: "{{ continuum_backup_dir }}/.config.candidate.yaml"
     state: absent
   when:
     - continuum_config_action == 'preserve'
@@ -274,9 +260,9 @@
 - name: Warn if vault differs from the preserved config (no secret printed)
   ansible.builtin.debug:
     msg: >-
-      NOTICE: existing config.yaml PRESERVED. The vault session_secret DIFFERS
-      from the live one. Deploy did NOT rotate it (rotating would orphan the
-      funded key). To rotate deliberately: re-run with
+      NOTICE: existing config.yaml will be PRESERVED. The vault session_secret
+      DIFFERS from the live one. This deploy will NOT rotate it (rotating would
+      orphan the funded key). To rotate deliberately: re-run with
       -e continuum_allow_config_rotation=true (backup at {{ continuum_backup_dir }}).
   when:
     - continuum_config_action == 'preserve'
@@ -284,22 +270,97 @@
     - continuum_drift.stdout is defined
     - "'differ' in continuum_drift.stdout"
 
-# ── 6. Ensure runtime dirs, then transactional service + nginx cutover ───────
-- name: Ensure agent runtime dirs exist
-  ansible.builtin.file:
-    path: "{{ continuum_agent_dir }}/{{ item }}"
-    state: directory
-    owner: "{{ continuum_user }}"
-    group: "{{ continuum_user }}"
-    mode: '0700'
-  loop:
-    - memory
-    - memory/wallet
-    - pending
-    - ciphertexts
+- name: Note that drift diagnostics are skipped without vault vars (no secret)
+  ansible.builtin.debug:
+    msg: >-
+      Existing config.yaml will be PRESERVED byte-for-byte. Vault config vars are
+      not in scope, so the drift diagnostic was skipped (expected for a vault-free
+      adoption or redeploy). Backup at {{ continuum_backup_dir }} (root-only 0700).
+  when:
+    - continuum_config_action == 'preserve'
+    - not (continuum_vault_vars_present | bool)
 
+# ── 5. TRANSACTIONAL CUTOVER — stop old, copy state, atomic swap, start new ──
 - name: Cut over service + nginx (transactional)
   block:
+    # 5a. Free the port: stop the currently-serving unit. Disable the standalone
+    #     unit on adopt/partial so it never races the new unit on boot.
+    - name: Stop the old unit to free port {{ continuum_agent_port }}
+      ansible.builtin.systemd:
+        name: "{{ continuum_old_service }}"
+        state: stopped
+      when: continuum_old_service | length > 0
+      failed_when: false
+
+    - name: Disable the standalone unit on adopt/partial (prevents boot races)
+      ansible.builtin.systemd:
+        name: "{{ continuum_standalone_service }}"
+        enabled: false
+      when: continuum_mode in ['adopt-standalone', 'partial-adoption']
+      failed_when: false
+
+    # 5b. Render config into the STAGED agent (fresh/rotation only). On preserve
+    #     nothing is rendered — the authoritative config is copied verbatim next.
+    - name: Render agent config.yaml into staging (fresh install or explicit rotation)
+      ansible.builtin.template:
+        src: config.yaml.j2
+        dest: "{{ continuum_release_agent_dir }}/config.yaml"
+        owner: "{{ continuum_user }}"
+        group: "{{ continuum_user }}"
+        mode: '0600'
+      when: continuum_config_action in ['render', 'rotate']
+      no_log: true
+
+    # 5c. Copy authoritative live state VERBATIM into the staged release. config
+    #     is copied only if not already present (rotation renders it first);
+    #     memory/ciphertexts/pending are always carried over. session_secret and
+    #     the funded key are copied byte-for-byte, never regenerated.
+    - name: Copy authoritative config + encrypted state into the staged release
+      ansible.builtin.script: >-
+        {{ continuum_adopt_lib }} migrate
+        {{ continuum_authoritative_dir | quote }}
+        {{ continuum_release_agent_dir | quote }}
+        {{ continuum_user | quote }}
+      register: continuum_migrate
+      changed_when: "'copied' in continuum_migrate.stdout"
+      failed_when: continuum_migrate.rc != 0
+      when: continuum_authoritative_dir | length > 0
+      no_log: true
+
+    - name: Ensure agent runtime dirs exist in the staged release
+      ansible.builtin.file:
+        path: "{{ continuum_release_agent_dir }}/{{ item }}"
+        state: directory
+        owner: "{{ continuum_user }}"
+        group: "{{ continuum_user }}"
+        mode: '0700'
+      loop:
+        - memory
+        - memory/wallet
+        - pending
+        - ciphertexts
+
+    # 5d. Atomic swap: quarantine any pre-existing app dir (never delete it), then
+    #     move staging into place. Same-filesystem renames.
+    - name: Atomically promote the staged release into {{ continuum_app_dir }}
+      ansible.builtin.script: >-
+        {{ continuum_adopt_lib }} promote
+        {{ continuum_release_dir | quote }}
+        {{ continuum_app_dir | quote }}
+        {{ continuum_quarantine_dir | quote }}
+      register: continuum_promote
+      changed_when: "'promoted' in continuum_promote.stdout"
+      failed_when: continuum_promote.rc != 0
+
+    - name: Mark the release as promoted (enables rescue rollback if a later step fails)
+      ansible.builtin.set_fact:
+        continuum_swapped: true
+
+    - name: Lock ownership of the promoted app tree
+      ansible.builtin.command:
+        cmd: "chown -R {{ continuum_user }}:{{ continuum_user }} {{ continuum_app_dir }}"
+      changed_when: true
+
     - name: Install continuum-agent systemd unit
       ansible.builtin.template:
         src: continuum-agent.service.j2
@@ -354,14 +415,62 @@
       retries: 15
       delay: 2
       until: agent_health.status == 200
+
   rescue:
-    - name: Surface backup path + recovery command on cutover failure
+    # Stop the half-started new unit so it never fights the restored one.
+    - name: Stop the new continuum-agent after a failed cutover
+      ansible.builtin.systemd:
+        name: continuum-agent
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    # If we already swapped an EXISTING Ansible tree, roll it back from quarantine.
+    - name: Roll the previous Ansible tree back from quarantine
+      ansible.builtin.script: >-
+        {{ continuum_adopt_lib }} rollback
+        {{ continuum_app_dir | quote }}
+        {{ continuum_quarantine_dir | quote }}
+        {{ continuum_failed_release_dir | quote }}
+      when:
+        - continuum_swapped | default(false) | bool
+        - continuum_mode == 'existing-ansible'
+      failed_when: false
+
+    - name: Restart the restored Ansible unit
+      ansible.builtin.systemd:
+        name: "{{ continuum_service }}"
+        state: started
+      when:
+        - continuum_swapped | default(false) | bool
+        - continuum_mode == 'existing-ansible'
+      failed_when: false
+
+    # For adopt/partial modes the original standalone install is untouched on disk
+    # (we only stopped/disabled its unit) — re-enable and start it to restore service.
+    - name: Re-enable and start the original standalone unit
+      ansible.builtin.systemd:
+        name: "{{ continuum_standalone_service }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: continuum_mode in ['adopt-standalone', 'partial-adoption']
+      failed_when: false
+
+    - name: Surface backup + quarantine paths and recovery command on cutover failure
       ansible.builtin.fail:
         msg: >-
           Continuum cutover FAILED. Your pre-deploy state is intact at
-          {{ continuum_backup_dir }} (root-only 0700). No secret was printed.
-          RECOVERY: restore the agent dir from the backup label under that path
-          (cp -a {{ continuum_backup_dir }}/<label>/{config.yaml,memory,ciphertexts,pending}
-          {{ continuum_agent_dir }}/), then `systemctl restart {{ continuum_service }}`.
-          If you were adopting a standalone install, you can instead re-enable it:
-          `systemctl enable --now {{ continuum_standalone_service }}`.
+          {{ continuum_backup_dir }} (root-only 0700) and no secret was printed.
+          The staged build (if any) is at {{ continuum_release_dir }}; a
+          quarantined prior app tree (if the swap happened) is at
+          {{ continuum_quarantine_dir }}.
+          RECOVERY (adopt/partial): the original standalone install was left on
+          disk and its unit re-enabled — verify with
+          `systemctl status {{ continuum_standalone_service }}` and
+          `curl -sf http://127.0.0.1:{{ continuum_agent_port }}/api/health`.
+          RECOVERY (existing-ansible): the previous tree was rolled back from
+          {{ continuum_quarantine_dir }} and {{ continuum_service }} restarted;
+          if needed restore state with
+          `cp -a {{ continuum_backup_dir }}/<label>/{config.yaml,memory,ciphertexts,pending} {{ continuum_agent_dir }}/`
+          then `systemctl restart {{ continuum_service }}`.

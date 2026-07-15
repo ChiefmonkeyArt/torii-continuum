@@ -26,3 +26,14 @@ continuum_backup_root: "/root"
 # nothing and WILL orphan an already-funded Routstr key. Opt in per-run:
 #   ansible-playbook ... -e continuum_allow_config_rotation=true
 continuum_allow_config_rotation: false
+
+# Transactional cutover (v0.2.42-alpha). The git checkout + npm + build happen in
+# a CLEAN staging/release dir that never holds authoritative state; on success the
+# release is atomically swapped into continuum_app_dir and any pre-existing app
+# dir (including a partial, non-git tree from a failed adoption) is MOVED aside to
+# a timestamped quarantine dir — never deleted. These paths sit next to the app
+# dir so the swap is a same-filesystem rename. {{ continuum_stamp }} is a UTC
+# timestamp the role computes once per run.
+continuum_release_dir: "/home/{{ continuum_user }}/app.staging"
+continuum_quarantine_dir: "/home/{{ continuum_user }}/app.quarantine-{{ continuum_stamp }}"
+continuum_failed_release_dir: "/home/{{ continuum_user }}/app.failed-{{ continuum_stamp }}"
