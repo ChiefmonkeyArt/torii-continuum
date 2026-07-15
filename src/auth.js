@@ -44,7 +44,7 @@ export async function startLogin() {
       title: 'Login unavailable in demo',
       subtitle: 'This build of Continuum runs without an agent backend. Live login (chat, wallet, Routstr) is available when you self-host the agent.',
       body: h('div', {}, [
-        h('p', { class: 'muted', text: 'See agent/README.md in the repo for VPS bring-up. Once your agent is reachable, this button will connect via NIP-07 (Plebeian Signer).' }),
+        h('p', { class: 'muted', text: 'See agent/README.md in the repo for bringing up your Torii. Once your agent is reachable, this button will connect via NIP-07 (Plebeian Signer).' }),
         h('div', { style: 'display:flex; gap: 8px; justify-content: flex-end; margin-top: 12px;' }, [
           h('button', { class: 'primary', onClick: () => loginModalHandle?.close() }, ['OK']),
         ]),

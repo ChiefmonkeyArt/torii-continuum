@@ -1,0 +1,17 @@
+{
+  "name": "torii-onboarding-glb-tools",
+  "version": "0.1.18",
+  "private": true,
+  "type": "module",
+  "description": "Reproducible local GLB optimizer for the onboarding Chiefmonkey asset. Not shipped at runtime; build-time only.",
+  "scripts": {
+    "optimize": "node optimize-glb.mjs"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "4.4.1",
+    "@gltf-transform/extensions": "4.4.1",
+    "@gltf-transform/functions": "4.4.1",
+    "draco3dgltf": "1.5.7",
+    "sharp": "0.35.3"
+  }
+}

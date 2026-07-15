@@ -9,6 +9,80 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.39-alpha — ONBOARDING-GATING + APP-MOUNT: real claimed-state Step-3 gating, dup-pay race closed, completion lands on the actual app dashboard
+
+Onboarding preview bumped to **v0.1.20-preview** (`preview-assets/onboarding-v0.1.20/`).
+Two production defects on the live v0.1.19/v0.2.38 stack, plus the app-mount
+follow-through. **The user-funded Routstr key, all encrypted agent memory, and
+every prior payment state are preserved — no invoice was created, paid, or
+re-submitted, and no `memory/**` was touched.**
+
+**Part A — claimed-state gating (root cause).** In v0.1.19 a verified, funded
+key still rendered both setup-choice cards, the key-entry/reveal controls,
+*Verify & connect*, and *Request an invoice*. Root cause was a CSS cascade
+defect, not logic: author `display` rules (`.btn-primary{inline-flex}`,
+`.wallet-choices/.routstr-paths{flex}`, `.choice-card{grid}`) outrank the UA
+sheet's `[hidden]{display:none}`, so setting `el.hidden = true` on those elements
+did nothing and `collapseStep3Setup` visually no-op'd. Fix is one canonical
+override in `shared.css`: `[hidden] { display: none !important; }`. The
+status-only resume path (page load onto an already-verified key) now funnels
+through `renderSuccessAdvance` via a single `showClaimed` helper (replacing the
+old `showConnected`) so *every* claimed entry point collapses identically. After
+collapse the panel carries `data-claimed="1"` as the single source of truth, and
+the verified green summary + exactly one standalone Continue button are all that
+remain.
+
+**Part A — duplicate-payment race closed.** `data-claimed` is checked as the
+first line of the quote (`quoteBtn`), key-connect (`keyConnectBtn`), and
+pay-confirm (`payBtn`) handlers, so a stale/racing UI in claimed state can never
+initiate a second invoice or payment; the pay button also stays permanently
+disabled once claimed. This makes duplicate invoice/payment initiation
+structurally impossible in claimed state, not merely hidden.
+
+**Part B — completion lands on the real app.** `CONTINUUM_HOME` changed from
+`/continuum/` to `/continuum/#/dashboard` (and the Step-3 curtain-open anchor in
+`index.html` likewise), so onboarding completion opens the multi-view Amber
+Continuum SPA dashboard rather than the marketing page served at the mount root.
+The open-redirect guard on the `window.__toriiContinuumHome` override is
+preserved (same-origin only).
+
+**Part B — session handoff (no forced re-login).** Onboarding writes
+`localStorage['torii.session']` (JSON envelope); the SPA reads
+`localStorage['continuum.session.v1']` (raw token). A freshly onboarded user
+previously hit the SPA with no SPA-shaped session and was bounced to the
+sales/login screen. `src/data/agent.js` gained `adoptOnboardingSession()` (called
+once in `main.js` at boot before `initStore()`): it fails closed if the SPA
+already has a live session, else reads/parses the onboarding envelope and adopts
+its token **only if `tokenLooksLive` passes** (well-formed `iat.exp.pubkey.sig`
+shape + unexpired). Also added `deriveSameOriginBase(pathname)` — under the
+`/continuum/` mount the SPA's `agentUrl()` now falls back to the same-origin
+`/continuum` base when an onboarding session is present, so API calls hit
+same-origin `/api` with no third-party origin and no CDN.
+
+**App mount — no separate torii-suite PR required.** The `/continuum/` alias with
+subpath refresh (`try_files … /continuum/index.html`), the `/continuum/api/*`
+proxy (prefix-stripped to the loopback agent), the SPA build with
+`VITE_AGENT_URL=/continuum`, agent install, nginx fragment, and launcher
+registration are ALL in this repo's `ops/ansible` role — the root Torii Suite
+launcher is never overwritten. Safe idempotent deploy (operator step, NOT run
+here, from `ops/ansible/`): `ansible-playbook -i inventory.yml site.yml --ask-vault-pass --tags continuum`.
+
+**Part C — wording.** Residual "VPS/daemon/box" user-facing copy in
+`src/views/routstr.js`, `src/views/landing.js`, and `src/auth.js` scrubbed to
+"your Torii, your gateway".
+
+Tests: root vitest **762/762** (new `src/data/agent.test.js` 11 cases for the
+session handoff + same-origin base; preview v0.1.20 **153**, with new gating and
+dashboard-landing describe blocks proving claimed state exposes only Continue
+while unclaimed states keep all controls), agent `node --test` **104/104**,
+`npm run build` clean, `npm audit --omit=dev` **0 vulnerabilities** (root +
+agent), dist verified to carry the session-adoption + `/#/dashboard` + relative
+base and no "VPS" copy. **Honest QA limitation:** no jsdom/live-agent in this
+environment, so a live interactive funded-agent browser pass was not possible;
+claimed-state gating is proven by the CSS `!important` cascade guarantee plus
+source/behaviour guards rather than a live click-through. Code + PR only — **not
+merged, tagged, or deployed.**
+
 ## v0.2.38-alpha — ONBOARDING-FINISH: verified-state cleanup, correct balance units, inline key reveal, deterministic final curtain
 
 Onboarding preview bumped to **v0.1.19-preview** (`preview-assets/onboarding-v0.1.19/`).

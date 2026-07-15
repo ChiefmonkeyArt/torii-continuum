@@ -14,9 +14,40 @@
  */
 
 const TOKEN_KEY = 'continuum.session.v1';
+// The onboarding wizard (preview-assets/onboarding-*) writes its session here.
+// It is a JSON envelope { token, expires_at, pubkey, method, created_at } — the
+// same HMAC session token the agent issues, never a secret key. The SPA adopts
+// it on boot so a freshly onboarded operator is NOT bounced back to a login
+// screen when the wizard hands off to /continuum/#/dashboard.
+const ONBOARDING_SESSION_KEY = 'torii.session';
+
+/**
+ * Derive the same-origin agent base from the page's pathname. The SPA and the
+ * agent are served from the same origin: at the `/continuum/` mount the agent
+ * is proxied at `/continuum/api/*`, so the base is `/continuum`. At the site
+ * root there is no prefix and the base is '' (calls hit `/api/*`). Pure so the
+ * subpath contract is unit-tested without a DOM.
+ * @param {string} pathname e.g. location.pathname
+ * @returns {string} base with no trailing slash ('' at root)
+ */
+export function deriveSameOriginBase(pathname) {
+  if (typeof pathname !== 'string' || !pathname) return '';
+  const m = pathname.match(/^\/([^/]+)(?:\/|$)/);
+  if (m && m[1] === 'continuum') return '/continuum';
+  return '';
+}
+
+function hasOnboardingSession() {
+  try {
+    const raw = localStorage.getItem(ONBOARDING_SESSION_KEY);
+    if (!raw) return false;
+    const s = JSON.parse(raw);
+    return !!(s && typeof s.token === 'string' && s.token.length);
+  } catch { return false; }
+}
 
 function agentUrl() {
-  // Priority: window override > build env > empty (offline)
+  // Priority: window override > build env > same-origin runtime fallback > empty
   if (typeof window !== 'undefined' && window.__CONTINUUM_AGENT_URL__) {
     return String(window.__CONTINUUM_AGENT_URL__).replace(/\/$/, '');
   }
@@ -25,6 +56,13 @@ function agentUrl() {
       return String(import.meta.env.VITE_AGENT_URL).replace(/\/$/, '');
     }
   } catch (_e) {}
+  // Defensive runtime fallback: if the build shipped without VITE_AGENT_URL but
+  // we can see a live onboarding session in this origin's storage, the agent IS
+  // reachable same-origin — use the mount-derived base rather than going
+  // offline and stranding a just-onboarded operator.
+  if (typeof window !== 'undefined' && window.location && hasOnboardingSession()) {
+    return deriveSameOriginBase(window.location.pathname);
+  }
   return '';
 }
 
@@ -45,15 +83,50 @@ export function setStoredToken(tok) {
 
 export function clearStoredToken() { setStoredToken(null); }
 
-export function isLoggedIn() {
-  const tok = getStoredToken();
-  if (!tok) return false;
-  // Cheap sanity check without HMAC verify — server verifies on every call.
+/**
+ * Cheap, HMAC-free liveness check of an agent session token. Mirrors the
+ * agent's `iat.exp.pubkey.sig` shape and its `exp < now` rule (the server still
+ * verifies the HMAC on every call — this only decides whether the UI shows a
+ * logged-in state). Pure + exported so the contract is unit-tested without a
+ * DOM. `now` is unix seconds.
+ * @param {unknown} tok
+ * @param {number} [now]
+ */
+export function tokenLooksLive(tok, now = Math.floor(Date.now() / 1000)) {
+  if (typeof tok !== 'string' || !tok) return false;
   const parts = tok.split('.');
   if (parts.length !== 4) return false;
   const exp = parseInt(parts[1], 10);
   if (!Number.isFinite(exp)) return false;
-  return exp * 1000 > Date.now();
+  return exp > now;
+}
+
+export function isLoggedIn() {
+  return tokenLooksLive(getStoredToken());
+}
+
+/**
+ * Adopt an onboarding-wizard session (localStorage['torii.session']) into the
+ * SPA's own session slot when the SPA has no live session of its own. Called
+ * once at boot so a freshly onboarded operator arriving at /continuum/#/dashboard
+ * is already authenticated and is not forced back through a login screen. Only
+ * a live token is adopted; a dead/absent one is ignored (fail closed). Never
+ * writes any secret — the onboarding envelope carries only the session token
+ * and public identity metadata.
+ * @returns {boolean} true when a session was adopted
+ */
+export function adoptOnboardingSession() {
+  if (isLoggedIn()) return false; // SPA already has a live session
+  let envelope;
+  try {
+    const raw = localStorage.getItem(ONBOARDING_SESSION_KEY);
+    if (!raw) return false;
+    envelope = JSON.parse(raw);
+  } catch { return false; }
+  const tok = envelope && envelope.token;
+  if (!tokenLooksLive(tok)) return false;
+  setStoredToken(tok);
+  return true;
 }
 
 async function req(method, path, body) {
