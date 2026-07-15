@@ -297,6 +297,59 @@
 }
 .landing-foot a:hover { border-bottom-color: hsl(var(--primary)); }
 
+/* ── Login page (application root when logged out) ────────── */
+
+.login-wrap {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 20px;
+}
+.login-card {
+  width: 100%;
+  max-width: 440px;
+  text-align: center;
+  padding: 32px 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.login-mark {
+  width: 120px;
+  margin: 0 auto 8px auto;
+}
+.login-mark .landing-torii-svg { width: 120px; height: auto; }
+.login-eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: hsl(var(--primary));
+}
+.login-title {
+  font-family: var(--font-display);
+  font-size: 26px;
+  margin: 4px 0 2px 0;
+}
+.login-lede { font-size: 14px; line-height: 1.55; margin: 0 0 8px 0; }
+.login-cta { margin: 8px 0 4px 0; width: 100%; }
+.login-btn {
+  width: 100%;
+  padding: 11px 16px;
+  font-size: 14.5px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.login-status { font-size: 12.5px; margin-top: 6px; }
+.login-links { font-size: 12.5px; margin-top: 12px; }
+.login-link {
+  color: hsl(var(--primary));
+  text-decoration: none;
+  border-bottom: 1px dotted hsl(var(--primary) / .5);
+}
+.login-link:hover { border-bottom-color: hsl(var(--primary)); }
+
 /* ── Login modal spinner ──────────────────────────────────── */
 
 .login-spinner {

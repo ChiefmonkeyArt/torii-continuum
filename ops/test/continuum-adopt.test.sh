@@ -807,6 +807,119 @@ grep -q 'v43' "$up_wr/index.html" \
 grep -q 'v42' "${WORK}/upgrade/backup/index.html" \
   && ok "upgrade: prior SPA kept as rollback backup" || bad "upgrade: prior SPA not backed up"
 
+# ── 18. root-app normalization + safe set-root (v0.2.44-alpha) ────────────────
+# Live v0.2.43 rerun: group_vars default `torii_root_app: launcher` made the role
+# call `torii set-root launcher`, and the installed CLI/API returned 404
+# {error: app_not_installed, name: launcher} (the launcher at "/" is the sentinel
+# `none`, not a registered app), rolling the whole deploy back. These tests pin
+# the fix: legacy/empty/launcher normalize to `none`, an explicit registered app
+# still works, the default install never 404s (so no rollback), and the call is
+# skipped when the root already matches.
+
+# A mock `torii` CLI that reproduces the EXACT live behaviour. It stores the
+# current root in a state file; `set-root <name>` accepts only `none` or a name
+# present in REGISTERED, and 404s otherwise exactly as the live API did.
+MOCK_STATE="${WORK}/rootapp/state"; MOCK_BIN="${WORK}/rootapp/torii"
+mkdir -p "${WORK}/rootapp"
+: > "$MOCK_STATE"   # unknown/empty current root to start
+cat > "$MOCK_BIN" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+STATE="${TORII_MOCK_STATE:?}"
+# Registered apps on this fake box (the launcher is NOT one of them).
+REGISTERED=" continuum quest plebeian "
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  get-root)
+    cat "$STATE" 2>/dev/null || true ;;
+  set-root)
+    name="${1:-}"
+    if [ "$name" = "none" ] || printf '%s' "$REGISTERED" | grep -q " $name "; then
+      printf '%s' "$name" > "$STATE"
+      echo "root set to ${name}"
+    else
+      # Mirror the live 404 body verbatim (goes to stderr, non-zero exit).
+      echo "HTTP 404 {error: app_not_installed, name: ${name}}" >&2
+      exit 1
+    fi ;;
+  *) echo "unknown torii subcommand: $cmd" >&2; exit 2 ;;
+esac
+MOCK
+chmod +x "$MOCK_BIN"
+export TORII_MOCK_STATE="$MOCK_STATE"
+
+# (a) Reproduce the exact live 404 with the OLD `launcher` value hitting the CLI raw.
+raw_out="$("$MOCK_BIN" set-root launcher 2>&1 1>/dev/null)"; raw_rc=$?
+[[ "$raw_rc" -ne 0 ]] \
+  && ok "root: raw 'set-root launcher' fails (reproduces the live bug)" \
+  || bad "root: raw 'set-root launcher' unexpectedly succeeded"
+{ echo "$raw_out" | grep -q 'app_not_installed' && echo "$raw_out" | grep -q 'launcher'; } \
+  && ok "root: 404 body is {error: app_not_installed, name: launcher}" \
+  || bad "root: 404 body mismatch"
+
+# (b) normalize_root_app maps every launcher-ish selector to `none`.
+for v in launcher Launcher LAUNCHER "" none null "~" torii torii-base base root home homepage default "  launcher  "; do
+  got="$(normalize_root_app "$v")"
+  [[ "$got" == "none" ]] \
+    && ok "root: normalize '${v}' -> none" || bad "root: normalize '${v}' -> '${got}' (want none)"
+done
+# … but an explicit registered app name is preserved unchanged.
+for v in continuum quest plebeian; do
+  [[ "$(normalize_root_app "$v")" == "$v" ]] \
+    && ok "root: normalize preserves explicit '${v}'" || bad "root: normalize dropped explicit '${v}'"
+done
+
+# (c) set_root_safe with the legacy `launcher` value → calls set-root none, no 404.
+: > "$MOCK_STATE"
+out="$(set_root_safe "$MOCK_BIN" "launcher" 2>&1)"; rc=$?
+[[ "$rc" -eq 0 ]] \
+  && ok "root: set_root_safe('launcher') exits 0 (no rollback trigger)" || bad "root: set_root_safe('launcher') non-zero"
+[[ "$(cat "$MOCK_STATE")" == "none" ]] \
+  && ok "root: set_root_safe('launcher') set the root to none" || bad "root: launcher not normalized to none at the CLI"
+echo "$out" | grep -q 'app_not_installed' \
+  && bad "root: set_root_safe('launcher') still hit the 404" || ok "root: set_root_safe('launcher') never hit the 404"
+
+# (d) Default install (requested none) with root already none → SKIPS the call.
+printf 'none' > "$MOCK_STATE"
+out="$(set_root_safe "$MOCK_BIN" "none" 2>&1)"; rc=$?
+{ [[ "$rc" -eq 0 ]] && echo "$out" | grep -q 'skipping set-root'; } \
+  && ok "root: default install skips set-root when root already none" || bad "root: default did not skip when already none"
+# … but requested none with a DIFFERENT current root → sets it to none.
+printf 'quest' > "$MOCK_STATE"
+set_root_safe "$MOCK_BIN" "" >/dev/null 2>&1
+[[ "$(cat "$MOCK_STATE")" == "none" ]] \
+  && ok "root: empty selector moves a non-none root back to none" || bad "root: empty selector did not reset to none"
+
+# (e) An explicit, deliberately-configured registered app still works.
+: > "$MOCK_STATE"
+set_root_safe "$MOCK_BIN" "quest" >/dev/null 2>&1 && quest_rc=0 || quest_rc=1
+{ [[ "$quest_rc" -eq 0 ]] && [[ "$(cat "$MOCK_STATE")" == "quest" ]]; } \
+  && ok "root: explicit registered app (quest) is honoured" || bad "root: explicit registered app not set"
+
+# (f) Pointing the root at Continuum warns (discouraged) but still works when deliberate.
+: > "$MOCK_STATE"
+warn="$(set_root_safe "$MOCK_BIN" "continuum" 2>&1 1>/dev/null)"
+{ echo "$warn" | grep -qi 'discouraged' && [[ "$(cat "$MOCK_STATE")" == "continuum" ]]; } \
+  && ok "root: continuum-as-root warns yet honours a deliberate choice" || bad "root: continuum warning/behaviour wrong"
+
+# (g) No secret/token ever leaks through set_root_safe (env file is sourced silently).
+echo "TORII_ADMIN_TOKEN=${SECRET}" > "${WORK}/rootapp/env"
+: > "$MOCK_STATE"
+leak="$(set_root_safe "$MOCK_BIN" "launcher" "${WORK}/rootapp/env" 2>&1)"
+echo "$leak" | grep -q "$SECRET" \
+  && bad "root: set_root_safe leaked the admin token" || ok "root: set_root_safe never prints the admin token"
+
+# ── 18b. Role + example wiring for the safe root selector (anti-drift) ────────
+EXAMPLE="${REPO_ROOT}/ops/ansible/group_vars/all.yml.example"
+grep -Eq '^torii_root_app:[[:space:]]*"none"' "$EXAMPLE" \
+  && ok "example: default root selector is 'none' (launcher), not 'launcher'" \
+  || bad "example: default root selector not 'none'"
+grep -q 'set-root-safe' "$ROLE" \
+  && ok "role: set-root goes through the normalizing set-root-safe helper" || bad "role: role bypasses set-root-safe"
+grep -q '/usr/local/bin/torii set-root {{ torii_root_app' "$ROLE" \
+  && bad "role: still calls raw 'set-root <torii_root_app>' (unnormalized)" \
+  || ok "role: no raw unnormalized set-root call remains"
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 printf '\n[continuum-adopt.test] pass=%d fail=%d\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || exit 1
