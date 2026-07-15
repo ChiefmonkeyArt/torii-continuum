@@ -221,6 +221,110 @@ grep -q 'continuum_standalone_dir: "/opt/torii/continuum-agent"' "$DEFAULTS" \
 grep -q 'continuum_standalone_service: "torii-continuum-agent"' "$DEFAULTS" \
   && ok "defaults: standalone service matches installer" || bad "defaults: standalone service mismatch"
 
+# ── 8. Vault-free adoption (v0.2.41-alpha) ───────────────────────────────────
+# The role must complete an adopt/redeploy of an EXISTING install WITHOUT any
+# vault vars or vault password. The candidate-config render + drift diagnostic
+# (which reference admin_npub/session_secret) must be SKIPPED, not evaluated, so
+# no undefined-variable error can occur. A fresh install or an explicit rotation
+# must instead FAIL CLOSED when the vars are absent — before any state is written.
+#
+# These bash helpers mirror the role's Jinja gates exactly so the truth table is
+# pinned here without a live Ansible run:
+#   vault_vars_present  == (admin_npub non-empty) AND (session_secret non-empty)
+#   candidate_runs       when action==preserve AND vault_vars_present
+#   fail_closed          when action in (render,rotate) AND NOT vault_vars_present
+vault_vars_present() { # <admin_npub> <session_secret> -> "true"/"false"
+  if [ -n "${1:-}" ] && [ -n "${2:-}" ]; then echo "true"; else echo "false"; fi
+}
+candidate_runs() {     # <action> <present> -> "true"/"false"
+  [ "$1" = "preserve" ] && [ "$2" = "true" ] && echo "true" || echo "false"
+}
+fail_closed() {        # <action> <present> -> "true"/"false"
+  { [ "$1" = "render" ] || [ "$1" = "rotate" ]; } && [ "$2" = "false" ] \
+    && echo "true" || echo "false"
+}
+
+# vault_vars_present truth values
+[[ "$(vault_vars_present "npub1x" "$SECRET")" == "true" ]] \
+  && ok "vault-free: both vars present => true" || bad "vault-free: present truth"
+[[ "$(vault_vars_present "" "")" == "false" ]] \
+  && ok "vault-free: no vars (no vault.yml) => false" || bad "vault-free: absent truth"
+[[ "$(vault_vars_present "npub1x" "")" == "false" ]] \
+  && ok "vault-free: partial vars => false" || bad "vault-free: partial truth"
+
+# adopt-standalone, vault-free: preserve, candidate SKIPPED, NOT fail-closed
+va_s="${WORK}/vaultfree/standalone"; va_a="${WORK}/vaultfree/agent"
+make_standalone "$va_s"; mkdir -p "$va_a"
+[[ "$(layout_detect "$va_a" "$va_s")" == "mode=adopt-standalone" ]] \
+  && ok "vault-free adopt: detects adopt-standalone" || bad "vault-free adopt: detect"
+va_mode="adopt-standalone"
+va_present="$(vault_vars_present "" "")"          # no vault vars in scope
+va_action="$(config_action "$va_mode" false)"
+[[ "$va_action" == "preserve" ]] \
+  && ok "vault-free adopt: config action is preserve" || bad "vault-free adopt: action ($va_action)"
+[[ "$(candidate_runs "$va_action" "$va_present")" == "false" ]] \
+  && ok "vault-free adopt: candidate render + drift SKIPPED (no undefined-var eval)" \
+  || bad "vault-free adopt: candidate would run without vault vars"
+[[ "$(fail_closed "$va_action" "$va_present")" == "false" ]] \
+  && ok "vault-free adopt: does NOT fail closed (adoption needs no secrets)" \
+  || bad "vault-free adopt: fails closed unexpectedly"
+# ...and the migration still preserves the live config byte-for-byte end-to-end
+va_full="$(migrate_state "$va_s" "$va_a" "$(id -un)" 2>&1)"
+diff -q "$va_s/config.yaml" "$va_a/config.yaml" >/dev/null \
+  && ok "vault-free adopt: live config.yaml preserved byte-for-byte" \
+  || bad "vault-free adopt: config altered"
+grep -qr "FUNDED-KEY-CIPHERTEXT" "$va_a/ciphertexts" \
+  && ok "vault-free adopt: funded key migrated intact" || bad "vault-free adopt: key lost"
+# no secret across the entire vault-free adoption trace
+echo "$va_full" | grep -q "$SECRET" \
+  && bad "vault-free adopt: LEAKED secret in output" || ok "vault-free adopt: no secret in output"
+
+# existing-ansible redeploy, vault-free: preserve, candidate SKIPPED, no fail
+ex_present="$(vault_vars_present "" "")"
+ex_action="$(config_action existing-ansible false)"
+[[ "$ex_action" == "preserve" ]] \
+  && ok "vault-free redeploy: existing-ansible => preserve" || bad "vault-free redeploy: action"
+[[ "$(candidate_runs "$ex_action" "$ex_present")" == "false" ]] \
+  && ok "vault-free redeploy: drift diagnostic SKIPPED without vault vars" \
+  || bad "vault-free redeploy: candidate would run"
+[[ "$(fail_closed "$ex_action" "$ex_present")" == "false" ]] \
+  && ok "vault-free redeploy: does NOT fail closed" || bad "vault-free redeploy: fails closed"
+
+# fresh install, vault-free: render => FAIL CLOSED
+fr_action="$(config_action fresh)"
+[[ "$fr_action" == "render" ]] \
+  && ok "fresh missing-vars: action is render" || bad "fresh missing-vars: action"
+[[ "$(fail_closed "$fr_action" "$(vault_vars_present "" "")")" == "true" ]] \
+  && ok "fresh missing-vars: FAILS CLOSED when vault vars absent" \
+  || bad "fresh missing-vars: did not fail closed"
+# fresh WITH vars present must NOT fail closed
+[[ "$(fail_closed "$fr_action" "$(vault_vars_present "npub1x" "$SECRET")")" == "false" ]] \
+  && ok "fresh with vars: renders (does not fail closed)" || bad "fresh with vars: fails closed"
+
+# explicit rotation, vault-free: rotate => FAIL CLOSED
+ro_action="$(config_action existing-ansible true)"
+[[ "$ro_action" == "rotate" ]] \
+  && ok "rotation missing-vars: action is rotate" || bad "rotation missing-vars: action"
+[[ "$(fail_closed "$ro_action" "$(vault_vars_present "" "")")" == "true" ]] \
+  && ok "rotation missing-vars: FAILS CLOSED when vault vars absent" \
+  || bad "rotation missing-vars: did not fail closed"
+
+# ── 9. Anti-drift: the role must wire the vault-free guards ───────────────────
+grep -q 'continuum_vault_vars_present' "$ROLE" \
+  && ok "role: computes vault-var presence fact" || bad "role: no vault-var presence fact"
+# candidate render must be guarded by the presence fact (never unconditional)
+grep -q 'continuum_vault_vars_present | bool' "$ROLE" \
+  && ok "role: drift/candidate guarded by vault-var presence" \
+  || bad "role: candidate not guarded by presence fact (undefined-var risk!)"
+# presence must be computed defensively via the default filter (never bare eval)
+grep -Eq "admin_npub \| default\(''\)" "$ROLE" \
+  && ok "role: presence uses default filter (no undefined-var eval)" \
+  || bad "role: presence fact may raise on undefined var"
+# a fail-closed task must exist for render/rotate without vault vars
+grep -q 'Fail closed when config render/rotation is required but vault vars are absent' "$ROLE" \
+  && ok "role: fresh/rotation without vault vars fails closed" \
+  || bad "role: no fail-closed guard for missing vault vars"
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 printf '\n[continuum-adopt.test] pass=%d fail=%d\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || exit 1

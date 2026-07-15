@@ -9,6 +9,17 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.41-alpha — OPS-HARDENING: vault-free standalone adoption / redeploy
+
+Ops-only release (no app/agent code paths changed; onboarding preview stays **v0.1.20-preview**). Closes the blocker identified after v0.2.40-alpha: adopting or redeploying an **existing** install preserves the live `config.yaml` byte-for-byte, yet the preserve path still rendered a `.config.candidate.yaml` from `config.yaml.j2` (which references `{{ admin_npub }}`/`{{ session_secret }}`) purely for the drift diagnostic — so a genuinely vault-free run (no `group_vars/vault.yml`, no vault password) failed with an undefined-variable error before adoption completed.
+
+**Fix (`roles/continuum/tasks/main.yml`):**
+- New `continuum_vault_vars_present` fact, computed with the `default('')` filter so an undefined `admin_npub`/`session_secret` yields `false` rather than raising.
+- The candidate render, `config-drift` script, candidate removal, and "differ" warning are all guarded behind `continuum_vault_vars_present | bool` and are skipped entirely when the vault vars are absent; a non-secret debug notes the diagnostic was skipped. The live config is still preserved untouched, so the funded Routstr key stays decryptable.
+- A fresh install or an explicit `continuum_allow_config_rotation=true` rotation still requires the vault vars; their absence in those modes now **fails closed** with a clear, non-secret `ansible.builtin.fail` before any state is mutated.
+
+**Tests / docs:** `ops/test/continuum-adopt.test.sh` extended to **66** hermetic assertions (vault-free adopt end-to-end with byte-for-byte config preservation + funded-key migration + no-secret output; existing-ansible redeploy; fresh missing-vars fail-closed; explicit-rotation missing-vars fail-closed; vault-var presence truth table; anti-drift greps for the new guards). New "Vault-free adoption / redeploy (v0.2.41-alpha)" subsection in `ops/README.md` with the exact secret-free localhost invocation. Root + agent version → v0.2.41-alpha (+ both lockfiles). Verified: adopt **66/66**, ops regressions 18/10/9/13, `bash -n` clean, agent `node --test`, root build + vitest, `npm audit --omit=dev` 0 vulns. Code + PR only — **not merged, tagged, or deployed.**
+
 ## v0.2.40-alpha — OPS-HARDENING: safe standalone→Ansible adoption, no config clobber, fail-closed backups
 
 Ops-only release (no app/agent code paths changed; onboarding preview stays

@@ -19,6 +19,17 @@
 #      explicitly set continuum_allow_config_rotation=true. Otherwise the existing
 #      config is preserved untouched; a drift against vault is reported as a safe
 #      "differ" warning that prints NO secret value.
+#
+# VAULT-FREE ADOPTION (v0.2.41-alpha)
+# -----------------------------------
+# Adopting or redeploying an EXISTING install (adopt-standalone / existing-ansible)
+# preserves config.yaml byte-for-byte and needs NO vault vars and NO vault
+# password. The drift diagnostic renders a candidate from config.yaml.j2 (which
+# references admin_npub/session_secret), so it is guarded behind
+# continuum_vault_vars_present and simply SKIPPED when those vars are absent —
+# no undefined-variable evaluation occurs. Only a fresh install or an explicit
+# rotation requires the vault vars, and their absence then fails closed with a
+# clear, non-secret message before any state is mutated.
 #   5. Wraps the service + nginx cutover in block/rescue: on failure it surfaces
 #      the backup path and an exact recovery command instead of leaving a
 #      half-migrated box.
@@ -170,6 +181,36 @@
   ansible.builtin.set_fact:
     continuum_config_action: "{{ continuum_cfg_action.stdout | trim }}"
 
+# Are the vault-backed config vars present in scope? Evaluated with the default
+# filter so an UNDEFINED var never raises — a missing vault.yml (and thus no
+# vault password) simply yields false. Only admin_npub + session_secret are
+# required to render config.yaml; cashu_mints has a template default and
+# torii_domain is asserted non-secret in site.yml.
+- name: Determine whether vault-backed config vars are present
+  ansible.builtin.set_fact:
+    continuum_vault_vars_present: >-
+      {{ (admin_npub | default('') | string | length > 0)
+         and (session_secret | default('') | string | length > 0) }}
+
+# Fail CLOSED before writing any config when a render/rotate is required but the
+# vault vars are absent. This is the fresh-install (and explicit-rotation) guard:
+# no secret is printed, and no existing state has been mutated at this point.
+- name: Fail closed when config render/rotation is required but vault vars are absent
+  ansible.builtin.fail:
+    msg: >-
+      Continuum '{{ continuum_config_action }}' requires the config vars
+      admin_npub and session_secret to be defined (normally via an
+      ansible-vault group_vars/vault.yml loaded with --ask-vault-pass). They are
+      NOT defined, so the deploy is stopping BEFORE writing any config and BEFORE
+      mutating any state. No secret value was read or printed. A FRESH install
+      must supply these vars; an explicit rotation
+      (continuum_allow_config_rotation=true) must also supply them. Adopting or
+      redeploying an EXISTING install does not need them — the live config.yaml
+      is preserved byte-for-byte.
+  when:
+    - continuum_config_action in ['render', 'rotate']
+    - not (continuum_vault_vars_present | bool)
+
 - name: Render agent config.yaml (fresh install or explicit rotation)
   ansible.builtin.template:
     src: config.yaml.j2
@@ -181,8 +222,23 @@
   no_log: true
   notify: restart continuum-agent
 
-# When preserving, still detect (without revealing) whether the vault secret has
-# drifted from the live config, so the operator learns a rotation is pending.
+# When preserving, optionally detect (without revealing) whether the vault secret
+# has drifted from the live config, so the operator learns a rotation is pending.
+# This diagnostic is SKIPPED entirely when the vault vars are absent: it renders a
+# candidate from config.yaml.j2 (which references admin_npub/session_secret), so
+# without those vars it would raise undefined-variable errors. A vault-free adopt
+# or redeploy therefore preserves the live config and simply prints a notice.
+- name: Note that drift diagnostics are skipped without vault vars (no secret, no clobber)
+  ansible.builtin.debug:
+    msg: >-
+      Existing config.yaml PRESERVED byte-for-byte. Vault config vars
+      (admin_npub/session_secret) are not in scope, so the drift diagnostic was
+      skipped. This is expected for a vault-free adoption or redeploy. Backup at
+      {{ continuum_backup_dir }} (root-only 0700).
+  when:
+    - continuum_config_action == 'preserve'
+    - not (continuum_vault_vars_present | bool)
+
 - name: Render candidate config to a temp path for drift check (no clobber)
   ansible.builtin.template:
     src: config.yaml.j2
@@ -190,7 +246,9 @@
     owner: "{{ continuum_user }}"
     group: "{{ continuum_user }}"
     mode: '0600'
-  when: continuum_config_action == 'preserve'
+  when:
+    - continuum_config_action == 'preserve'
+    - continuum_vault_vars_present | bool
   no_log: true
 
 - name: Compare live config vs vault candidate (reveals no value)
@@ -200,14 +258,18 @@
     {{ continuum_agent_dir | quote }}/.config.candidate.yaml
   register: continuum_drift
   changed_when: false
-  when: continuum_config_action == 'preserve'
+  when:
+    - continuum_config_action == 'preserve'
+    - continuum_vault_vars_present | bool
   no_log: true
 
 - name: Remove the candidate config (never left on disk)
   ansible.builtin.file:
     path: "{{ continuum_agent_dir }}/.config.candidate.yaml"
     state: absent
-  when: continuum_config_action == 'preserve'
+  when:
+    - continuum_config_action == 'preserve'
+    - continuum_vault_vars_present | bool
 
 - name: Warn if vault differs from the preserved config (no secret printed)
   ansible.builtin.debug:
@@ -218,6 +280,7 @@
       -e continuum_allow_config_rotation=true (backup at {{ continuum_backup_dir }}).
   when:
     - continuum_config_action == 'preserve'
+    - continuum_vault_vars_present | bool
     - continuum_drift.stdout is defined
     - "'differ' in continuum_drift.stdout"
 

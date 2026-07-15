@@ -157,6 +157,48 @@ cd torii-continuum/ops/ansible
 ansible-playbook -i inventory.yml site.yml --ask-vault-pass --tags continuum
 ```
 
+### Vault-free adoption / redeploy (v0.2.41-alpha)
+
+Adopting or redeploying an **existing** install preserves `config.yaml`
+byte-for-byte, so it needs **no `group_vars/vault.yml`, no `admin_npub`,
+`session_secret`, or `cashu_mints`, and no vault password**. From v0.2.41-alpha
+the role guards the drift diagnostic (which would otherwise render a candidate
+config referencing those vault vars) behind their presence and simply **skips**
+it when they are absent — no undefined-variable error, no clobber. On a fresh
+public clone of the current live standalone box you can therefore run:
+
+```bash
+cd torii-continuum/ops/ansible
+
+# inventory.yml — localhost over a local connection, no SSH, no secrets
+cat > inventory.yml <<'YAML'
+all:
+  children:
+    torii:
+      hosts:
+        localhost:
+          ansible_connection: local
+YAML
+
+# group_vars/all.yml — non-secret vars only
+mkdir -p group_vars
+cat > group_vars/all.yml <<'YAML'
+torii_domain: chiefmonkey.art
+continuum_version: v0.2.41-alpha
+YAML
+
+# No vault.yml, no --ask-vault-pass. Adoption preserves the live config.
+ansible-playbook -i inventory.yml site.yml --tags continuum
+```
+
+The role detects `adopt-standalone` (or `existing-ansible`), backs up
+fail-closed, migrates state verbatim, preserves the live `session_secret`, and
+prints a notice that the drift diagnostic was skipped for lack of vault vars.
+
+Only a **fresh** install or an **explicit rotation** needs the vault vars: when
+they are absent in those modes the play **fails closed** with a clear,
+non-secret message *before* writing any config or mutating any state.
+
 **Deliberate secret rotation (rare, dangerous).** Rotating `session_secret`
 re-encrypts nothing and *orphans an already-funded Routstr key*. It is therefore
 OFF by default. Only when you truly intend it, opt in per-run:
