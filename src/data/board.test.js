@@ -343,3 +343,41 @@ describe('regressions — existing project surface still works', () => {
     expect(store.milestonesFor(SLUG).length).toBeGreaterThan(0);
   });
 });
+
+describe('boardStatsFor — kanban-derived progress (KANBAN-PROG-1)', () => {
+  it('buckets default Todo/Doing/Done columns and computes percent', () => {
+    const [todo, doing, done] = store.boardColumnsFor(SLUG);
+    store.addCard(SLUG, todo.content.id, { title: 't1' });
+    store.addCard(SLUG, todo.content.id, { title: 't2' });
+    store.addCard(SLUG, doing.content.id, { title: 'd1' });
+    store.addCard(SLUG, done.content.id, { title: 'x1' });
+    store.addCard(SLUG, done.content.id, { title: 'x2' });
+    const s = store.boardStatsFor(SLUG);
+    expect(s).toEqual({ total: 5, backlog: 0, todo: 2, doing: 1, done: 2, percent: 40 });
+  });
+
+  it('returns all zeros and percent 0 for a board with no cards', () => {
+    expect(store.boardStatsFor(SLUG)).toEqual({
+      total: 0, backlog: 0, todo: 0, doing: 0, done: 0, percent: 0,
+    });
+  });
+
+  it('classifies custom column names (Review → doing, Icebox → backlog)', () => {
+    const created = store.createProject({ name: 'Custom Cols' });
+    const slug = created.content.slug;
+    const [firstCol] = store.boardColumnsFor(slug); // materialises defaults
+    const review = store.addColumn(slug, 'Review');
+    const icebox = store.addColumn(slug, 'Icebox');
+    store.addCard(slug, review.content.id, { title: 'r1' });
+    store.addCard(slug, icebox.content.id, { title: 'i1' });
+    store.addCard(slug, icebox.content.id, { title: 'i2' });
+    store.addCard(slug, firstCol.content.id, { title: 'todo1' }); // default Todo
+    const s = store.boardStatsFor(slug);
+    expect(s.doing).toBe(1);   // Review
+    expect(s.backlog).toBe(2); // Icebox
+    expect(s.todo).toBe(1);    // default Todo
+    expect(s.done).toBe(0);
+    expect(s.total).toBe(4);
+    expect(s.percent).toBe(0);
+  });
+});

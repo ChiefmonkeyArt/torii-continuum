@@ -270,6 +270,40 @@ function getColumn(slug, columnId) {
   ) || null;
 }
 
+// Classify a column name into a status bucket. Inverse of board.js's
+// columnForStatus() and shares its regex vocabulary so board placement and
+// dashboard progress agree. Order matters: 'done' and 'doing' are checked
+// before the broad todo/backlog patterns. Unmatched names fall through to
+// 'todo' (the neutral default).
+function bucketForColumnName(name) {
+  const n = String(name || '');
+  if (/done|complete|shipped/i.test(n)) return 'done';
+  if (/doing|progress|active|wip|review/i.test(n)) return 'doing';
+  if (/backlog|icebox|someday/i.test(n)) return 'backlog';
+  if (/todo|to do|to-do|inbox/i.test(n)) return 'todo';
+  return 'todo';
+}
+
+/**
+ * Real kanban progress for a project's board. Pure data — no DOM. Counts cards
+ * per column, folds each column into a status bucket, and derives a completion
+ * percent as done/total. Safe for a project with no board or no cards (all
+ * zeros, percent 0). This is the single source of truth behind the dashboard's
+ * per-project progress.
+ */
+export function boardStatsFor(slug) {
+  ensureBoard(slug);
+  const stats = { total: 0, backlog: 0, todo: 0, doing: 0, done: 0, percent: 0 };
+  for (const col of boardColumnsFor(slug)) {
+    const bucket = bucketForColumnName(col.content.name);
+    const count = cardsFor(slug, col.content.id).length;
+    stats[bucket] += count;
+    stats.total += count;
+  }
+  stats.percent = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
+  return stats;
+}
+
 // Rewrite the `order` field of a column's cards to a dense 0..n-1 sequence,
 // preserving their current relative order. Keeps move/insert math simple and
 // stops `order` values from drifting.

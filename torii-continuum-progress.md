@@ -9,6 +9,18 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.51-alpha — KANBAN-PROG-1: dashboard progress from real kanban data
+
+Frontend-only release (`src/data/store.js` + `src/views/dashboard.js` + `src/data/board.test.js`; **no agent code changed**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.50-alpha → 0.2.51-alpha` (agent stays at `0.2.49-alpha`).
+
+**Ask (job #2).** *"Connect the progress to the data on the Kanban."*
+
+**Root cause.** The dashboard's per-project progress and the top "Overall progress" card were both derived from milestone status (`milestonesFor`), which is mock-ish seed data disconnected from what the operator actually manages on the Kanban boards.
+
+**Change.** New pure store helper `boardStatsFor(slug)` (exported) returns `{ total, backlog, todo, doing, done, percent }` by counting cards per column and folding each column name into a status bucket via `bucketForColumnName()` — the inverse of `board.js`'s `columnForStatus()`, sharing its regex vocabulary (done|complete|shipped → done; doing|progress|active|wip|review → doing; backlog|icebox|someday → backlog; todo|to do|to-do|inbox → todo; default → todo) so board placement and dashboard progress agree. `percent` = done/total rounded, 0 when total is 0; safe for a project with no board/cards. The dashboard's "Overall progress" card now aggregates board stats across all projects (done/total cards), and the "By project" section shows per-project total, a Done/Doing/Todo/Backlog breakdown line, and a done/total progress bar. The per-project section is now re-rendered in place via a `subscribe()` handler (cleaned up alongside the provider poll on leaving `#/dashboard`) so adding/moving a card reflects immediately.
+
+**Tests.** `src/data/board.test.js` +3: default Todo/Doing/Done buckets + percent; empty board → all zeros/percent 0; custom names (Review → doing, Icebox → backlog). Root suite 856 pass.
+
 ## v0.2.50-alpha — LAYOUT-1: constrain chat dock to the main column + full-height sidebar
 
 Frontend-only release (CSS only — `src/styles/layout.css` + `src/styles/chat.css`; **no JS/shell/agent code changed**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.48-alpha → 0.2.50-alpha` (agent stays at `0.2.49-alpha` from the NWC-ERR-1 slice on this batch branch; root lockfile top-level `version` left as-is per prior convention).
