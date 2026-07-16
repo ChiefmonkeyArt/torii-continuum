@@ -9,6 +9,18 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.49-alpha — NWC-ERR-1: harden NWC onboarding Step 2 error paths
+
+Agent-only release (onboarding preview stays **v0.1.20-preview**; only `agent/` changed). Agent `package.json` + lockfile bumped `0.2.48-alpha → 0.2.49-alpha`; root untouched.
+
+**Root cause.** Step 2 of onboarding (connecting an NWC wallet) surfaced a raw "Internal Server Error" to the operator. `walletConnect()` / `walletTest()` in `agent/core/onboarding.mjs` called `client.getInfo()` inside a `try { … } finally { close() }` with **no catch**. The live NIP-47 path can *throw* (relay unreachable, nip04 encrypt/decrypt failure, JSON parse) rather than returning `{ ok:false }`; the uncaught exception propagated out of the thin Fastify route adapter, and with no app-level error handler Fastify answered a bare `500 "Internal Server Error"`.
+
+**Fix.**
+- `agent/core/onboarding.mjs`: wrapped `getInfo()` in `walletConnect()` and `walletTest()` (and `payInvoice()` in `routstrPay()`) with `try/catch`, keeping the `finally { close() }`. A throw now folds into the existing sanitized `502 { ok:false, error:'wallet did not respond to get_info' }` shape so the frontend treats it identically to a non-throwing failure. A new `sanitizeReason()` helper logs a short, bounded reason with any long hex run (secret/pubkey) redacted — the URI/secret never enters a log line or response.
+- `agent/index.mjs`: added an app-level `app.setErrorHandler` — defense in depth. Client errors (`statusCode < 500`, e.g. Fastify validation/empty-body 400s) pass through unchanged; any 5xx/unexpected throw is logged in full server-side and answered with a sanitized JSON `500 { ok:false, error:'internal error' }` (no stack, no message, no secret). Structured `{code,body}` onboarding responses, auth 401/403, and rate-limit 429s are all sent via `reply.code().send()` / the rate-limit `errorResponseBuilder`, so they never reach the handler.
+
+**Tests.** Extended `agent/test/onboarding.test.js`: a throwing `getInfo` in `walletConnect()` and `walletTest()` each return 502 (not a bare 500) with `close()` still called; a throwing `payInvoice` in `routstrPay()` returns 502 with `close()` still called; and a secret-discipline test proves the URI/secret never appears in the response body or any log line even when the thrown error message embeds them. Full agent suite: **172 pass / 0 fail**.
+
 ## v0.2.48-alpha — OPS-DEPLOY-1: restart the promoted agent + verify the deployed version
 
 Ops-only release (onboarding preview stays **v0.1.20-preview**; **no app/agent runtime code changed** — only `ops/ansible/roles/continuum/tasks/main.yml`, a new ops test, and the version stamps). Closes GitHub issue **#49**. Root + agent `package.json` bumped `0.2.47-alpha → 0.2.48-alpha` for the version invariant; lockfile top-level `version` fields left as-is (prior releases never bumped them; `npm ci` validates the dependency tree, not that field).
