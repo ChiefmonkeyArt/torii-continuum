@@ -1,0 +1,24 @@
+# Torii Continuum — unattended deploy timer (OPS-DEPLOY-2, v0.2.50-alpha)
+#
+# Fires torii-continuum-deploy.service on an interval. The deploy itself is a
+# no-op unless the root-owned pin file names a new, allowlisted, valid tag the
+# live agent is not already serving, so a frequent tick is cheap and safe.
+#
+# Installed + enabled by ops/deploy-bootstrap.sh.
+
+[Unit]
+Description=Torii Continuum unattended deploy timer (pull)
+Documentation=https://github.com/ChiefmonkeyArt/torii-continuum
+
+[Timer]
+# First run shortly after boot, then every 5 minutes. Persistent=true catches
+# up a missed run after downtime. RandomizedDelaySec spreads the tick so it
+# never lands exactly on the minute boundary.
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=45
+Persistent=true
+Unit=torii-continuum-deploy.service
+
+[Install]
+WantedBy=timers.target
