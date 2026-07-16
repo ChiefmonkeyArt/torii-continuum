@@ -1,0 +1,32 @@
+# Torii Continuum — scoped deploy sudoers rule (OPS-DEPLOY-2, v0.2.50-alpha)
+#
+# OPTIONAL. Only needed for the remote/CI TRIGGER path, where a dedicated,
+# locked deploy principal (default user: `toriideploy`) is allowed to invoke
+# the deploy wrapper — and NOTHING else — without a password. The primary,
+# SSH-free path is the systemd timer (torii-continuum-deploy.timer), which runs
+# as root and needs no sudoers rule at all.
+#
+# Install with:
+#   sudo install -m 0440 -o root -g root \
+#     ops/sudoers/torii-continuum-deploy /etc/sudoers.d/torii-continuum-deploy
+#   sudo visudo -cf /etc/sudoers.d/torii-continuum-deploy   # validate before trusting
+#
+# SECURITY NOTES
+#   - This grants NOPASSWD on EXACTLY ONE absolute command path. It is NOT
+#     general passwordless sudo. The principal cannot run any other command.
+#   - The wrapper path is absolute and root-owned (0755, owner root:root); the
+#     principal cannot modify it. Never point this rule at a script writable by
+#     the principal — that would be equivalent to giving it root.
+#   - No arguments are permitted after the wrapper: the trailing "" forbids the
+#     caller from appending flags. The target tag comes from the root-owned pin
+#     file /etc/torii/continuum-deploy.conf, which the principal cannot write.
+#   - The deploy principal is a locked, non-login system user (no shell, no
+#     password), created by ops/deploy-bootstrap.sh.
+#
+# Replace `toriideploy` below only if you created the principal under a
+# different name.
+
+Defaults:toriideploy !requiretty
+Defaults:toriideploy env_reset
+
+toriideploy ALL=(root) NOPASSWD: /usr/local/sbin/torii-continuum-deploy ""

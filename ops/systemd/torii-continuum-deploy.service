@@ -1,0 +1,34 @@
+# Torii Continuum — unattended deploy (OPS-DEPLOY-2, v0.2.50-alpha)
+#
+# One-shot service invoked by torii-continuum-deploy.timer. Runs the root-owned
+# deploy wrapper, which no-ops unless the root-owned pin file
+# (/etc/torii/continuum-deploy.conf) names a new, allowlisted, valid release tag
+# that the live agent is not already serving. This is the SERVER-SIDE PULL: no
+# inbound SSH, no open ports, no secret handling.
+#
+# Installed by ops/deploy-bootstrap.sh.
+
+[Unit]
+Description=Torii Continuum unattended deploy (pull)
+Documentation=https://github.com/ChiefmonkeyArt/torii-continuum
+After=network-online.target
+Wants=network-online.target
+
+# A persistent failure (e.g. a bad pin) trips the unit into a failed state
+# instead of retrying forever on the timer's back.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+# Runs as root: it installs code under /opt/deploy and runs the Ansible role
+# (which manages systemd + nginx). The wrapper itself is the ONLY privileged
+# surface — see ops/sudoers/torii-continuum-deploy.example for the scoped,
+# NOPASSWD-on-just-this-wrapper rule used by the optional remote-trigger path.
+ExecStart=/usr/local/sbin/torii-continuum-deploy
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=torii-continuum-deploy
+TimeoutStartSec=1800

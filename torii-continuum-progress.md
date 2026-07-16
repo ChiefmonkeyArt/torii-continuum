@@ -9,6 +9,24 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.50-alpha — OPS-DEPLOY-2: safe unattended deployment (server-side pull)
+
+Ops-only release (**no app/agent runtime code changed** — only new files under `ops/`, docs, and the version stamps). Closes GitHub issue **#54**. Root + agent `package.json` bumped `0.2.49-alpha → 0.2.50-alpha` for the health-gate version invariant.
+
+**Why.** Local-device automation cannot make outbound SSH and interactive VPS SSH prompts for a password, so a push deploy is impossible; the existing role's redeploy still needed a human to run `ansible-playbook` on the box. This adds a **server-side pull** so releasing a version is a single root-only pin-file edit, with no SSH in the deploy loop.
+
+**Design — delegate, don't reimplement.** A small, root-owned wrapper drives the *already-hardened* `continuum` role. State backup, the atomic staging→swap cutover, the version-asserting health gate, rescue rollback, and cleanup all stay in the role; the wrapper only adds the safe transport + tag-verification layer on top.
+
+**New files (all `ops/`):**
+- `deploy-unattended.sh` → `/usr/local/sbin/torii-continuum-deploy`. Strict `^v<semver>(-prerelease)?$` tag grammar (rejects branches/SHAs/shell+YAML metacharacters); optional fail-closed allowlist; optional `git tag -v` signed-tag gate (`CONTINUUM_REQUIRE_SIGNED_TAGS=1`); **idempotent no-op** when live `/api/health` version already matches; fresh per-tag clone under `/opt/deploy`; renders localhost vault-free inventory (`continuum_version`+`torii_domain` only); runs `--tags continuum`; **independently re-verifies** the live version; prunes old releases keeping newest N and never the live one. `flock`-guarded, `set -euo pipefail`, refuses non-root, sourceable for in-process tests.
+- `systemd/torii-continuum-deploy.{service,timer}` — oneshot + ~5min timer, no inbound SSH/ports.
+- `sudoers/torii-continuum-deploy.example` — OPTIONAL remote/CI trigger; locked non-login `toriideploy` principal, `NOPASSWD` on **exactly the wrapper, no args**; never general passwordless sudo.
+- `deploy-bootstrap.sh` — idempotent, fail-closed one-time installer (wrapper 0755 root:root; units; root-only `0600` pin-file skeleton it never clobbers; optional principal+sudoers validated with `visudo -cf`; optional dedicated ed25519 key + host-key-pinning guidance).
+
+**Security.** No secret is read, written, or logged — the vault-free path preserves `config.yaml` / `session_secret` / the funded Routstr key byte-for-byte. No auth weakened, no general sudo, no ports opened. A bad release fails closed and self-reverts via the role's rollback.
+
+**Tests / verification.** New `ops/test/deploy-unattended.test.sh` **55/55** (tag grammar incl. injection strings, version gate, allowlist fail-closed, version extraction, localhost/vault-free inventory, prune-keeps-live, wrapper fail-closed guards, oneshot/timer wiring, scoped-sudo/no-`NOPASSWD: ALL`, bootstrap modes/visudo/locked-principal/host-key-pin/no-clobber). Existing `deploy-restart` **25/25**, root `npx vitest run` **872/872**, `npm run build` clean (0.2.50-alpha). No hostnames/devices/secrets. Sole attribution Chiefmonkey. Code + PR only — not merged/tagged/deployed.
+
 ## v0.2.49-alpha — CONT-LIVE-UI-1: surface live provider/wallet/kanban data in the UI
 
 Frontend-only release (onboarding preview stays **v0.1.20-preview**; **no agent runtime code changed** — only `src/views/{dashboard,routstr,board}.js`, three new vitest files, docs, and the version stamps). Closes GitHub issue **#52**. Root + agent `package.json` bumped `0.2.48-alpha → 0.2.49-alpha` for the health-gate version invariant.

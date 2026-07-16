@@ -411,6 +411,69 @@ stale-version-fails / correct-version-passes gate logic, and secret hygiene.
 
 ---
 
+### Unattended deployment — server-side pull (OPS-DEPLOY-2, v0.2.50-alpha)
+
+The redeploy above still needs a human to run `ansible-playbook` on the box. If
+your local automation **cannot make outbound SSH** and the VPS SSH login
+**prompts for a password**, a push deploy is impossible. OPS-DEPLOY-2 adds a
+**server-side pull**: a small, root-owned wrapper the VPS runs on a timer, which
+**delegates to the same hardened role** (it never reimplements backup, the atomic
+cutover, the health/version gate, rollback, or cleanup — those stay in the role).
+
+Components (all under `ops/`):
+
+- **`deploy-unattended.sh`** → installed as `/usr/local/sbin/torii-continuum-deploy`.
+  Validates the target tag against a strict `v<semver>` grammar (branches, SHAs,
+  and every shell/YAML metacharacter are refused), checks an optional allowlist,
+  optionally verifies a GPG-signed tag (`git tag -v`), **no-ops if the live
+  `/api/health` version already matches**, clones the tag into a fresh
+  `/opt/deploy/torii-continuum-<tag>`, runs the localhost vault-free
+  `--tags continuum` redeploy, independently re-verifies the live version, and
+  prunes old release dirs (keeping the newest N and never the live one).
+  `flock`-guarded and fail-closed at every step. **No secret is read or logged**
+  — the vault-free path preserves `config.yaml` / `session_secret` / the funded
+  key byte-for-byte.
+- **`systemd/torii-continuum-deploy.{service,timer}`** — the SSH-free trigger.
+  The timer fires the wrapper every ~5 min; it is a cheap no-op until the pin
+  file names a new tag. **No inbound SSH, no open ports.**
+- **`sudoers/torii-continuum-deploy.example`** — OPTIONAL, for a remote/CI
+  trigger. Grants a locked, non-login principal (`toriideploy`) `NOPASSWD` on
+  **exactly the wrapper and nothing else** — never general passwordless sudo.
+- **`deploy-bootstrap.sh`** — the idempotent, fail-closed one-time installer.
+
+**One-time bootstrap** (the only time you need the interactive SSH password):
+
+```bash
+# On the VPS, from a torii-continuum checkout, as root:
+sudo ops/deploy-bootstrap.sh
+# (optional remote/CI trigger path, with a dedicated key + scoped sudo:)
+# sudo ops/deploy-bootstrap.sh --with-ssh-key
+```
+
+Then edit the root-only pin file to authorize a release — this is the **only**
+action needed for every subsequent unattended deploy:
+
+```bash
+sudo sed -i \
+  -e 's/^CONTINUUM_TARGET_TAG=.*/CONTINUUM_TARGET_TAG=v0.2.50-alpha/' \
+  -e 's/^CONTINUUM_DOMAIN=.*/CONTINUUM_DOMAIN=chiefmonkey.art/' \
+  /etc/torii/continuum-deploy.conf
+# converges within ~5 min on the timer, or trigger it now:
+sudo systemctl start torii-continuum-deploy.service
+journalctl -u torii-continuum-deploy -f          # watch it (no-op unless tag changed)
+```
+
+Because the wrapper asserts the live `/api/health` version equals the pinned tag
+(on top of the role's own gate) and the role rolls back on any failure, a bad
+release **fails closed and self-reverts** without human intervention. Once you
+publish **signed** tags and install the signing pubkey, set
+`CONTINUUM_REQUIRE_SIGNED_TAGS=1` in the pin file to add supply-chain
+verification. The `deploy-unattended` test suite adds **55** hermetic assertions
+(tag grammar incl. injection strings, version gate, allowlist fail-closed,
+prune-keeps-live, scoped-sudo/no-general-sudo, 0600 pin file, root-only wrapper).
+
+---
+
 ## Standalone agent install (`install-agent.sh`)
 
 The Ansible playbook above provisions a whole box. If you already have a
