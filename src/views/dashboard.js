@@ -167,6 +167,13 @@ async function tickProvider(body) {
 
 function ProviderCard() {
   const body = h('div', { class: 'provider-card-body' });
+  // Synchronous placeholder so the card is never blank while the first probe is
+  // in flight. Previously the immediate tick ran before the card was appended,
+  // so body.isConnected was false and tickProvider() bailed — leaving the panel
+  // empty until the first 20s interval fired (the v0.2.48 "empty Providers"
+  // regression). We now show a placeholder and defer the first real tick to a
+  // microtask, by which point renderDashboard has appended the card.
+  body.appendChild(h('div', { class: 'muted', style: 'font-size: 13px;', text: 'Checking providers…' }));
   const card = h('div', { class: 'card provider-card' }, [
     h('div', { class: 'provider-card-head' }, [
       h('h3', { text: 'Providers' }),
@@ -175,9 +182,9 @@ function ProviderCard() {
     body,
   ]);
 
-  // First tick immediately, then start the interval.
-  tickProvider(body);
+  // First tick after the card is in the DOM, then start the interval.
   stopProviderPoll(); // idempotent — replace any stale handle
+  queueMicrotask(() => tickProvider(body));
   providerPollHandle = setInterval(() => tickProvider(body), POLL_INTERVAL_MS);
 
   // Stop polling as soon as the user leaves #/dashboard. The listener
