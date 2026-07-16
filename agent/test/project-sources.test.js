@@ -4,7 +4,8 @@
  * Covers the security-critical surface with NO real network and NO real repo:
  *   • GitHub issue → record normalization + PR exclusion + status/priority map
  *   • Markdown task → record normalization
- *   • dedupe by fingerprint and by (project, type, title)
+ *   • dedupe by fingerprint (all sources) + title-collapse for Markdown only
+ *   • per-source retention on partial refresh; numeric-bound ceilings
  *   • local path allowlist: disabled, traversal, symlink escape, size cap
  *   • GitHub fetch: origin pin (SSRF), redirect refusal, pagination bound,
  *     issue cap, rate-limit detection, response-size cap, timeout
@@ -102,6 +103,105 @@ test('dedupeRecords collapses same fingerprint and same project+type+title', () 
   // collapses within the same type; fingerprint collapses the exact dup.
   const out = dedupeRecords([a, aDup, titleDup]);
   assert.equal(out.length, 2);
+});
+
+// ── M2: stable native ids beat title collapse ───────────────────────
+
+test('M2: two distinct GitHub issues sharing a title are both retained', () => {
+  const a = mapGithubIssue({ number: 1, title: 'Bug', state: 'open' }, { project: 'p', repo: 'o/r' });
+  const b = mapGithubIssue({ number: 2, title: 'Bug', state: 'open' }, { project: 'p', repo: 'o/r' });
+  assert.notEqual(a.fingerprint, b.fingerprint);
+  assert.equal(dedupeRecords([a, b]).length, 2);
+});
+
+test('M2: same title across two allowlisted repos are both retained', () => {
+  const a = mapGithubIssue({ number: 1, title: 'Release checklist', state: 'open' }, { project: 'p', repo: 'o/a' });
+  const b = mapGithubIssue({ number: 1, title: 'Release checklist', state: 'open' }, { project: 'p', repo: 'o/b' });
+  assert.equal(dedupeRecords([a, b]).length, 2);
+});
+
+test('M2: an exact-repeat GitHub issue (same repo+number) still collapses by fingerprint', () => {
+  const a = mapGithubIssue({ number: 9, title: 'dup', state: 'open' }, { project: 'p', repo: 'o/r' });
+  const b = mapGithubIssue({ number: 9, title: 'dup', state: 'open' }, { project: 'p', repo: 'o/r' });
+  assert.equal(dedupeRecords([a, b]).length, 1);
+});
+
+test('M2: duplicate Markdown tasks sharing a title still collapse (no stable native id)', () => {
+  // Different pathFp → different fingerprint, so this exercises the markdown
+  // title-collapse pass specifically (not the fingerprint pass).
+  const a = mapMarkdownTask({ title: 'Write docs', status: 'todo' }, { project: 'p', ref: 'f', pathFp: 'x' });
+  const b = mapMarkdownTask({ title: 'write DOCS', status: 'todo' }, { project: 'p', ref: 'g', pathFp: 'y' });
+  assert.notEqual(a.fingerprint, b.fingerprint);
+  assert.equal(dedupeRecords([a, b]).length, 1);
+});
+
+// ── M1: per-source retention on partial refresh ─────────────────────
+
+function twoRepoCfg() {
+  return {
+    project_sources: {
+      enabled: true,
+      allow_github: ['octo/a', 'octo/b'],
+      sources: [
+        { project: 'demo', type: 'github_issues', repo: 'octo/a' },
+        { project: 'demo', type: 'github_issues', repo: 'octo/b' },
+      ],
+    },
+  };
+}
+
+test('M1: partial failure retains the failed source and updates the healthy one', async () => {
+  const state = { a: 'ok', b: 'ok', aTitle: 'A issue' };
+  const fetchImpl = async (url) => {
+    const isA = url.includes('/repos/octo/a/');
+    const key = isA ? 'a' : 'b';
+    if (state[key] === 'down') throw new Error('down');
+    return res(200, [{ number: isA ? 1 : 2, title: isA ? state.aTitle : 'B issue', state: 'open' }]);
+  };
+  const ps = createProjectSources(twoRepoCfg(), { log: silentLog(), fetchImpl });
+
+  const first = await ps.refresh('demo');
+  assert.equal(first.records.length, 2);
+
+  // b fails; a stays healthy and its title changes to prove the healthy source
+  // is genuinely refreshed (not just carried forward).
+  state.b = 'down';
+  state.aTitle = 'A issue v2';
+  const partial = await ps.refresh('demo');
+  assert.equal(partial.ok, true);
+  assert.equal(partial.partial, true);
+  assert.equal(partial.stale, false);
+  assert.equal(partial.retained, true);
+  assert.deepEqual(partial.records.map((r) => r.title).sort(), ['A issue v2', 'B issue']);
+
+  // recovery: b returns, a now fails → a carried forward (v2), b fresh.
+  state.b = 'ok';
+  state.a = 'down';
+  const recovered = await ps.refresh('demo');
+  assert.equal(recovered.partial, true);
+  assert.equal(recovered.retained, true);
+  assert.deepEqual(recovered.records.map((r) => r.title).sort(), ['A issue v2', 'B issue']);
+
+  // total failure: full last-valid snapshot preserved, reported stale.
+  state.a = 'down';
+  state.b = 'down';
+  const dead = await ps.refresh('demo');
+  assert.equal(dead.ok, false);
+  assert.equal(dead.stale, true);
+  assert.equal(dead.records.length, 2, 'full last-valid snapshot preserved on total failure');
+});
+
+// ── L7: numeric bounds are ceilinged ────────────────────────────────
+
+test('L7: max_pages is clamped to the safe ceiling even if config asks for more', async () => {
+  let pages = 0;
+  const fetchImpl = async () => {
+    pages += 1;
+    return res(200, Array.from({ length: 100 }, (_, i) => ({ number: pages * 1000 + i, title: `p${pages}-${i}`, state: 'open' })));
+  };
+  const ps = createProjectSources(ghCfg({ max_pages: 9999, max_issues: 10_000_000 }), { log: silentLog(), fetchImpl });
+  await ps.refresh('demo');
+  assert.equal(pages, 20, 'page fetches are capped by the CEILING (20), not the 9999 config value');
 });
 
 // ── Local path allowlist ────────────────────────────────────────────

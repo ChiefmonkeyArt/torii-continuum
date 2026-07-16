@@ -21,7 +21,7 @@
 
 import { readFileSync, openSync, writeSync, fsyncSync, fchmodSync, closeSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, isAbsolute } from 'node:path';
 import { parse } from 'yaml';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -95,8 +95,12 @@ export function loadConfig(path) {
         errors.push(`project_sources.allow_github entry "${r}" must be "owner/repo"`);
       }
     }
-    if (ps.local_root != null && typeof ps.local_root !== 'string') {
-      errors.push('project_sources.local_root must be an absolute path string or null');
+    if (ps.local_root != null) {
+      if (typeof ps.local_root !== 'string' || !ps.local_root) {
+        errors.push('project_sources.local_root must be an absolute path string or null');
+      } else if (!isAbsolute(ps.local_root)) {
+        errors.push('project_sources.local_root must be an absolute path (got a relative path)');
+      }
     }
     const srcs = Array.isArray(ps.sources) ? ps.sources : [];
     for (const s of srcs) {
@@ -157,6 +161,10 @@ export function loadConfig(path) {
   // Project-source refresh endpoint (v0.2.47-alpha). Admin-gated + bounded so a
   // stolen session can't hammer local disk reads or the GitHub API.
   cfg.rate_limit.project_sources_refresh_per_min ??= 12;
+  // Wallet-health endpoint (v0.2.47-alpha). Auto-polled by the dashboard every
+  // 20s; rate-limited AND short-cached server-side (see index.mjs) so an open
+  // dashboard can't drive steady NUT-07 /checkstate load against every mint.
+  cfg.rate_limit.wallet_health_per_min ??= 6;
 
   // NWC (Nostr Wallet Connect) client tuning (v0.2.35-alpha). The URI itself is
   // never in config — it is submitted at runtime and stored encrypted at rest.
@@ -198,7 +206,6 @@ export function loadConfig(path) {
   cfg.project_sources.max_issues ??= 200;
   cfg.project_sources.max_pages ??= 5;
   cfg.project_sources.request_timeout_ms ??= 10000;
-  cfg.project_sources.cache_ttl_sec ??= 300;
   cfg.project_sources.sources ??= [];
 
   return Object.freeze(cfg);

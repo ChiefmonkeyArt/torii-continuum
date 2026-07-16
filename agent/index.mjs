@@ -284,6 +284,10 @@ const sourcesRefreshMax =
   Number.isFinite(cfg.rate_limit?.project_sources_refresh_per_min) && cfg.rate_limit.project_sources_refresh_per_min > 0
     ? cfg.rate_limit.project_sources_refresh_per_min
     : 12;
+const walletHealthMax =
+  Number.isFinite(cfg.rate_limit?.wallet_health_per_min) && cfg.rate_limit.wallet_health_per_min > 0
+    ? cfg.rate_limit.wallet_health_per_min
+    : 6;
 
 // Continuum project slugs are lowercase kebab (see src/data/store.js slugify).
 const PROJECT_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
@@ -362,10 +366,28 @@ app.post('/api/wallet/receive', { preHandler: requireAdmin }, async (req, reply)
 // never mutates proofs, never returns proofs/secrets/tokens. Surfaces honest
 // disabled/ok/degraded/unreachable states with sanitized reasons so the
 // dashboard Provider card can show real wallet reachability.
-app.get('/api/wallet/health', { preHandler: requireAdmin }, async () => {
-  const h = await wallet.health();
-  return { version: VERSION, ...h };
-});
+//
+// The dashboard auto-polls this every 20s, and each probe issues a NUT-07
+// /checkstate to every mint. To keep an open dashboard (or several tabs) from
+// driving steady mint load, the route is rate-limited AND the result is cached
+// server-side for a short window — concurrent/rapid polls are served from cache
+// instead of re-probing the mints.
+const WALLET_HEALTH_CACHE_MS = 15000;
+let walletHealthCache = { at: 0, body: null };
+app.get(
+  '/api/wallet/health',
+  { preHandler: requireAdmin, config: rateLimitConfig(walletHealthMax, '/api/wallet/health') },
+  async () => {
+    const nowMs = Date.now();
+    if (walletHealthCache.body && nowMs - walletHealthCache.at < WALLET_HEALTH_CACHE_MS) {
+      return { ...walletHealthCache.body, cached: true };
+    }
+    const h = await wallet.health();
+    const body = { version: VERSION, ...h };
+    walletHealthCache = { at: nowMs, body };
+    return body;
+  },
+);
 
 app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
   const message = req.body?.message;

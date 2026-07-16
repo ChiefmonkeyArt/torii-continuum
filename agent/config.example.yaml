@@ -436,7 +436,8 @@ project_sources:
   max_issues: 200              # max records imported per source
   max_pages: 5                 # max GitHub issue pages (100/page)
   request_timeout_ms: 10000    # per-request abort timeout
-  cache_ttl_sec: 300           # advisory freshness window for the last snapshot
+  # (All bounds are also hard-ceilinged in code so an accidental large value
+  #  can't uncap a fetch — see core/project-sources.mjs CEILINGS.)
 
   # Per-project source bindings. `project` is the Continuum project slug.
   #   markdown:      { project, type: markdown, path: <abs path under local_root> }

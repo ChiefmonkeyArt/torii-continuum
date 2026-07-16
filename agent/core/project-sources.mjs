@@ -41,7 +41,16 @@ const DEFAULTS = Object.freeze({
   max_issues: 200,
   max_pages: 5,
   request_timeout_ms: 10000,
-  cache_ttl_sec: 300,
+});
+
+// Hard upper bounds so an accidental large operator value can't turn a bounded
+// fetch into an unbounded one. Operator-trusted, but ceilinged as defense.
+const CEILINGS = Object.freeze({
+  max_file_bytes: 8 * 1024 * 1024,
+  max_response_bytes: 16 * 1024 * 1024,
+  max_issues: 2000,
+  max_pages: 20,
+  request_timeout_ms: 60000,
 });
 
 const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
@@ -63,8 +72,9 @@ function recordFingerprint(project, sourceKey, nativeId) {
     .slice(0, 24);
 }
 
-function num(v, dflt) {
-  return Number.isFinite(v) && v > 0 ? v : dflt;
+function num(v, dflt, max) {
+  const n = Number.isFinite(v) && v > 0 ? v : dflt;
+  return max != null && n > max ? max : n;
 }
 
 // ── GitHub label → lane / priority mapping (conservative) ──────────────────
@@ -164,10 +174,15 @@ export function mapMarkdownTask(task, { project, ref, pathFp, titleMax = 200 } =
 }
 
 /**
- * Drop duplicates. Primary key is the record fingerprint (same source item);
- * a secondary pass collapses obvious duplicate representations that share the
- * same project + normalized title + source type (e.g. a file listing the same
- * task twice). Order is preserved (first wins).
+ * Drop duplicates. The primary (and, for sources with a stable native id, the
+ * ONLY) key is the record fingerprint, which already folds in the source's
+ * native id (e.g. a GitHub issue number). Two DISTINCT GitHub issues that happen
+ * to share a title therefore have different fingerprints and are both retained.
+ *
+ * A secondary title-collapse pass runs ONLY for Markdown tasks, which genuinely
+ * lack a stable native id (their fingerprint is derived from the normalized
+ * title), so a file that lists the same task twice still yields one card. Order
+ * is preserved (first wins).
  */
 export function dedupeRecords(records) {
   const byFp = new Set();
@@ -176,10 +191,12 @@ export function dedupeRecords(records) {
   for (const r of records) {
     if (!r || typeof r !== 'object') continue;
     if (byFp.has(r.fingerprint)) continue;
-    const sig = `${r.project}\x00${r.source?.type}\x00${(r.title || '').toLowerCase()}`;
-    if (bySig.has(sig)) continue;
+    if (r.source?.type === 'markdown') {
+      const sig = `${r.project}\x00markdown\x00${(r.title || '').toLowerCase()}`;
+      if (bySig.has(sig)) continue;
+      bySig.add(sig);
+    }
     byFp.add(r.fingerprint);
-    bySig.add(sig);
     out.push(r);
   }
   return out;
@@ -207,23 +224,34 @@ export function createProjectSources(cfg, deps = {}) {
   const opt = {
     githubApi: typeof psc.github_api === 'string' && psc.github_api.startsWith('https://')
       ? psc.github_api : DEFAULTS.github_api,
-    maxFileBytes: num(psc.max_file_bytes, DEFAULTS.max_file_bytes),
-    maxResponseBytes: num(psc.max_response_bytes, DEFAULTS.max_response_bytes),
-    maxIssues: num(psc.max_issues, DEFAULTS.max_issues),
-    maxPages: num(psc.max_pages, DEFAULTS.max_pages),
-    timeoutMs: num(psc.request_timeout_ms, DEFAULTS.request_timeout_ms),
-    cacheTtlSec: num(psc.cache_ttl_sec, DEFAULTS.cache_ttl_sec),
+    maxFileBytes: num(psc.max_file_bytes, DEFAULTS.max_file_bytes, CEILINGS.max_file_bytes),
+    maxResponseBytes: num(psc.max_response_bytes, DEFAULTS.max_response_bytes, CEILINGS.max_response_bytes),
+    maxIssues: num(psc.max_issues, DEFAULTS.max_issues, CEILINGS.max_issues),
+    maxPages: num(psc.max_pages, DEFAULTS.max_pages, CEILINGS.max_pages),
+    timeoutMs: num(psc.request_timeout_ms, DEFAULTS.request_timeout_ms, CEILINGS.request_timeout_ms),
   };
 
   // GitHub origin pin — every request URL must resolve to this exact origin.
   let ghOrigin;
   try { ghOrigin = new URL(opt.githubApi).origin; } catch { ghOrigin = new URL(DEFAULTS.github_api).origin; }
 
-  // In-memory last-valid snapshots: project slug → { records, sources, syncedAt }
+  // In-memory last-valid snapshots per project slug:
+  //   { bySource: Map<sourceKey, records[]>, records, sources, syncedAt }
+  // Keeping records keyed by source is what lets a partial refresh carry forward
+  // a FAILED source's last-good records while replacing the succeeded ones.
   const snapshots = new Map();
 
   function sourcesForProject(slug) {
     return sources.filter((s) => s && s.project === slug);
+  }
+
+  // Stable identity for a configured source, used to match this run's result to
+  // the prior snapshot's per-source records. Derived from config (not runtime
+  // resolution) so it is stable across refreshes.
+  function sourceKey(s) {
+    if (s?.type === 'markdown') return `markdown:${fp(s.path)}`;
+    if (s?.type === 'github_issues') return `github:${s.repo}`;
+    return `unknown:${fp(JSON.stringify(s || null))}`;
   }
 
   /** Public, side-effect-free description of what is configured for a project. */
@@ -436,31 +464,65 @@ export function createProjectSources(cfg, deps = {}) {
       else results.push({ ref: null, ok: false, reason: 'unknown_source_type', records: [] });
     }
 
-    const fresh = dedupeRecords(results.flatMap((r) => r.records || []));
     const anyOk = results.some((r) => r.ok);
     const allOk = results.every((r) => r.ok);
     const prior = snapshots.get(slug);
+    const priorBySource = prior && prior.bySource instanceof Map ? prior.bySource : new Map();
 
-    let records = fresh;
-    let stale = false;
-    // If nothing succeeded and we have a prior snapshot, retain it.
-    if (!anyOk && prior && Array.isArray(prior.records) && prior.records.length) {
-      records = prior.records;
-      stale = true;
-    } else {
-      // Persist the new snapshot as the last-valid one (even if partial, as long
-      // as at least one source produced data or all sources are legitimately
-      // empty).
-      snapshots.set(slug, { records, sources: results.map(sourceStatus), syncedAt: now() });
+    // Build the next per-source record map: a succeeded source contributes its
+    // fresh records; a FAILED source carries forward its last-good records from
+    // the prior snapshot (so its cards are never dropped on a transient outage).
+    // Only if there is no prior for a failed source do we fall back to whatever
+    // partial records this run gathered.
+    const nextBySource = new Map();
+    let retained = false;
+    for (let i = 0; i < configured.length; i++) {
+      const key = sourceKey(configured[i]);
+      const r = results[i];
+      if (r.ok) {
+        nextBySource.set(key, Array.isArray(r.records) ? r.records : []);
+      } else {
+        const priorRecs = priorBySource.get(key);
+        if (Array.isArray(priorRecs) && priorRecs.length) {
+          nextBySource.set(key, priorRecs);
+          retained = true;
+        } else if (Array.isArray(r.records) && r.records.length) {
+          nextBySource.set(key, r.records);
+        }
+      }
     }
 
-    const syncedAt = stale ? (prior ? prior.syncedAt : null) : now();
+    const sources = results.map(sourceStatus);
+    const partial = anyOk && !allOk;
+    const stale = !anyOk && prior != null;
+
+    let records;
+    let syncedAt;
+    if (anyOk) {
+      // At least one source refreshed cleanly — commit a new last-valid snapshot
+      // (partial refreshes retain failed sources via nextBySource above).
+      records = dedupeRecords([...nextBySource.values()].flat());
+      syncedAt = now();
+      snapshots.set(slug, { bySource: nextBySource, records, sources, syncedAt });
+    } else if (prior && Array.isArray(prior.records) && prior.records.length) {
+      // Total failure with a prior snapshot: preserve the full last-valid
+      // snapshot untouched and report it as stale.
+      records = prior.records;
+      syncedAt = prior.syncedAt;
+    } else {
+      // Total failure with no usable prior: surface whatever partial data exists
+      // (may be empty). Do not persist a failed run as the last-valid snapshot.
+      records = dedupeRecords([...nextBySource.values()].flat());
+      syncedAt = prior ? prior.syncedAt : now();
+    }
+
     return {
-      ok: anyOk || allOk,
+      ok: anyOk,
       enabled: true,
-      partial: anyOk && !allOk,
+      partial,
       stale,
-      sources: results.map(sourceStatus),
+      retained,
+      sources,
       records,
       syncedAt,
     };

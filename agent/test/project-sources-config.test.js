@@ -129,6 +129,41 @@ test('unknown source type refuses boot', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('L6: relative local_root refuses boot (must be absolute)', () => {
+  const extra = [
+    'project_sources:',
+    '  enabled: true',
+    '  local_root: "relative/path"',
+    '  sources:',
+    '    - project: demo',
+    '      type: markdown',
+    '      path: todo.md',
+  ].join('\n');
+  const { dir, path } = tmpConfig(extra);
+  try {
+    const r = loadInChild(path);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /absolute/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('L6: absolute local_root boots', () => {
+  const extra = [
+    'project_sources:',
+    '  enabled: true',
+    '  local_root: "/tmp/x"',
+    '  sources:',
+    '    - project: demo',
+    '      type: markdown',
+    '      path: todo.md',
+  ].join('\n');
+  const { dir, path } = tmpConfig(extra);
+  try {
+    const r = loadInChild(path);
+    assert.equal(r.code, 0, r.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('valid enabled config with allowlisted repo boots', () => {
   const extra = [
     'project_sources:',
@@ -157,5 +192,9 @@ test('defaults are applied and result is frozen (in-process)', () => {
     assert.equal(cfg.project_sources.max_issues, 200);
     assert.equal(cfg.project_sources.github_api, 'https://api.github.com');
     assert.equal(cfg.rate_limit.project_sources_refresh_per_min, 12);
+    // L8: dead cache_ttl_sec option removed.
+    assert.equal('cache_ttl_sec' in cfg.project_sources, false);
+    // L4: wallet-health endpoint gets a rate-limit default.
+    assert.equal(cfg.rate_limit.wallet_health_per_min, 6);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

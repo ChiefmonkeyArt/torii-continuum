@@ -244,6 +244,10 @@ function renderImportedCard(slug, rec) {
 function renderSyncBar(slug) {
   const st = importFor(slug);
   if (st.status === 'unavailable' || st.status === 'disabled') return null;
+  // Nothing to sync for a project with no configured sources — don't render an
+  // empty "No snapshot yet" bar on every such board. During the initial load we
+  // don't yet know the source list, so keep showing the bar until it resolves.
+  if (st.status !== 'loading' && (!st.sources || st.sources.length === 0)) return null;
 
   const loading = st.status === 'loading';
 
@@ -416,9 +420,11 @@ function renderCard(slug, card, columns, colIndex, cardIndex, cardCount) {
 const dragState = { cardId: null };
 
 // Insertion index for a drop at pointer-Y: first card whose vertical midpoint
-// is below the pointer wins; otherwise append.
+// is below the pointer wins; otherwise append. Scoped to draggable manual cards
+// (which carry data-card-id) so read-only imported cards — appended after the
+// manual ones — never inflate the index into the manual-card array.
 function insertionIndex(list, clientY) {
-  const cards = [...list.querySelectorAll('.board-card:not(.dragging)')];
+  const cards = [...list.querySelectorAll('.board-card[data-card-id]:not(.dragging)')];
   for (let i = 0; i < cards.length; i++) {
     const box = cards[i].getBoundingClientRect();
     if (clientY < box.top + box.height / 2) return i;
