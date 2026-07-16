@@ -12,6 +12,9 @@ import {
   errorReason,
   requestChallenge,
   verifyChallenge,
+  walletHealth,
+  projectSources,
+  refreshProjectSources,
 } from './agent.js';
 
 // A live token mirrors the agent's `iat.exp.pubkey.sig` shape with a future exp.
@@ -211,5 +214,54 @@ describe('req() request shape — bodyless POST must not carry a JSON content-ty
     expect(r.status).toBe(400);
     expect(r.reason).toContain('Bad Request');
     expect(r.reason).toContain('Body cannot be empty');
+  });
+});
+
+describe('v0.2.47 client fns — wallet health + project sources', () => {
+  let stub;
+  let calls;
+
+  beforeEach(() => {
+    stub = makeStorageStub();
+    globalThis.localStorage = stub;
+    globalThis.window = { __CONTINUUM_AGENT_URL__: 'https://agent.example' };
+    calls = [];
+    globalThis.fetch = async (url, opts) => {
+      calls.push({ url, opts });
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+  });
+  afterEach(() => {
+    delete globalThis.localStorage;
+    delete globalThis.window;
+    delete globalThis.fetch;
+  });
+
+  it('walletHealth GETs /api/wallet/health with no body', async () => {
+    await walletHealth();
+    expect(calls[0].url).toBe('https://agent.example/api/wallet/health');
+    expect(calls[0].opts.method).toBe('GET');
+    expect(calls[0].opts.body).toBeUndefined();
+  });
+
+  it('projectSources GETs the per-slug sources endpoint, slug encoded', async () => {
+    await projectSources('my-project');
+    expect(calls[0].url).toBe('https://agent.example/api/projects/my-project/sources');
+    expect(calls[0].opts.method).toBe('GET');
+  });
+
+  it('refreshProjectSources POSTs refresh with a JSON body', async () => {
+    await refreshProjectSources('my-project');
+    expect(calls[0].url).toBe('https://agent.example/api/projects/my-project/sources/refresh');
+    expect(calls[0].opts.method).toBe('POST');
+    expect(calls[0].opts.headers['Content-Type']).toBe('application/json');
+  });
+
+  it('offline (no agent url) short-circuits without a fetch', async () => {
+    delete globalThis.window.__CONTINUUM_AGENT_URL__;
+    const r = await walletHealth();
+    expect(r.ok).toBe(false);
+    expect(r.offline).toBe(true);
+    expect(calls).toHaveLength(0);
   });
 });

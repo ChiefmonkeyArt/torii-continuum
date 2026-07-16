@@ -654,6 +654,70 @@
 .card-meta { font-size: 11px; }
 .col-add { align-self: stretch; justify-content: center; font-size: 12.5px; }
 
+/* ---------- Imported (read-only) sources: sync bar + cards ---------- */
+.sync-bar {
+  background: hsl(var(--card) / .6);
+  border: 1px solid hsl(var(--card-border));
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sync-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sync-title { font-weight: 600; font-size: 13px; color: hsl(var(--foreground)); }
+.sync-status { font-size: 12px; }
+.sync-controls { display: flex; gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; }
+.sync-controls select {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  color: hsl(var(--foreground));
+}
+.sync-banner {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+.sync-banner.stale, .sync-banner.partial {
+  color: hsl(var(--foreground));
+  background: hsl(var(--muted) / .6);
+  border-color: hsl(var(--border));
+}
+.sync-banner.error {
+  color: hsl(var(--destructive));
+  background: hsl(var(--destructive) / .08);
+  border-color: hsl(var(--destructive) / .4);
+}
+.board-card.imported {
+  cursor: default;
+  border-style: dashed;
+  border-color: hsl(var(--border));
+  background: hsl(var(--card) / .5);
+}
+.board-card.imported:hover { border-color: hsl(var(--primary) / .3); }
+.card-src { font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; }
+.imported-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: hsl(var(--muted-foreground));
+}
+.imported-link { font-size: 11px; margin-left: 8px; color: hsl(var(--primary)); text-decoration: none; }
+.imported-link:hover { text-decoration: underline; }
+.card-priority.pri-high { color: hsl(var(--destructive)); border-color: hsl(var(--destructive) / .4); }
+.card-meta { display: flex; align-items: center; flex-wrap: wrap; }
+
 @media (max-width: 640px) {
   .board-column { flex-basis: 82vw; max-width: 82vw; }
+  .sync-controls { margin-left: 0; }
 }

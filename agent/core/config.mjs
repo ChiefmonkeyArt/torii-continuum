@@ -80,6 +80,48 @@ export function loadConfig(path) {
     errors.push('routstr.models.chat and .coding must both be set');
   }
 
+  // project_sources (v0.2.47-alpha, CONT-KANBAN-SYNC): read-only import of
+  // local Markdown to-do files + public GitHub issues into per-project Kanban.
+  // Validated FAIL-CLOSED: when enabled, every configured source must be inside
+  // its allowlist (local_root for files, allow_github for repos). A source that
+  // isn't allowlisted is a config error, not a silently-skipped entry — better
+  // to refuse boot than to import from somewhere the operator didn't intend.
+  const ps = cfg.project_sources;
+  if (ps && ps.enabled === true) {
+    const repoRe = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+    const allow = Array.isArray(ps.allow_github) ? ps.allow_github : [];
+    for (const r of allow) {
+      if (typeof r !== 'string' || !repoRe.test(r)) {
+        errors.push(`project_sources.allow_github entry "${r}" must be "owner/repo"`);
+      }
+    }
+    if (ps.local_root != null && typeof ps.local_root !== 'string') {
+      errors.push('project_sources.local_root must be an absolute path string or null');
+    }
+    const srcs = Array.isArray(ps.sources) ? ps.sources : [];
+    for (const s of srcs) {
+      if (!s || typeof s.project !== 'string' || !s.project) {
+        errors.push('project_sources.sources[] entries need a project slug');
+        continue;
+      }
+      if (s.type === 'markdown') {
+        if (typeof s.path !== 'string' || !s.path) {
+          errors.push(`project_sources source for "${s.project}" (markdown) needs a path`);
+        } else if (!ps.local_root) {
+          errors.push(`project_sources markdown source for "${s.project}" requires project_sources.local_root to be set`);
+        }
+      } else if (s.type === 'github_issues') {
+        if (!repoRe.test(String(s.repo || ''))) {
+          errors.push(`project_sources github source for "${s.project}" needs repo "owner/repo"`);
+        } else if (!allow.includes(s.repo)) {
+          errors.push(`project_sources github source "${s.repo}" is not in project_sources.allow_github (fail-closed)`);
+        }
+      } else {
+        errors.push(`project_sources source for "${s.project}" has unknown type "${s.type}"`);
+      }
+    }
+  }
+
   if (errors.length) {
     console.error(REQUIRED_MSG + errors.map((e) => '  • ' + e).join('\n') + '\n');
     process.exit(1);
@@ -112,6 +154,9 @@ export function loadConfig(path) {
   cfg.rate_limit.max_challenges ??= 1000;
   // Onboarding wallet/Routstr mutation+test+pay endpoints (v0.2.35-alpha).
   cfg.rate_limit.onboarding_per_min ??= 12;
+  // Project-source refresh endpoint (v0.2.47-alpha). Admin-gated + bounded so a
+  // stolen session can't hammer local disk reads or the GitHub API.
+  cfg.rate_limit.project_sources_refresh_per_min ??= 12;
 
   // NWC (Nostr Wallet Connect) client tuning (v0.2.35-alpha). The URI itself is
   // never in config — it is submitted at runtime and stored encrypted at rest.
@@ -137,6 +182,24 @@ export function loadConfig(path) {
   cfg.routstr.provider.invoice_path ??= '/lightning/invoice';
   cfg.routstr.provider.invoice_status_path ??= '/lightning/invoice/{id}/status';
   cfg.routstr.provider.invoice_recover_path ??= '/lightning/recover';
+
+  // project_sources (v0.2.47-alpha). Disabled by default so a demo/agentless
+  // build imports nothing. When enabled, adapters read local Markdown + public
+  // GitHub issues under strict allowlists (see core/project-sources.mjs). All
+  // bounds have safe defaults; an operator only needs local_root / allow_github
+  // / sources to turn it on.
+  cfg.project_sources ??= {};
+  cfg.project_sources.enabled ??= false;
+  cfg.project_sources.local_root ??= null;
+  cfg.project_sources.github_api ??= 'https://api.github.com';
+  cfg.project_sources.allow_github ??= [];
+  cfg.project_sources.max_file_bytes ??= 256 * 1024;
+  cfg.project_sources.max_response_bytes ??= 1024 * 1024;
+  cfg.project_sources.max_issues ??= 200;
+  cfg.project_sources.max_pages ??= 5;
+  cfg.project_sources.request_timeout_ms ??= 10000;
+  cfg.project_sources.cache_ttl_sec ??= 300;
+  cfg.project_sources.sources ??= [];
 
   return Object.freeze(cfg);
 }

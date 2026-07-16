@@ -26,12 +26,98 @@ import {
 import { navigate } from '../router.js';
 import { setChatContext } from '../chat.js';
 import { renderProjectTabs } from './projectHome.js';
+import { timeAgo as _timeAgo } from './util.js';
+import {
+  isAgentConfigured,
+  isLoggedIn,
+  projectSources as fetchProjectSources,
+  refreshProjectSources,
+} from '../data/agent.js';
 
 let mountEl = null;
 let currentSlug = null;
 
 function refresh() {
   if (mountEl && currentSlug) renderBoard(mountEl, currentSlug);
+}
+
+// ── Imported read-only sources (CONT-KANBAN-SYNC, v0.2.47-alpha) ────────────
+//
+// Records imported from the agent (local Markdown / public GitHub issues) are
+// held ONLY in this ephemeral per-slug map. They are NEVER written to the local
+// store, so they can never overwrite or mutate the operator's manual cards, and
+// a refresh simply replaces this set (the server dedupes by fingerprint, so
+// repeated refreshes never duplicate cards).
+const importState = new Map(); // slug → { status, records, sources, syncedAt, reason, filters }
+
+function agentAvailable() {
+  try { return isAgentConfigured() && isLoggedIn(); } catch { return false; }
+}
+
+function importFor(slug) {
+  let st = importState.get(slug);
+  if (!st) {
+    st = { status: 'idle', records: [], sources: [], syncedAt: null, reason: null, filters: { source: 'all', status: 'all' } };
+    importState.set(slug, st);
+  }
+  return st;
+}
+
+// Kick a one-time snapshot load when the board mounts and the agent is usable.
+function ensureImportsLoaded(slug) {
+  const st = importFor(slug);
+  if (!agentAvailable()) { st.status = 'unavailable'; return; }
+  if (st.status !== 'idle') return;
+  st.status = 'loading';
+  fetchProjectSources(slug).then((r) => {
+    applySnapshotResult(slug, r);
+    refresh();
+  });
+}
+
+function applySnapshotResult(slug, r) {
+  const st = importFor(slug);
+  if (!r || r.offline) { st.status = 'unavailable'; return; }
+  if (!r.ok) { st.status = 'error'; st.reason = r.reason || 'request failed'; return; }
+  const d = r.data || {};
+  if (d.enabled === false) { st.status = 'disabled'; return; }
+  st.sources = Array.isArray(d.configured) ? d.configured : [];
+  const snap = d.snapshot;
+  if (snap && Array.isArray(snap.records)) {
+    st.records = snap.records;
+    st.syncedAt = snap.syncedAt || null;
+    st.status = 'ok';
+  } else {
+    st.records = [];
+    st.syncedAt = null;
+    st.status = 'never';
+  }
+}
+
+function applyRefreshResult(slug, r) {
+  const st = importFor(slug);
+  if (!r || r.offline) { st.status = 'unavailable'; return; }
+  if (!r.ok && !r.data) { st.status = 'error'; st.reason = r.reason || 'refresh failed'; return; }
+  const d = r.data || {};
+  if (d.enabled === false) { st.status = 'disabled'; return; }
+  st.records = Array.isArray(d.records) ? d.records : [];
+  st.sources = Array.isArray(d.sources) ? d.sources : st.sources;
+  st.syncedAt = d.syncedAt || st.syncedAt;
+  if (d.stale) { st.status = 'stale'; st.reason = 'live refresh failed — showing last good snapshot'; }
+  else if (d.partial) { st.status = 'partial'; st.reason = 'some sources failed'; }
+  else if (d.ok) { st.status = 'ok'; st.reason = null; }
+  else { st.status = 'error'; st.reason = 'refresh failed'; }
+}
+
+function doRefresh(slug) {
+  const st = importFor(slug);
+  if (st.status === 'loading') return;
+  st.status = 'loading';
+  refresh();
+  refreshProjectSources(slug).then((r) => {
+    applyRefreshResult(slug, r);
+    refresh();
+  });
 }
 
 export function renderBoard(mount, slug) {
@@ -50,6 +136,7 @@ export function renderBoard(mount, slug) {
   }
 
   setChatContext({ label: `${p.content.name} · Board`, where: 'project-board:' + slug });
+  ensureImportsLoaded(slug);
   clear(mount);
 
   mount.appendChild(h('div', { class: 'crumbs' }, [
@@ -74,9 +161,144 @@ export function renderBoard(mount, slug) {
     ]),
   ]));
 
+  const syncBar = renderSyncBar(slug);
+  if (syncBar) mount.appendChild(syncBar);
+
   const scroller = h('div', { class: 'board-scroller' });
   columns.forEach((col, i) => scroller.appendChild(renderColumn(slug, col, columns, i)));
   mount.appendChild(scroller);
+}
+
+// ── Imported records: read-only sync/filter bar + card rendering ────────────
+
+// Which local column an imported record lands in, matched by conventional name
+// then falling back to position. Never mutates columns — this is display-only.
+function columnForStatus(status, columns) {
+  const byName = (re) => columns.find((c) => re.test(c.content.name || ''));
+  if (status === 'done') {
+    return byName(/done|complete|shipped/i) || columns[columns.length - 1] || null;
+  }
+  if (status === 'doing') {
+    return byName(/doing|progress|active|wip|review/i) || columns[Math.min(1, columns.length - 1)] || null;
+  }
+  if (status === 'backlog') {
+    return byName(/backlog|icebox|someday/i) || byName(/todo|to do|to-do|inbox/i) || columns[0] || null;
+  }
+  // todo (default)
+  return byName(/todo|to do|to-do|inbox|backlog/i) || columns[0] || null;
+}
+
+// Imported records for a column, after applying the source + status filters.
+function importedCardsFor(slug, colId, columns) {
+  const st = importFor(slug);
+  if (st.status === 'unavailable' || st.status === 'disabled') return [];
+  const { source: srcFilter, status: statusFilter } = st.filters;
+  return st.records.filter((rec) => {
+    if (srcFilter !== 'all' && sourceKey(rec) !== srcFilter) return false;
+    if (statusFilter !== 'all' && rec.status !== statusFilter) return false;
+    const target = columnForStatus(rec.status, columns);
+    return target && target.content.id === colId;
+  });
+}
+
+function sourceKey(rec) {
+  const s = rec.source || {};
+  return `${s.type || 'unknown'}:${s.ref || ''}`;
+}
+
+function renderImportedCard(slug, rec) {
+  const footer = [];
+  if (rec.priority) footer.push(h('span', { class: `pill card-priority pri-${rec.priority}`, text: rec.priority }));
+  if (Array.isArray(rec.labels)) {
+    rec.labels.slice(0, 3).forEach((l) => footer.push(h('span', { class: 'pill card-label', text: l })));
+  }
+
+  const srcType = rec.source?.type === 'github_issues' ? 'GitHub' : 'Markdown';
+  const srcLabel = `${srcType} · ${rec.source?.label || rec.source?.ref || ''}${rec.source?.id ? ' ' + rec.source.id : ''}`;
+
+  const meta = [h('span', { class: 'imported-badge', text: 'Imported · read-only' })];
+  if (rec.url) {
+    meta.push(h('a', {
+      class: 'imported-link',
+      href: rec.url,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      'aria-label': `Open source for: ${rec.title}`,
+    }, ['↗ source']));
+  }
+
+  const el = h('div', {
+    class: 'board-card imported',
+    dataset: { fingerprint: rec.fingerprint },
+    'aria-label': `Read-only imported card: ${rec.title} (${srcLabel})`,
+  }, [
+    h('div', { class: 'card-src muted', text: srcLabel }),
+    h('div', { class: 'card-title', text: rec.title }),
+    rec.description ? h('div', { class: 'card-desc', text: rec.description }) : null,
+    footer.length ? h('div', { class: 'card-footer' }, footer) : null,
+    h('div', { class: 'card-meta muted' }, meta),
+  ]);
+  return el;
+}
+
+function renderSyncBar(slug) {
+  const st = importFor(slug);
+  if (st.status === 'unavailable' || st.status === 'disabled') return null;
+
+  const loading = st.status === 'loading';
+
+  // Distinct sources present across the current record set (plus configured).
+  const seen = new Map();
+  st.records.forEach((r) => {
+    const key = sourceKey(r);
+    if (!seen.has(key)) {
+      const type = r.source?.type === 'github_issues' ? 'GitHub' : 'Markdown';
+      seen.set(key, `${type}: ${r.source?.label || r.source?.ref || key}`);
+    }
+  });
+  const sourceOptions = [h('option', { value: 'all', text: 'All sources' })];
+  for (const [value, text] of seen) {
+    sourceOptions.push(h('option', { value, text, selected: st.filters.source === value ? 'selected' : false }));
+  }
+
+  const sourceSel = h('select', { 'aria-label': 'Filter by source' }, sourceOptions);
+  sourceSel.value = st.filters.source;
+  sourceSel.addEventListener('change', () => { st.filters.source = sourceSel.value; refresh(); });
+
+  const statusSel = h('select', { 'aria-label': 'Filter by status' }, [
+    ['all', 'All statuses'], ['backlog', 'Backlog'], ['todo', 'Todo'], ['doing', 'Doing'], ['done', 'Done'],
+  ].map(([v, t]) => h('option', { value: v, text: t, selected: st.filters.status === v ? 'selected' : false })));
+  statusSel.value = st.filters.status;
+  statusSel.addEventListener('change', () => { st.filters.status = statusSel.value; refresh(); });
+
+  const refreshBtn = h('button', {
+    class: 'ghost',
+    disabled: loading ? 'disabled' : false,
+    onClick: () => doRefresh(slug),
+  }, [loading ? 'Refreshing…' : '↻ Refresh sources']);
+
+  const count = st.records.length;
+  const syncText = loading
+    ? 'Syncing imported sources…'
+    : st.syncedAt
+      ? `${count} imported · last synced ${_timeAgo(Math.floor(st.syncedAt / 1000))}`
+      : st.status === 'never'
+        ? 'No snapshot yet — refresh to import'
+        : `${count} imported`;
+
+  const rows = [
+    h('div', { class: 'sync-row' }, [
+      h('span', { class: 'sync-title', text: 'Imported sources' }),
+      h('span', { class: 'sync-status muted', text: syncText }),
+      h('div', { class: 'sync-controls' }, [sourceSel, statusSel, refreshBtn]),
+    ]),
+  ];
+
+  if ((st.status === 'stale' || st.status === 'partial' || st.status === 'error') && st.reason) {
+    rows.push(h('div', { class: `sync-banner ${st.status}`, text: st.reason }));
+  }
+
+  return h('div', { class: 'sync-bar', role: 'region', 'aria-label': 'Imported sources' }, rows);
 }
 
 function renderColumn(slug, col, columns, index) {
@@ -98,11 +320,14 @@ function renderColumn(slug, col, columns, index) {
     controls,
   ]);
 
+  const imported = importedCardsFor(slug, colId, columns);
+
   const list = h('div', { class: 'card-list', dataset: { columnId: colId } });
-  if (cards.length === 0) {
+  if (cards.length === 0 && imported.length === 0) {
     list.appendChild(h('div', { class: 'card-empty muted', text: 'No cards yet.' }));
   } else {
     cards.forEach((card, ci) => list.appendChild(renderCard(slug, card, columns, index, ci, cards.length)));
+    imported.forEach((rec) => list.appendChild(renderImportedCard(slug, rec)));
   }
 
   // Drag targeting: allow dropping onto the list; compute an insertion index

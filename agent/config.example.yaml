@@ -395,3 +395,59 @@ rate_limit:
   # a stolen-session abuse of the wallet/provider + pay path. 12/min is ample
   # for a human clicking through onboarding.
   onboarding_per_min: 12
+
+# ── project_sources (v0.2.47-alpha, CONT-KANBAN-SYNC) ───────────────────────
+#
+# READ-ONLY import of task-like records into each project's Kanban board from:
+#   • local Markdown to-do files  (checkbox items + status-headed bullets)
+#   • public GitHub issues        (unauthenticated api.github.com)
+#
+# Imported cards are ALWAYS read-only in the SPA; nothing here writes back to
+# Markdown or GitHub. Disabled by default — a demo/agentless build imports
+# nothing. Security is fail-closed:
+#   • local files are read ONLY when their real path stays inside local_root
+#     (../ traversal and symlink escapes are rejected);
+#   • GitHub repos are fetched ONLY when "owner/repo" is in allow_github;
+#   • file size, response bytes, issue count, pages, and timeouts are bounded;
+#   • no GitHub credential is used, stored, or logged (public repos only).
+#
+# When enabled:true the daemon REFUSES TO BOOT if any source is outside its
+# allowlist (a markdown source without local_root, or a github source not in
+# allow_github) — misconfiguration fails loud rather than importing silently.
+project_sources:
+  enabled: false
+
+  # Absolute directory that every local Markdown source must resolve within.
+  # REQUIRED for any type: markdown source. Leave null to disable local files.
+  # Use a directory you control; never point it at $HOME or a system path.
+  local_root: null
+
+  # GitHub REST API origin. Pinned; must be https. Leave as default.
+  github_api: "https://api.github.com"
+
+  # Allowlist of public repositories that may be imported, as "owner/repo".
+  # A github_issues source whose repo is not listed here is a boot error.
+  allow_github: []
+  #   - "octocat/hello-world"
+
+  # Bounds (safe defaults shown). Every loop/read is capped by these.
+  max_file_bytes: 262144       # 256 KB — skip larger Markdown files
+  max_response_bytes: 1048576  # 1 MB  — hard cap on each GitHub response body
+  max_issues: 200              # max records imported per source
+  max_pages: 5                 # max GitHub issue pages (100/page)
+  request_timeout_ms: 10000    # per-request abort timeout
+  cache_ttl_sec: 300           # advisory freshness window for the last snapshot
+
+  # Per-project source bindings. `project` is the Continuum project slug.
+  #   markdown:      { project, type: markdown, path: <abs path under local_root> }
+  #   github_issues: { project, type: github_issues, repo: owner/name,
+  #                    state: open|all|closed (default open), labels: [..] }
+  sources: []
+  #   - project: "my-project"
+  #     type: markdown
+  #     path: "/srv/continuum/sources/my-project/TODO.md"
+  #   - project: "my-project"
+  #     type: github_issues
+  #     repo: "octocat/hello-world"
+  #     state: open
+  #     labels: []

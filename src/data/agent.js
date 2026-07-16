@@ -213,6 +213,34 @@ export async function walletReceive(token) {
   return req('POST', '/api/wallet/receive', { token });
 }
 
+/**
+ * GET /api/wallet/health — CONT-HEALTH-2. Non-mutating wallet + mint health.
+ * Admin-gated; returns { configured, overall, checked_at, mints:[...] } with
+ * per-mint identity + validated balance. Logged-out callers get offline via req().
+ */
+export async function walletHealth() {
+  return req('GET', '/api/wallet/health');
+}
+
+// ─── Project sources (read-only Kanban import) ──────────────
+
+/**
+ * GET /api/projects/:slug/sources — configured sources + last snapshot for a
+ * project. Slug is path-segment safe (lowercase kebab); encode defensively.
+ */
+export async function projectSources(slug) {
+  return req('GET', `/api/projects/${encodeURIComponent(slug)}/sources`);
+}
+
+/**
+ * POST /api/projects/:slug/sources/refresh — re-import all configured sources
+ * for a project. Returns { ok, enabled, partial, stale, sources, records,
+ * syncedAt }. Records are read-only and merged into the board client-side.
+ */
+export async function refreshProjectSources(slug) {
+  return req('POST', `/api/projects/${encodeURIComponent(slug)}/sources/refresh`, {});
+}
+
 // ─── Chat ───────────────────────────────────────────────────
 
 export async function chat({ message, context }) {

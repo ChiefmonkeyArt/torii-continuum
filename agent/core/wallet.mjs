@@ -23,8 +23,35 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { Mint, Wallet, getEncodedToken, getDecodedToken } from '@cashu/cashu-ts';
 import { agentRoot } from './config.mjs';
+
+// Non-reversible short id for a mint URL — lets health output/logs reference a
+// mint without echoing a full endpoint everywhere. Domain-separated label.
+function mintFingerprint(url) {
+  return 'sha256:' + createHash('sha256').update('mint:' + String(url), 'utf8').digest('hex').slice(0, 16);
+}
+
+// Wrap a promise with a wall-clock timeout. cashu-ts drives its own fetch, so
+// we can't abort the socket, but we must never let a hung mint make the health
+// probe hang forever. On timeout we stop waiting and report 'timeout'.
+function withTimeout(promise, ms, label = 'timeout') {
+  let timer;
+  const t = new Promise((_res, rej) => { timer = setTimeout(() => rej(new Error(label)), ms); });
+  return Promise.race([promise, t]).finally(() => clearTimeout(timer));
+}
+
+// Reduce a caught error to a short, non-sensitive reason. Never returns a raw
+// stack, token, proof, or full endpoint — just a coarse category.
+function sanitizeReason(e) {
+  const msg = (e && typeof e.message === 'string') ? e.message : '';
+  if (/timeout/i.test(msg)) return 'timeout';
+  if (/fetch|network|ECONN|ENOTFOUND|EAI_AGAIN|socket|getaddrinfo/i.test(msg)) return 'unreachable';
+  if (/404|not found/i.test(msg)) return 'mint_not_found';
+  if (/40[13]|unauthor|forbidden/i.test(msg)) return 'mint_refused';
+  return 'mint_error';
+}
 
 const WALLET_DIR = join(agentRoot(), 'memory', 'wallet');
 
@@ -195,5 +222,139 @@ export async function createWallet(cfg, log) {
     };
   }
 
-  return { balance, receive, send, mints: [...mints.keys()] };
+  /**
+   * NON-MUTATING wallet + mint health probe (CONT-HEALTH-2, v0.2.47-alpha).
+   *
+   * For each configured mint this performs the STRONGEST real validation the
+   * pinned cashu-ts (^3.7.1) supports WITHOUT ever mutating proofs or wallet
+   * state:
+   *   1. loadMint()            — proves the mint is reachable and fetches its
+   *                              info + keysets + keys (no proof mutation).
+   *   2. getMintInfo()         — reads mint identity: name, version, pubkey
+   *                              (fingerprinted), and NUT-07 support.
+   *   3. groupProofsByState()  — NUT-07 read-only state check of OUR proofs,
+   *                              partitioning them into unspent/pending/spent
+   *                              so we can validate that the stored balance is
+   *                              actually spendable. This is a pure read (no
+   *                              swap, no melt, no send) so it cannot spend or
+   *                              rewrite proofs.
+   *
+   * Never returns proofs, secrets, tokens, or a full mint endpoint beyond the
+   * URL the admin already configured (parity with /api/wallet/balance). All
+   * failures collapse to a coarse, sanitized reason.
+   *
+   * States: disabled | ok | degraded | unreachable.
+   */
+  async function health() {
+    const checkedAt = new Date().toISOString();
+    if (mints.size === 0) {
+      return { configured: false, overall: 'disabled', checked_at: checkedAt, mints: [] };
+    }
+    const timeoutMs = Number.isFinite(cfg.cashu?.health_timeout_ms) && cfg.cashu.health_timeout_ms > 0
+      ? cfg.cashu.health_timeout_ms
+      : 10000;
+
+    const out = [];
+    for (const [url, wallet] of mints) {
+      out.push(await mintHealth(url, wallet, timeoutMs));
+    }
+    return { configured: true, overall: deriveOverall(out), checked_at: checkedAt, mints: out };
+  }
+
+  async function mintHealth(url, wallet, timeoutMs) {
+    const proofs = await readProofs(url); // read-only
+    const balanceSats = proofs.reduce((s, p) => s + (p.amount || 0), 0);
+    const base = {
+      mint: url,
+      mint_fingerprint: mintFingerprint(url),
+      balance_sats: balanceSats,
+      proof_count: proofs.length,
+    };
+
+    // 1. Reachability + key/info load.
+    try {
+      await withTimeout(wallet.loadMint(), timeoutMs);
+    } catch (e) {
+      return { ...base, state: 'unreachable', reachable: false, identity: null, validated: null, reason: sanitizeReason(e) };
+    }
+
+    // 2. Identity (read-only, from the just-loaded cache).
+    let identity = null;
+    let nut07 = false;
+    try {
+      const info = wallet.getMintInfo();
+      let pubkey = null;
+      try { pubkey = info.pubkey || null; } catch { pubkey = null; }
+      try { nut07 = !!info.isSupported(7)?.supported; } catch { nut07 = false; }
+      identity = {
+        name: safeStr(readGetter(() => info.name), 80),
+        version: safeStr(readGetter(() => info.version), 40),
+        pubkey_fingerprint: pubkey ? mintFingerprint(pubkey) : null,
+        nut07_supported: nut07,
+      };
+    } catch {
+      identity = null;
+    }
+
+    // 3. Read-only proof-state validation (NUT-07). Only when supported and we
+    // actually hold proofs — a mint without NUT-07 can't be validated, and an
+    // empty wallet has nothing to check.
+    let validated = null;
+    if (nut07 && proofs.length > 0) {
+      try {
+        const grouped = await withTimeout(wallet.groupProofsByState(proofs), timeoutMs);
+        validated = {
+          checked: true,
+          unspent_sats: sumAmt(grouped.unspent),
+          pending_sats: sumAmt(grouped.pending),
+          spent_sats: sumAmt(grouped.spent),
+          unspent_count: grouped.unspent.length,
+          pending_count: grouped.pending.length,
+          spent_count: grouped.spent.length,
+        };
+      } catch (e) {
+        validated = { checked: false, reason: sanitizeReason(e) };
+      }
+    }
+
+    // Derive per-mint state.
+    let state = 'ok';
+    let reason = null;
+    if (!identity) {
+      state = 'degraded';
+      reason = 'mint reachable but info unavailable';
+    } else if (!nut07) {
+      state = 'degraded';
+      reason = 'mint does not support NUT-07 proof-state checks; balance is unvalidated';
+    } else if (validated && validated.checked === false) {
+      state = 'degraded';
+      reason = `proof-state check failed: ${validated.reason}`;
+    } else if (validated && (validated.spent_sats > 0 || validated.pending_sats > 0)) {
+      state = 'degraded';
+      reason = 'some stored proofs are already spent or pending; spendable balance is lower than stored';
+    }
+
+    return { ...base, state, reachable: true, identity, validated, reason };
+  }
+
+  return { balance, receive, send, health, mints: [...mints.keys()] };
+}
+
+function deriveOverall(mintHealths) {
+  if (mintHealths.length === 0) return 'disabled';
+  if (mintHealths.every((m) => m.state === 'ok')) return 'ok';
+  if (mintHealths.every((m) => m.state === 'unreachable')) return 'unreachable';
+  return 'degraded';
+}
+
+function sumAmt(proofs) {
+  return Array.isArray(proofs) ? proofs.reduce((s, p) => s + (p.amount || 0), 0) : 0;
+}
+
+function readGetter(fn) {
+  try { return fn(); } catch { return null; }
+}
+
+function safeStr(v, max) {
+  return typeof v === 'string' && v.length ? v.slice(0, max) : null;
 }
