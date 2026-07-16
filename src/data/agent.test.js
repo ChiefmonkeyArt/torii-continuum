@@ -9,6 +9,9 @@ import {
   adoptOnboardingSession,
   getStoredToken,
   isLoggedIn,
+  errorReason,
+  requestChallenge,
+  verifyChallenge,
 } from './agent.js';
 
 // A live token mirrors the agent's `iat.exp.pubkey.sig` shape with a future exp.
@@ -108,5 +111,105 @@ describe('adoptOnboardingSession (torii.session → continuum.session.v1)', () =
     expect(adoptOnboardingSession()).toBe(false);
     stub.setItem('torii.session', JSON.stringify({ nope: true }));
     expect(adoptOnboardingSession()).toBe(false);
+  });
+});
+
+describe('errorReason (safe, detailed failure text)', () => {
+  it('prefers the specific Fastify message over the generic label', () => {
+    // The exact body Fastify v5 returns for an empty JSON body — the root cause
+    // of the "Could not reach agent: Bad Request" report.
+    expect(errorReason({ error: 'Bad Request', message: "Body cannot be empty when content-type is set to 'application/json'" }, 400))
+      .toBe("Bad Request: Body cannot be empty when content-type is set to 'application/json'");
+  });
+
+  it('uses the agent handler reason when there is no extra message', () => {
+    expect(errorReason({ error: 'unknown or expired challenge' }, 401)).toBe('unknown or expired challenge');
+  });
+
+  it('falls back to the bare status when the body has nothing usable', () => {
+    expect(errorReason(null, 500)).toBe('http 500');
+    expect(errorReason({}, 503)).toBe('http 503');
+  });
+
+  it('does not duplicate when error and message are identical', () => {
+    expect(errorReason({ error: 'nope', message: 'nope' }, 400)).toBe('nope');
+  });
+
+  it('caps runaway strings so a malformed body cannot flood the UI', () => {
+    const huge = 'x'.repeat(5000);
+    expect(errorReason({ error: huge }, 400).length).toBe(200);
+  });
+});
+
+describe('req() request shape — bodyless POST must not carry a JSON content-type', () => {
+  // Regression for the sidebar/demo Login "Bad Request" bug: the SPA agent
+  // client sent `Content-Type: application/json` on the bodyless
+  // POST /api/auth/challenge, and Fastify v5 rejected the empty body with 400
+  // (FST_ERR_CTP_EMPTY_JSON_BODY, error "Bad Request"). The challenge call must
+  // send NO content-type; only calls that carry a JSON body may declare one.
+  let stub;
+  let calls;
+
+  beforeEach(() => {
+    stub = makeStorageStub();
+    globalThis.localStorage = stub;
+    globalThis.window = { __CONTINUUM_AGENT_URL__: 'https://agent.example' };
+    calls = [];
+  });
+  afterEach(() => {
+    delete globalThis.localStorage;
+    delete globalThis.window;
+    delete globalThis.fetch;
+  });
+
+  const mockFetch = (status, body) => {
+    globalThis.fetch = async (url, opts) => {
+      calls.push({ url, opts });
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => body,
+      };
+    };
+  };
+
+  it('requestChallenge posts with no body and no content-type header', async () => {
+    mockFetch(200, { challenge: 'c'.repeat(48), expires_in: 300, kind: 22242 });
+    const r = await requestChallenge();
+    expect(r.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    const { url, opts } = calls[0];
+    expect(url).toBe('https://agent.example/api/auth/challenge');
+    expect(opts.method).toBe('POST');
+    expect(opts.body).toBeUndefined();
+    // No content-type at all — this is the whole fix.
+    const ctKey = Object.keys(opts.headers).find((k) => k.toLowerCase() === 'content-type');
+    expect(ctKey).toBeUndefined();
+  });
+
+  it('verifyChallenge posts the exact {event} body with a JSON content-type and stores the token', async () => {
+    const token = `1000.${future}.${pubkey}.sig`;
+    mockFetch(200, { token, expires_at: future });
+    const event = { kind: 22242, pubkey, content: 'c'.repeat(48), tags: [['challenge', 'c'.repeat(48)]], sig: 'ff', id: 'ee' };
+    const r = await verifyChallenge(event);
+    expect(r.ok).toBe(true);
+    const { url, opts } = calls[0];
+    expect(url).toBe('https://agent.example/api/auth/verify');
+    expect(opts.headers['Content-Type']).toBe('application/json');
+    expect(JSON.parse(opts.body)).toEqual({ event });
+    // Token adopted into the SPA session slot.
+    expect(getStoredToken()).toBe(token);
+    expect(isLoggedIn()).toBe(true);
+  });
+
+  it('surfaces the detailed reason when the agent 400s the challenge', async () => {
+    // Simulates the pre-fix server response so the error mapping is proven
+    // end-to-end through req().
+    mockFetch(400, { statusCode: 400, code: 'FST_ERR_CTP_EMPTY_JSON_BODY', error: 'Bad Request', message: "Body cannot be empty when content-type is set to 'application/json'" });
+    const r = await requestChallenge();
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(400);
+    expect(r.reason).toContain('Bad Request');
+    expect(r.reason).toContain('Body cannot be empty');
   });
 });

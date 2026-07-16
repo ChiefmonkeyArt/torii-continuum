@@ -129,11 +129,39 @@ export function adoptOnboardingSession() {
   return true;
 }
 
+/**
+ * Build a human-readable, non-sensitive failure reason from an agent error
+ * body. The agent's own handlers reply `{ error: <reason> }`; Fastify's
+ * built-in errors reply `{ error: <generic>, message: <specific> }` (e.g.
+ * error "Bad Request" + message "Body cannot be empty…"). We surface the
+ * specific message when it adds detail over the generic label, else the label,
+ * else the bare status. Values are short server-controlled strings (never
+ * stack traces), and we cap the length so a malformed body can't flood the UI.
+ * Pure + exported so the mapping is unit-tested without a network.
+ * @param {any} json parsed response body (may be null)
+ * @param {number} status HTTP status
+ */
+export function errorReason(json, status) {
+  const clip = (s) => (typeof s === 'string' && s.length ? s.slice(0, 200) : '');
+  const err = clip(json?.error);
+  const msg = clip(json?.message);
+  if (msg && msg !== err) return err ? `${err}: ${msg}` : msg;
+  if (err) return err;
+  return `http ${status}`;
+}
+
 async function req(method, path, body) {
   const base = agentUrl();
   if (!base) return { ok: false, reason: 'offline', offline: true };
 
-  const headers = { 'Content-Type': 'application/json' };
+  // Only declare a JSON content-type when we actually send a JSON body. The
+  // /api/auth/challenge call is bodyless; Fastify v5 rejects an empty body
+  // carrying `Content-Type: application/json` with 400 FST_ERR_CTP_EMPTY_JSON_BODY
+  // (error: "Bad Request") before the handler runs — which surfaced to the
+  // operator as "Could not reach agent: Bad Request". Mirrors the onboarding
+  // client's postJson so the two agent clients cannot drift apart again.
+  const hasBody = body !== undefined && body !== null;
+  const headers = hasBody ? { 'Content-Type': 'application/json' } : {};
   const tok = getStoredToken();
   if (tok) headers.Authorization = `Bearer ${tok}`;
 
@@ -142,7 +170,7 @@ async function req(method, path, body) {
     res = await fetch(`${base}${path}`, {
       method,
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: hasBody ? JSON.stringify(body) : undefined,
       credentials: 'include',
     });
   } catch (e) {
@@ -155,7 +183,7 @@ async function req(method, path, body) {
   if (!res.ok) {
     // 401 → session expired, clear it so UI drops back to logged-out
     if (res.status === 401) clearStoredToken();
-    return { ok: false, reason: json?.error || `http ${res.status}`, status: res.status };
+    return { ok: false, reason: errorReason(json, res.status), status: res.status };
   }
 
   return { ok: true, data: json };

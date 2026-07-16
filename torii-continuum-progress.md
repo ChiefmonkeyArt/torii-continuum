@@ -9,6 +9,18 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.46-alpha — LOGIN-FIX: sidebar/demo Login "Could not reach agent: Bad Request"
+
+Frontend-only release (no agent code changed; agent stays **v0.2.43-alpha**, onboarding preview stays **v0.1.20-preview**). Fixes a live production bug: in the demo shell (`#/projects`), clicking the bottom-left sidebar **Login** with Plebeian Signer installed failed with *"Could not reach agent: Bad Request"*.
+
+- **Root cause.** The SPA↔agent client `req()` in `src/data/agent.js` always sent `Content-Type: application/json`, even for the **bodyless** `POST /api/auth/challenge`. Fastify v5's JSON parser rejects an empty body carrying that content-type with **400 `FST_ERR_CTP_EMPTY_JSON_BODY`** (`error: "Bad Request"`) *before* the handler runs, so the challenge never issued. The onboarding client's `postJson` was already hardened against this (see `preview-assets/onboarding-v0.1.20`, and the pinning test in `agent/test/fastify-v5-api.test.js`); the SPA client had **drifted** and never got the same fix.
+- **Fix.** `req()` now declares `Content-Type: application/json` **only when a JSON body is actually sent** (`hasBody`), mirroring the onboarding client exactly so the two agent clients cannot drift apart again. The bodyless challenge POST now reaches the handler and 200s. No agent/protocol change — the agent's empty-body 400 is correct, standard Fastify v5 behaviour.
+- **Safer error detail.** New pure exported `errorReason(json, status)` surfaces the specific Fastify `message` over the generic `error` label (capped at 200 chars, server-controlled strings only — never stack traces), so future failures read e.g. `"Bad Request: Body cannot be empty…"` instead of a bare label.
+- **Consolidation.** Both login entry points — the dedicated login view (`src/views/login.js`) and the sidebar button (`src/shell.js`) — already call the single `startLogin()` in `src/auth.js`; no duplicate flow remained to merge. The drift was in the shared HTTP client beneath them, now fixed in one place.
+- **Privacy/keys unchanged.** nsec never leaves the extension; the agent still fully verifies event id + signature + admin pubkey + challenge freshness. No secrets logged.
+- **Tests.** New regression coverage in `src/data/agent.test.js` (12 cases): mocks a NIP-07 signer + fetch and asserts the challenge POST carries **no** content-type and no body, the verify POST carries the exact `{event}` body with a JSON content-type and adopts the returned token, plus the full `errorReason` mapping. `vitest run` **843/843**; agent `node --test` **104/104**; ops shell suites all green; `npm run build` clean (74.5 kB / 23.2 kB gzip). Root version → v0.2.46-alpha. Code + PR only — not merged/tagged/deployed.
+- **Kanban discoverability (reported, not redesigned).** The board lives at `#/projects/:slug/board`, reached via the **Overview · Board** switcher on a project's page; all three project routes are demo-browsable (only `/dashboard` is auth-gated), so the Board link **is** visible in demo mode — but only after opening a specific project (no Board affordance on the `#/projects` index cards).
+
 ## v0.2.45-alpha — KANBAN: production Kanban board for every project
 
 Frontend-only release (no agent code changed; onboarding preview stays **v0.1.20-preview**). Every Continuum project now has a first-class Kanban board, integrated into the project's Amber multi-view navigation (an **Overview · Board** switcher in the project header, plus route `#/projects/:slug/board`) — not a disconnected demo.
