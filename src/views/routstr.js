@@ -9,6 +9,28 @@ import { isSessionLive, startLogin } from '../auth.js';
 
 // Poll the agent for live wallet balance while the Routstr page is mounted.
 let balancePollHandle = null;
+// Live handle to the balance number node so the poll can refresh it in place
+// without re-rendering (and tearing) the whole page.
+let balanceNumEl = null;
+
+/**
+ * Read the spendable balance (sats) out of an agent balance payload.
+ *
+ * The admin `/api/wallet/balance` route returns `{ total_sats, per_mint, ... }`,
+ * NOT `balance_sats` — reading the wrong key silently yielded `undefined`, which
+ * `formatSats` renders as an em dash while the connection pill still showed
+ * "connected" (the v0.2.48 live regression). We prefer `total_sats` and keep a
+ * `balance_sats` fallback so an onboarding-shaped payload also resolves. Pure +
+ * exported so the contract is unit-tested without a network.
+ * @param {any} data parsed response body
+ * @returns {number|null} sats, or null when the payload carries no numeric balance
+ */
+export function readBalanceSats(data) {
+  if (!data || typeof data !== 'object') return null;
+  if (Number.isFinite(data.total_sats)) return data.total_sats;
+  if (Number.isFinite(data.balance_sats)) return data.balance_sats;
+  return null;
+}
 
 export function renderRoutstr(mount) {
   setChatContext({ label: 'Routstr', where: 'routstr' });
@@ -49,13 +71,17 @@ export function renderRoutstr(mount) {
           ? 'Cashu tokens are loaded locally and burned per request. No account, no key custody.'
           : 'Connect a Cashu wallet (mock) to enable pay-per-request. Nothing is sent to the network yet.' }),
       ]),
-      h('div', { class: 'stat' }, [
-        h('span', { class: 'label', text: 'Cashu balance' }),
-        h('span', { class: 'value' }, [
-          formatSats(c.cashuBalanceSats),
-          h('span', { class: 'unit', text: 'sats' }),
-        ]),
-      ]),
+      (() => {
+        balanceNumEl = h('span', { class: 'bal-num', text: formatSats(c.cashuBalanceSats) });
+        return h('div', { class: 'stat' }, [
+          h('span', { class: 'label', text: 'Cashu balance' }),
+          h('span', { class: 'value' }, [
+            balanceNumEl,
+            ' ',
+            h('span', { class: 'unit', text: 'sats' }),
+          ]),
+        ]);
+      })(),
     ]),
   ]);
   mount.appendChild(hero);
@@ -198,8 +224,15 @@ function openTopUpModal() {
       status.style.color = 'hsl(var(--destructive))';
       return;
     }
-    status.textContent = `Received ${r.data.received_sats} sats. New balance: ${r.data.balance_sats} sats.`;
-    updateRoutstr({ connected: true, cashuBalanceSats: r.data.balance_sats });
+    // /api/wallet/receive replies { ok, added_sats, mint } — it does NOT echo the
+    // new total, so read the authoritative balance back from /api/wallet/balance.
+    const added = Number.isFinite(r.data?.added_sats) ? r.data.added_sats : null;
+    const b = await walletBalance();
+    const newBal = b.ok ? readBalanceSats(b.data) : null;
+    status.textContent = newBal != null
+      ? `Received ${added ?? '?'} sats. New balance: ${newBal} sats.`
+      : `Received ${added ?? '?'} sats.`;
+    updateRoutstr({ connected: true, ...(newBal != null ? { cashuBalanceSats: newBal } : {}) });
     setTimeout(() => {
       handle.close();
       renderRoutstr(document.getElementById('main-content'));
@@ -219,14 +252,17 @@ function startBalancePoll(mount) {
   stopBalancePoll();
   const tick = async () => {
     const r = await walletBalance();
-    if (r.ok && r.data) {
-      const cur = getRoutstr().content;
-      if (cur.cashuBalanceSats !== r.data.balance_sats || !cur.connected) {
-        updateRoutstr({ connected: true, cashuBalanceSats: r.data.balance_sats });
-        // Re-render only if we're still on the Routstr page
-        if (document.getElementById('main-content')?.contains(mount) || document.getElementById('main-content') === mount) {
-          // no-op; we'll refresh on next user action to avoid tearing the DOM
-        }
+    if (!r.ok || !r.data) return;
+    const sats = readBalanceSats(r.data);
+    if (sats == null) return; // no numeric balance in payload — leave display as-is
+    const cur = getRoutstr().content;
+    if (cur.cashuBalanceSats !== sats || !cur.connected) {
+      updateRoutstr({ connected: true, cashuBalanceSats: sats });
+      // Refresh the balance number in place. A targeted textContent write avoids
+      // tearing/re-rendering the whole page mid-interaction, and only touches the
+      // node if it is still on-screen (Routstr page still mounted).
+      if (balanceNumEl && balanceNumEl.isConnected) {
+        balanceNumEl.textContent = formatSats(sats);
       }
     }
   };

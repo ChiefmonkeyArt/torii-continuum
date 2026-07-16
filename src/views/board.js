@@ -151,7 +151,13 @@ export function renderBoard(mount, slug) {
   mount.appendChild(renderProjectTabs(slug, 'board'));
 
   const columns = boardColumnsFor(slug);
-  const totalCards = columns.reduce((n, c) => n + cardsFor(slug, c.content.id).length, 0);
+  // Count both native store cards AND the read-only imported cards currently
+  // shown (after filters) so the header total matches what is on the board.
+  // Excluding imports made a board with only imported work read "0 cards".
+  const totalCards = columns.reduce(
+    (n, c) => n + cardsFor(slug, c.content.id).length + importedCardsFor(slug, c.content.id, columns).length,
+    0,
+  );
 
   mount.appendChild(h('div', { class: 'page-header' }, [
     h('div', {}, [
@@ -190,17 +196,25 @@ function columnForStatus(status, columns) {
   return byName(/todo|to do|to-do|inbox|backlog/i) || columns[0] || null;
 }
 
-// Imported records for a column, after applying the source + status filters.
-function importedCardsFor(slug, colId, columns) {
-  const st = importFor(slug);
-  if (st.status === 'unavailable' || st.status === 'disabled') return [];
-  const { source: srcFilter, status: statusFilter } = st.filters;
-  return st.records.filter((rec) => {
+// Pure: imported records that land in `colId` after applying the source + status
+// filters. Exported (and free of the module-level importState) so the
+// distribution + counting contract is unit-tested without a DOM.
+export function filterImportedForColumn(records, colId, columns, filters = {}) {
+  const srcFilter = filters.source || 'all';
+  const statusFilter = filters.status || 'all';
+  return (Array.isArray(records) ? records : []).filter((rec) => {
     if (srcFilter !== 'all' && sourceKey(rec) !== srcFilter) return false;
     if (statusFilter !== 'all' && rec.status !== statusFilter) return false;
     const target = columnForStatus(rec.status, columns);
     return target && target.content.id === colId;
   });
+}
+
+// Imported records for a column, after applying the source + status filters.
+function importedCardsFor(slug, colId, columns) {
+  const st = importFor(slug);
+  if (st.status === 'unavailable' || st.status === 'disabled') return [];
+  return filterImportedForColumn(st.records, colId, columns, st.filters);
 }
 
 function sourceKey(rec) {
@@ -310,6 +324,7 @@ function renderSyncBar(slug) {
 function renderColumn(slug, col, columns, index) {
   const colId = col.content.id;
   const cards = cardsFor(slug, colId);
+  const imported = importedCardsFor(slug, colId, columns);
 
   const controls = h('div', { class: 'col-controls' }, [
     iconBtn('‹', 'Move column left', () => { moveColumn(slug, colId, 'left'); refresh(); }, index === 0),
@@ -318,15 +333,15 @@ function renderColumn(slug, col, columns, index) {
     iconBtn('✕', 'Delete column', () => openDeleteColumn(slug, col, columns)),
   ]);
 
+  // Column count includes imported read-only cards so it matches the cards
+  // actually listed below (native + imported), consistent with the header total.
   const header = h('div', { class: 'col-header' }, [
     h('div', { class: 'col-title' }, [
       h('span', { class: 'col-name', text: col.content.name }),
-      h('span', { class: 'col-count', text: String(cards.length) }),
+      h('span', { class: 'col-count', text: String(cards.length + imported.length) }),
     ]),
     controls,
   ]);
-
-  const imported = importedCardsFor(slug, colId, columns);
 
   const list = h('div', { class: 'card-list', dataset: { columnId: colId } });
   if (cards.length === 0 && imported.length === 0) {
