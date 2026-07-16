@@ -9,13 +9,10 @@
  */
 import { h, clear, timeAgo } from './util.js';
 import { listMembers, addMember, removeMember, subscribe } from '../data/store.js';
+import { shortNpub } from '../lib/npub.js';
 import { setChatContext } from '../chat.js';
 
 let storeUnsub = null;
-
-function shortNpub(hex) {
-  return hex.length > 16 ? `${hex.slice(0, 8)}…${hex.slice(-6)}` : hex;
-}
 
 export function renderTeam(mount) {
   setChatContext({ label: 'Team', where: 'team' });
@@ -52,7 +49,7 @@ export function renderTeam(mount) {
 }
 
 function renderAddForm() {
-  const npubInput = h('input', { type: 'text', placeholder: 'Operator npub (64 hex characters)', maxlength: '64', spellcheck: 'false', autocapitalize: 'off', style: 'flex: 2 1 320px; font-family: var(--font-mono, monospace);' });
+  const npubInput = h('input', { type: 'text', placeholder: 'Operator npub (npub1… or 64-hex)', maxlength: '70', spellcheck: 'false', autocapitalize: 'off', style: 'flex: 2 1 320px; font-family: var(--font-mono, monospace);' });
   const labelInput = h('input', { type: 'text', placeholder: 'Label (optional)', maxlength: '40', style: 'flex: 1 1 160px;' });
   const errorEl = h('div', { class: 'muted', style: 'color: var(--accent-danger); min-height: 18px; font-size: 12.5px; margin-top: 6px;' });
 

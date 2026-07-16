@@ -28,6 +28,7 @@ import { createOllama } from './core/ollama.mjs';
 import { createModelRouter } from './core/model-router.mjs';
 import { createChatSkill } from './skills/chat.mjs';
 import { createMemoryCache, validateCiphertext, ciphertextFilename, fingerprintCiphertext } from './lib/crypto.mjs';
+import { scrub } from './lib/scrub.mjs';
 import { createMemoryLoader } from './lib/memory.mjs';
 import { createReflector } from './lib/reflect.mjs';
 import { KINDS, dirForKind } from './lib/events.mjs';
@@ -121,7 +122,12 @@ app.setErrorHandler((err, req, reply) => {
     reply.send(err);
     return;
   }
-  app.log.error({ err, url: req.url }, 'unhandled route error');
+  app.log.error({
+    url: req.url,
+    code: err.statusCode || 500,
+    name: err.name || 'Error',
+    msg: scrub(err && err.message),
+  }, 'unhandled route error');
   reply.code(500).send({ ok: false, error: 'internal error' });
 });
 

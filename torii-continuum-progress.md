@@ -9,6 +9,18 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.55-alpha / agent v0.2.50-alpha — FIXUP-1: accept npub1 operator input + scrub error logs + dashboard caption
+
+Reviewer-remediation release on the `feature/continuum-extra-jobs-batch` branch, touching BOTH frontend and agent (new `src/lib/npub.js` + `src/lib/npub.test.js`, `src/data/store.js`, `src/views/team.js`, `src/data/members.test.js`, `src/views/dashboard.js`; new `agent/lib/scrub.mjs` + `agent/test/scrub.test.js`, `agent/index.mjs`). Root `package.json` bumped `0.2.54-alpha → 0.2.55-alpha`; agent `package.json` bumped `0.2.49-alpha → 0.2.50-alpha` (both lockfiles synced). Onboarding preview stays **v0.1.20-preview**.
+
+**FIX A (BLOCKING) — accept Bech32 `npub1…` operator input.** TEAMS-1 validated the operator npub as 64-hex only, so real `npub1…` keys were rejected. New **dependency-free** Bech32 codec `src/lib/npub.js` (`parseNpub`/`toNpub`/`shortNpub`; standard BIP-173 polymod, generator `[0x3b6a57b2,…]`, final XOR 1 — root frontend stays vite+vitest-only): `parseNpub` accepts a checksum-verified `npub1…` OR a raw 64-hex key, returning canonical lowercase hex. `store.js addMember` validates+normalizes via `parseNpub` and stores canonical hex so dedupe holds across equivalent forms; `team.js` uses the shared `shortNpub` and accepts either input form. Tests: `src/lib/npub.test.js` (12, canonical NIP-19 vector) + `members.test.js` +3.
+
+**FIX B — scrub the generic error-handler logging.** `agent/index.mjs`'s `setErrorHandler` logged the full `err` (stack/secret-bearing). Now logs `{url, code, name, msg: scrub(err.message)}` only. New `agent/lib/scrub.mjs` redacts ≥16-hex runs + `nostr+?walletconnect://…` URIs then truncates to 200 chars — its own module so it's testable without booting Fastify. <500 pass-through + sanitized 5xx unchanged. Test: `agent/test/scrub.test.js` (6).
+
+**FIX C — document a dashboard progress limitation.** `dashboard.js` per-project progress gains a muted caption ("Counts local board cards; imported read-only cards not included.") — imported read-only source-sync cards aren't persisted so `boardStatsFor` can't count them; folding them in is deferred as **KANBAN-PROG-2** (new not-started TODO).
+
+**Tests.** Root `vitest run` **913/913** (was 898, +15). Agent `node --test` **178/178** (+6). `npm run build` clean (version stamp 0.2.55-alpha). Code + local commit only — not pushed, not a PR.
+
 ## v0.2.54-alpha — CARD-AGENT-1: Kanban card → agent "vibe code" action (prefill-only)
 
 Frontend-only release (`src/chat.js` + `src/views/board.js` + new `src/views/card-prompt.js` + new `src/views/card-prompt.test.js`; **no agent code changed, no agent version bump**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.53-alpha → 0.2.54-alpha` (agent stays at `0.2.49-alpha`).

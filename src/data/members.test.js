@@ -38,6 +38,10 @@ afterEach(() => {
 const HEX_A = 'a'.repeat(64);
 const HEX_B = 'b'.repeat(64);
 
+// Canonical NIP-19 vector: this npub1… decodes to NPUB_HEX.
+const NPUB_BECH32 = 'npub180cvv07tjdrrgpa0j7j7tmnyl2yr6yr7l8j4s3evf6u64th6gkwsyjh6w6';
+const NPUB_HEX = '3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d';
+
 describe('addMember validation', () => {
   it('adds a valid 64-hex npub as an operator', () => {
     const ev = store.addMember({ npub: HEX_A, label: 'Alice' });
@@ -75,6 +79,24 @@ describe('addMember validation', () => {
     store.addMember({ npub: HEX_A });
     expect(() => store.addMember({ npub: HEX_A.toUpperCase() })).toThrow();
     expect(store.listMembers()).toHaveLength(1);
+  });
+
+  it('accepts an npub1… (Bech32) and stores the canonical hex', () => {
+    const ev = store.addMember({ npub: NPUB_BECH32, label: 'Bech32' });
+    expect(ev.content.npub).toBe(NPUB_HEX);
+    expect(store.listMembers()).toHaveLength(1);
+  });
+
+  it('dedupes across equivalent npub1… and 64-hex forms', () => {
+    store.addMember({ npub: NPUB_BECH32 });
+    expect(() => store.addMember({ npub: NPUB_HEX })).toThrow();
+    expect(store.listMembers()).toHaveLength(1);
+  });
+
+  it('rejects an npub with a bad checksum', () => {
+    const bad = NPUB_BECH32.slice(0, -1) + '0';
+    expect(() => store.addMember({ npub: bad })).toThrow();
+    expect(store.listMembers()).toHaveLength(0);
   });
 
   it('clamps the label to 40 characters', () => {

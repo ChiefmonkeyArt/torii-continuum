@@ -278,6 +278,7 @@ export function renderDashboard(mount) {
         h('div', { class: 'meta', text: `${bs.done}/${bs.total} · ${bs.percent}%` }),
       ]));
     }
+    perProj.appendChild(h('div', { class: 'muted', style: 'font-size: 11px; margin-top: 10px; font-style: italic;', text: 'Counts local board cards; imported read-only cards not included.' }));
   }
   renderPerProject();
   mount.appendChild(perProj);

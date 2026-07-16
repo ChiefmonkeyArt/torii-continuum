@@ -9,6 +9,7 @@
 
 import { KIND, makeEvent, newId, nowSec } from './schema.js';
 import { seedProjects, seedSessions, seedMilestones, seedTodos, seedFiles, seedMarketTasks, seedRoutstr } from './seed.js';
+import { parseNpub } from '../lib/npub.js';
 
 const STORAGE_KEY = 'continuum.v1';
 
@@ -537,7 +538,6 @@ export function updateRoutstr(patch) {
 // not cascade to them.
 
 const MEMBER_LABEL_MAX = 40;
-const NPUB_HEX_RE = /^[0-9a-f]{64}$/;
 
 export function listMembers() {
   return state.members
@@ -546,10 +546,11 @@ export function listMembers() {
 }
 
 export function addMember({ npub, label } = {}) {
-  const hex = String(npub == null ? '' : npub).trim().toLowerCase();
-  if (!NPUB_HEX_RE.test(hex)) {
-    throw new Error('Enter a valid npub (64 hex characters).');
-  }
+  // Accept either `npub1…` (Bech32) or a raw 64-hex key; store the canonical
+  // hex so dedupe holds across equivalent input forms.
+  const r = parseNpub(npub);
+  if (!r.ok) throw new Error(r.reason);
+  const hex = r.hex;
   if (state.members.some((m) => m.content.npub === hex)) {
     throw new Error('That operator is already on the roster.');
   }
