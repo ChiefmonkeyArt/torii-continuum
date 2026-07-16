@@ -9,6 +9,18 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.53-alpha — TEAMS-1: operator roster + Kanban card attribution (local-first foundation)
+
+Frontend-only release (`src/data/schema.js` + `src/data/store.js` + new `src/views/team.js` + `src/main.js` + `src/shell.js` + `src/views/board.js` + new `src/data/members.test.js`; **no agent code changed, no agent version bump**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.52-alpha → 0.2.53-alpha` (agent stays at `0.2.49-alpha`).
+
+**Ask (job #1).** *"Lets open up teams… the admin can invite other npubs to an editors level… maybe we should call them operators… the team can all add their own notes and tasks… and these can be entered on the kanban and moved around."*
+
+**Scope decision.** LOCAL-FIRST FOUNDATION only. The roster is a local list of operator npubs the admin has designated; it carries **no authorization weight** and the agent's `requireAdmin` is untouched. Real server-side operator authorization + relay multi-user sync are explicitly deferred to TEAMS-2.
+
+**Change.** New addressable kind `KIND.TEAM_MEMBER = 30093` (`d = member:<npub>`). `emptyState()` gains a **global** `members: []` (workspace-wide, so `deleteProject` does NOT cascade to it), with defensive `initStore()` coercion. Three exported store helpers mirror `addTodo`/`addCard`: `listMembers()` (sorted by `addedAt`), `addMember({npub,label})` (validates a 64-hex npub, lowercases + trims, rejects duplicates, clamps label to 40 via `cleanText`, role `'operator'`, `addedBy 'admin'`), and `removeMember(npub)` (case-insensitive, no-op on unknown). A new Team view (`src/views/team.js`, route `/team`, nav item after Dashboard) lets the admin add operator npubs (with optional labels) and remove them; every row renders via `h()`/`textContent` only and re-renders in place through a `subscribe()` handler. On the Kanban, `openCardEditor`'s free-text assignee input becomes a `<select>` populated from the roster ("Unassigned" + operator display strings), reusing the existing `assignee` field unchanged; an empty roster degrades to just "Unassigned" and a pre-roster assignee is preserved as a "(not on roster)" option.
+
+**Tests.** New `src/data/members.test.js` (17 cases: npub validate/lowercase/trim, empty/short/non-hex reject, duplicate reject, label clamp, default empty label, `listMembers` sort + copy, `removeMember` variants, persistence, legacy coercion, no `deleteProject` cascade). Root `vitest run` **892/892** (was 875, +17). `npm run build` clean. Code + local commit only — not pushed, not a PR.
+
 ## v0.2.52-alpha — CHAT-CONTEXT-1: project-scoped + page-aware chat threads
 
 Frontend-only release (`src/chat.js` + new `src/chat-threads.js` + `src/chat-threads.test.js` + `src/styles/chat.css`; **no agent code changed, no agent version bump**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.51-alpha → 0.2.52-alpha` (agent stays at `0.2.49-alpha`).

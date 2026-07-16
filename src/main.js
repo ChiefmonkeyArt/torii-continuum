@@ -26,6 +26,7 @@ import { renderBoard } from './views/board.js';
 import { renderMarketplace } from './views/marketplace.js';
 import { renderRoutstr } from './views/routstr.js';
 import { renderDashboard } from './views/dashboard.js';
+import { renderTeam } from './views/team.js';
 
 function setLandingMode(on) {
   const app = document.getElementById('app');
@@ -59,6 +60,7 @@ function boot() {
   route('/projects/:slug/board', ({ slug }) => { setLandingMode(false); renderBoard(mainContent(), slug); renderSidebar(); });
   route('/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent()); renderSidebar(); });
   route('/routstr', () => { setLandingMode(false); renderRoutstr(mainContent()); renderSidebar(); });
+  route('/team', () => { setLandingMode(false); renderTeam(mainContent()); renderSidebar(); });
   // Protected: a logged-out visitor (incl. a refresh/deep-link) is bounced to
   // the login page at root. rootTarget keeps that terminal (no loop).
   route('/dashboard', () => {

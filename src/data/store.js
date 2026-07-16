@@ -26,6 +26,7 @@ function emptyState() {
     cards: [],      // events kind 30084 (board cards)
     marketTasks: [],// events kind 30090
     routstr: null,  // event kind 30091
+    members: [],    // events kind 30093 (operator roster; global, not per-project)
   };
 }
 
@@ -57,6 +58,7 @@ export function initStore() {
     // lazily on first board access (see ensureBoard) — no destructive rewrite.
     if (!Array.isArray(state.columns)) state.columns = [];
     if (!Array.isArray(state.cards)) state.cards = [];
+    if (!Array.isArray(state.members)) state.members = [];
     if (!Array.isArray(state.marketTasks) || state.marketTasks.length === 0) {
       state.marketTasks = seedMarketTasks();
     }
@@ -520,6 +522,60 @@ export function getRoutstr() { return state.routstr; }
 export function updateRoutstr(patch) {
   state.routstr.content = { ...state.routstr.content, ...patch };
   state.routstr.created_at = nowSec();
+  persist();
+  notify();
+}
+
+// --- Team / operator roster (kind 30093) ---
+//
+// LOCAL-FIRST FOUNDATION. The roster is a local list of npubs the admin has
+// designated as operators. It carries NO authorization weight yet — the agent's
+// requireAdmin is unchanged. Real multi-user auth (agent-side operator
+// allow-list, relay sync, NIP-17 invite/accept) is deferred to TEAMS-2.
+//
+// Members are GLOBAL (workspace-wide), not per-project, so deleteProject does
+// not cascade to them.
+
+const MEMBER_LABEL_MAX = 40;
+const NPUB_HEX_RE = /^[0-9a-f]{64}$/;
+
+export function listMembers() {
+  return state.members
+    .slice()
+    .sort((a, b) => a.content.addedAt - b.content.addedAt);
+}
+
+export function addMember({ npub, label } = {}) {
+  const hex = String(npub == null ? '' : npub).trim().toLowerCase();
+  if (!NPUB_HEX_RE.test(hex)) {
+    throw new Error('Enter a valid npub (64 hex characters).');
+  }
+  if (state.members.some((m) => m.content.npub === hex)) {
+    throw new Error('That operator is already on the roster.');
+  }
+  const ev = makeEvent({
+    kind: KIND.TEAM_MEMBER,
+    d: `member:${hex}`,
+    content: {
+      npub: hex,
+      label: cleanText(label, MEMBER_LABEL_MAX),
+      role: 'operator',
+      addedAt: nowSec(),
+      addedBy: 'admin',
+    },
+    tags: [['t', 'continuum-team-member']],
+  });
+  state.members.push(ev);
+  persist();
+  notify();
+  return ev;
+}
+
+export function removeMember(npub) {
+  const hex = String(npub == null ? '' : npub).trim().toLowerCase();
+  const before = state.members.length;
+  state.members = state.members.filter((m) => m.content.npub !== hex);
+  if (state.members.length === before) return;
   persist();
   notify();
 }
