@@ -33,7 +33,13 @@ torii_root_app: "none"                             # none (launcher) | quest | p
 # Continuum
 # ─────────────────────────────────────────────────────────────
 continuum_repo: "https://github.com/ChiefmonkeyArt/torii-continuum.git"
-continuum_version: "main"                          # branch, tag, or commit
+# PRODUCTION: must be a v-prefixed semantic release TAG (e.g. "v0.2.48-alpha").
+# Since v0.2.48-alpha (OPS-DEPLOY-1) continuum_version is BOTH the git checkout ref
+# AND the expected live version: readiness asserts /api/health version == continuum_version
+# with the leading "v" stripped. A branch ("main") or commit SHA checks out fine but the
+# version assertion will never match package.json, so the deploy fails closed and rolls back.
+# Use branch/SHA only for local/dev experiments where a rollback on readiness is acceptable.
+continuum_version: "main"                          # v-prefixed release tag in production (see note above)
 continuum_mount_path: "/continuum"                 # keep in sync with launcher registry
 continuum_agent_host: "127.0.0.1"
 continuum_agent_port: 8787
