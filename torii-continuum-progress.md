@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.56-alpha — npub: add independent NIP-19 oracle test vectors (cross-validated against nostr-tools)
+
+Test-only release (frontend; `src/lib/npub.test.js` only — **no runtime code changed**, `src/lib/npub.js` untouched; onboarding preview stays **v0.1.20-preview**). Root `package.json` + lockfile bumped `0.2.55-alpha → 0.2.56-alpha`.
+
+**Why.** The hand-rolled Bech32 codec (`parseNpub`/`toNpub`/`shortNpub`) was cross-validated against nostr-tools `nip19` (the de-facto NIP-19 reference) on 131 checks, but the committed suite only asserted a single canonical vector + self round-trips. Two of those known-good real-world vectors are now permanent regression tests, tying the codec to the reference rather than to its own round-trip.
+
+**Change.** New `describe('npub — independent NIP-19 oracle vectors')` block asserting, per vector, `toNpub(hex) === npub`, `parseNpub(npub) === { ok:true, hex }`, and cross-form canonicalization (`parseNpub(npub).hex === parseNpub(hex).hex`). Vectors: fiatjaf `npub180cvv07tjdrrgpa0j7j7tmnymzyc8huy2kl8le9cy49xcrn63edql23cv2` and `npub1xtscya34g58tk0z605fvr788k263gsu6cy9x0mhnm87echycx3ys7gdt7w`.
+
+**Tests.** Root `vitest run` **938/938** (was 932, +6). `src/lib/npub.test.js` 12 → 18.
+
 ## v0.2.55-alpha / agent v0.2.50-alpha — FIXUP-1: accept npub1 operator input + scrub error logs + dashboard caption
 
 Reviewer-remediation release on the `feature/continuum-extra-jobs-batch` branch, touching BOTH frontend and agent (new `src/lib/npub.js` + `src/lib/npub.test.js`, `src/data/store.js`, `src/views/team.js`, `src/data/members.test.js`, `src/views/dashboard.js`; new `agent/lib/scrub.mjs` + `agent/test/scrub.test.js`, `agent/index.mjs`). Root `package.json` bumped `0.2.54-alpha → 0.2.55-alpha`; agent `package.json` bumped `0.2.49-alpha → 0.2.50-alpha` (both lockfiles synced). Onboarding preview stays **v0.1.20-preview**.

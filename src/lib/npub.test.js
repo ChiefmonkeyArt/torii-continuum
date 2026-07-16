@@ -71,3 +71,28 @@ describe('shortNpub', () => {
     expect(s).toContain('…');
   });
 });
+
+// These npub↔hex pairs were verified against nostr-tools nip19 (the de-facto
+// NIP-19 reference implementation). Keeping them here ties our hand-rolled
+// Bech32 codec to the reference so a future regression can't slip past a
+// self-only round-trip.
+describe('npub — independent NIP-19 oracle vectors', () => {
+  const VECTORS = [
+    { hex: '3bf0c63fcb93463407af97a5e5ee64d88983df8455be7fe4b8254a6c0e7a8e5a', npub: 'npub180cvv07tjdrrgpa0j7j7tmnymzyc8huy2kl8le9cy49xcrn63edql23cv2' },
+    { hex: '32e1827635450ebb3c5a7d12c1f8e7b2b514439ac10a67eef3d9fd9c5c983449', npub: 'npub1xtscya34g58tk0z605fvr788k263gsu6cy9x0mhnm87echycx3ys7gdt7w' },
+  ];
+
+  for (const { hex, npub } of VECTORS) {
+    it(`toNpub(${hex.slice(0, 8)}…) matches the reference npub`, () => {
+      expect(toNpub(hex)).toBe(npub);
+    });
+
+    it(`parseNpub(${npub.slice(0, 12)}…) decodes to the reference hex`, () => {
+      expect(parseNpub(npub)).toEqual({ ok: true, hex });
+    });
+
+    it(`canonicalises the npub and hex forms to the same hex (${hex.slice(0, 8)}…)`, () => {
+      expect(parseNpub(npub).hex).toBe(parseNpub(hex).hex);
+    });
+  }
+});
