@@ -9,6 +9,18 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.50-alpha — LAYOUT-1: constrain chat dock to the main column + full-height sidebar
+
+Frontend-only release (CSS only — `src/styles/layout.css` + `src/styles/chat.css`; **no JS/shell/agent code changed**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.48-alpha → 0.2.50-alpha` (agent stays at `0.2.49-alpha` from the NWC-ERR-1 slice on this batch branch; root lockfile top-level `version` left as-is per prior convention).
+
+**Ask (job #4).** *"Make the chat bar at the bottom stay within the page content… and the left sidebar should extend to the bottom of the page 100%."*
+
+**Root cause.** `#app` is a CSS grid (`grid-template-columns: var(--sidebar-w) 1fr; grid-template-rows: 1fr auto`) whose areas were `"sidebar main" / "chat chat"` — so the chat dock spanned **both** columns at the bottom, sitting under the sidebar too, and the sidebar stopped at the top of that chat row instead of running full height.
+
+**Fix.** Changed the grid areas to `"sidebar main" / "sidebar chat"`: the sidebar now spans **both** rows (full height to the very bottom), and the chat dock occupies only the second column under `main`, so it's constrained to the main content width. Rows stay `1fr auto` (the `auto` row sizes to the chat dock's collapsed `--chat-h` / expanded `46vh`; `main` keeps `overflow-y: auto` and takes the `1fr` remainder, so there's no page overflow or double scrollbar). Aligned the chat dock's horizontal padding with the main column (`12px 16px → 12px 32px`, matching main's `32px` side padding) so the input row's edges line up with the content; on mobile (`max-width: 900px`, grid `68px 1fr`) the dock padding drops to `16px` to match the narrower mobile main padding. The chat dock remains a direct child of `#app` (`mountChat(root)` in `src/main.js`), so `grid-area: chat` still applies — no shell restructuring. `.sidebar { overflow-y: auto }` and `.sidebar-footer { margin-top: auto }` continue to scroll internally and pin the footer to the bottom of the now-full-height sidebar. Both light and dark themes unaffected (structural change only).
+
+**Tests.** No new tests (pure CSS). Full root suite green: `vitest run` **853/853** (incl. the `dist/`-building `no-external-cdn` + `nginx-continuum-routing` checks).
+
 ## v0.2.49-alpha — NWC-ERR-1: harden NWC onboarding Step 2 error paths
 
 Agent-only release (onboarding preview stays **v0.1.20-preview**; only `agent/` changed). Agent `package.json` + lockfile bumped `0.2.48-alpha → 0.2.49-alpha`; root untouched.
