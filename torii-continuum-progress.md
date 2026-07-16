@@ -9,6 +9,24 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.49-alpha — CONT-LIVE-UI-1: surface live provider/wallet/kanban data in the UI
+
+Frontend-only release (onboarding preview stays **v0.1.20-preview**; **no agent runtime code changed** — only `src/views/{dashboard,routstr,board}.js`, three new vitest files, docs, and the version stamps). Closes GitHub issue **#52**. Root + agent `package.json` bumped `0.2.48-alpha → 0.2.49-alpha` for the health-gate version invariant.
+
+**Live v0.2.48-alpha acceptance (authenticated) found three UI regressions** where correct backend data never reached the operator:
+
+1. **Dashboard Providers panel blank** despite "Polling every 20s". Root cause: `ProviderCard()` ran the first `tickProvider(body)` synchronously *before* the card was appended, so `body.isConnected` was `false`, the tick bailed (and cleared its own poll), and the body stayed empty until the first 20s interval — a slow/erroring probe made it look permanently blank. Fix: render a synchronous "Checking providers…" placeholder and defer the first tick to `queueMicrotask(() => tickProvider(body))` (the card is in the DOM by the time the microtask runs); the 20s interval is unchanged.
+
+2. **Routstr shows a green `connected` pill but an em-dash Cashu balance.** Root cause: field-name mismatch — `GET /api/wallet/balance` returns `{ total_sats, per_mint, ... }`, but the balance poll read `r.data.balance_sats` → `undefined` → `formatSats(undefined)` → `—`, while the same tick still set `connected:true` and persisted `cashuBalanceSats:undefined`, so the em dash stuck across re-renders. The top-up modal shared the bug (read `received_sats`/`balance_sats`; the endpoint returns `added_sats` only). Fix: pure exported `readBalanceSats()` (prefers `total_sats`, `balance_sats` fallback, returns `null` — not `0` — when absent); the poll writes the number in place (`balanceNumEl.textContent`, no page tear); the receive modal reads `added_sats` then re-reads the authoritative balance.
+
+3. **Kanban header total + per-column counts exclude imported read-only cards.** Root cause: `totalCards` and each `col-count` summed only native store cards (`cardsFor`), never `importedCardsFor`, so a board/column of only imported work read `0`. Fix: both counts now add the imported cards; the distribution primitive is extracted as a pure exported `filterImportedForColumn()`.
+
+**Security.** Fail-closed posture unchanged: every wallet/health/source route remains `requireAdmin`; no proofs, tokens, secrets, or full mint endpoints are rendered; the wallet probe stays a read-only NUT-07/identity check. These are pure client-side field/ordering fixes with no new network or storage surface.
+
+**Note on "expected blank" vs bug.** The dashboard wallet card already states `disabled`/`unreachable`/`degraded` honestly for an unconfigured/missing wallet. The Routstr hero previously rendered `—` for a *configured* wallet purely because of the field bug; with the fix a funded-but-empty or freshly-configured wallet now shows an honest `0 sats` (`/api/wallet/balance` sums to 0 across mints) rather than an em dash. Requirement to see a non-zero balance: one or more `cashu.mints` configured on the agent AND proofs redeemed via top-up (`/api/wallet/receive`).
+
+**Tests.** `src/views/routstr.test.js` (8), `src/views/board-counts.test.js` (7), `src/views/dashboard-structure.test.js` (4). Verification (Node 20.x): root `npx vitest run` **872/872** (18 files, +19), agent `node --test` **168/168** (unchanged), `npm run build` clean (0.2.49-alpha), `npm audit --omit=dev` root prod **0** / agent prod **0**; root full audit **5** dev-only (vite/vitest/esbuild). Sole attribution Chiefmonkey. Code + PR only — not merged/tagged/deployed.
+
 ## v0.2.48-alpha — OPS-DEPLOY-1: restart the promoted agent + verify the deployed version
 
 Ops-only release (onboarding preview stays **v0.1.20-preview**; **no app/agent runtime code changed** — only `ops/ansible/roles/continuum/tasks/main.yml`, a new ops test, and the version stamps). Closes GitHub issue **#49**. Root + agent `package.json` bumped `0.2.47-alpha → 0.2.48-alpha` for the version invariant; lockfile top-level `version` fields left as-is (prior releases never bumped them; `npm ci` validates the dependency tree, not that field).
