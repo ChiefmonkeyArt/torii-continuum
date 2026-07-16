@@ -9,6 +9,18 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.54-alpha — CARD-AGENT-1: Kanban card → agent "vibe code" action (prefill-only)
+
+Frontend-only release (`src/chat.js` + `src/views/board.js` + new `src/views/card-prompt.js` + new `src/views/card-prompt.test.js`; **no agent code changed, no agent version bump**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.53-alpha → 0.2.54-alpha` (agent stays at `0.2.49-alpha`).
+
+**Ask (job #1 tail).** *"The team can get tasks and vibe code their responses."*
+
+**Change.** Each Kanban card gains one new action button (glyph `✦`, aria-label "Ask Continuum to work on this task") in the existing `.card-moves` row. Clicking it drafts a bounded task prompt from the card and **prefills it into the chat dock — it does not send it.** A new chat export `compose(text)` (`src/chat.js`) sets `mode='page'`, re-derives the active thread via `syncActiveThread()` (so the turn lands in the project board thread), fills + autosizes the input, expands + focuses the dock, and re-renders the context chip — it never calls `send()` and no-ops if the dock isn't mounted. In `board.js`, the new iconBtn calls `askContinuum(slug, card, columns)`, which derives the project name (+ slug) and column name, re-asserts the board chat context, and calls `compose(prompt)`; the button is always enabled (works in mock mode too). The pure DOM-free `buildCardPrompt(card, projectName, columnName)` (`src/views/card-prompt.js`) composes `Work on this task.\nTitle: …` + optional `Details: …` (omitted when empty) + `Project: …` + `Status: …`, trims each field, and caps the total at ~600 chars.
+
+**Consent boundary (critical).** The agent spends sats per request, so `compose()` only prefills/expands/focuses — the operator reviews the drafted turn and explicitly hits Send. A consent gate on `/api/chat` itself and the agent-side "task → pending draft" skill (vibe-coded output landing in `agent/pending/` for human approve + sign/publish) are deferred to **CARD-AGENT-2** (new not-started TODO); no `agent/` code changed here.
+
+**Tests.** New `src/views/card-prompt.test.js` (6 cases: full shape; Details omitted on empty/missing description; each field trimmed; ~600-char cap; bare content object). Root `vitest run` **898/898** (was 892, +6). `npm run build` clean. Code + local commit only — not pushed, not a PR.
+
 ## v0.2.53-alpha — TEAMS-1: operator roster + Kanban card attribution (local-first foundation)
 
 Frontend-only release (`src/data/schema.js` + `src/data/store.js` + new `src/views/team.js` + `src/main.js` + `src/shell.js` + `src/views/board.js` + new `src/data/members.test.js`; **no agent code changed, no agent version bump**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.52-alpha → 0.2.53-alpha` (agent stays at `0.2.49-alpha`).

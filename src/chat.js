@@ -270,3 +270,21 @@ This is a mock shell — real calls light up once Routstr is connected.`;
 }
 
 export function toggleChat() { setExpanded(!expanded); }
+
+/**
+ * Prefill the dock with a prepared turn WITHOUT sending it. Used by the board's
+ * "Ask Continuum to work on this task" action: the operator reviews the drafted
+ * prompt and hits Send themselves, because every agent turn spends sats. This
+ * only prepares the input — it never calls send(). No-op if the dock isn't
+ * mounted yet.
+ */
+export function compose(text) {
+  if (!inputEl) return;
+  mode = 'page';
+  syncActiveThread();
+  inputEl.value = text;
+  autosize();
+  setExpanded(true);
+  renderContext();
+  inputEl.focus();
+}

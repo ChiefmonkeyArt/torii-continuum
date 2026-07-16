@@ -25,7 +25,8 @@ import {
   BOARD_LIMITS,
 } from '../data/store.js';
 import { navigate } from '../router.js';
-import { setChatContext } from '../chat.js';
+import { setChatContext, compose } from '../chat.js';
+import { buildCardPrompt } from './card-prompt.js';
 import { renderProjectTabs } from './projectHome.js';
 import { timeAgo as _timeAgo } from './util.js';
 import {
@@ -387,6 +388,7 @@ function renderCard(slug, card, columns, colIndex, cardIndex, cardCount) {
       const next = columns[colIndex + 1];
       if (next) { safeMove(slug, c.id, next.content.id); }
     }, colIndex === columns.length - 1),
+    iconBtn('✦', 'Ask Continuum to work on this task', () => askContinuum(slug, card, columns)),
   ]);
 
   const el = h('div', {
@@ -445,6 +447,20 @@ function safeMove(slug, cardId, toColumnId) {
 function moveCardBy(slug, cardId, colId, cardIndex, delta) {
   moveCard(slug, cardId, colId, cardIndex + delta);
   refresh();
+}
+
+// Prefill (never auto-send) a task prompt into the chat dock so an operator can
+// "vibe code" a response with the Continuum agent. The consent boundary is
+// preserved: compose() only fills + expands + focuses the input; the operator
+// reviews the drafted turn and hits Send, because every agent turn spends sats.
+function askContinuum(slug, card, columns) {
+  const p = getProject(slug);
+  const projectName = p ? `${p.content.name} (${slug})` : slug;
+  const col = columns.find((c) => c.content.id === card.content.columnId);
+  const columnName = col ? col.content.name : '';
+  const prompt = buildCardPrompt(card, projectName, columnName);
+  setChatContext({ label: `${p ? p.content.name : slug} · Board`, where: 'project-board:' + slug });
+  compose(prompt);
 }
 
 function isOverdue(dueDate) {
