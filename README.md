@@ -4,7 +4,7 @@ An app builder, project engine and marketplace for bot work — a gateway into t
 
 Continuum treats every project like a nostr identity: portable, signable, yours. Projects, sessions, milestones, todos, and files are all shaped as nostr events (addressable kinds 30078–30082). MVP stores them in `localStorage`; the same objects flip to signed relay events without re-shaping.
 
-## What's here (v0.2.47-alpha)
+## What's here (v0.2.48-alpha)
 
 **Frontend (`src/`)**
 
@@ -62,6 +62,7 @@ npm run preview   # serve dist/
 - M3 ✅ Routstr + marketplace shells
 - M4 ✅ NIP-07 signer, agent scaffold, landing page (v0.2.0-alpha)
 - M5 ✅ Kanban boards, read-only source sync (local Markdown + public GitHub), wallet health (v0.2.47-alpha)
+- Ops ✅ Deploy hardening: a code-only Ansible promotion restarts the agent before readiness, and readiness verifies the live `/api/health` version equals the deployed tag (v0.2.48-alpha, OPS-DEPLOY-1)
 - M6  Local Ollama fallback, brain.write + todo.patch skills
 - M7  Nostr event publishing (gift-wrap-only), own relay + sync
 

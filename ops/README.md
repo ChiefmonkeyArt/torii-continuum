@@ -371,6 +371,46 @@ that reproduces the exact live 404 and proves `launcher` normalizes to `none`.
 
 ---
 
+### Restart-before-readiness + version-asserting health gate (v0.2.48-alpha)
+
+The systemd unit is deliberately version-independent (`ExecStart=/usr/bin/node
+index.mjs`, no version in the path), so a **code-only** promotion (new tree, same
+unit file) previously left the old `node` process running while readiness accepted
+any HTTP 200 — a stale process could serve the old release and still pass. OPS-DEPLOY-1
+fixes this so every promotion restarts the agent exactly once before readiness, and
+readiness now proves the live process serves the deployed release:
+
+- Handlers are flushed mid-play so a unit-file change restarts the agent (via the
+  `restart continuum-agent` handler, after `reload systemd`) **before** readiness.
+- A code-only promotion (unit unchanged) fires an explicit `state: restarted`,
+  guarded so a unit-change deploy never restarts twice.
+- Readiness (`/api/health`) now requires **HTTP 200 AND** `json.version ==
+  continuum_version` with the leading `v` stripped, retried 15×2s. A stale process
+  reporting the old version fails the gate and trips the existing rescue rollback.
+
+**`continuum_version` must be a v-prefixed semantic release tag in production.**
+It does double duty: it is both the git checkout ref (`ansible.builtin.git`'s
+`version:`) **and** the expected live version the readiness gate asserts against.
+`/api/health` returns `agent/package.json`'s version (e.g. `0.2.48-alpha`), so the
+gate passes only when the ref string (minus a leading `v`) equals that version —
+which holds exactly when you deploy the matching tag, e.g.:
+
+```
+continuum_version: v0.2.48-alpha
+```
+
+A **branch** (`main`) or a **commit SHA** checks out fine but will never match the
+package version, so the deploy **intentionally fails closed** and rolls back. This
+coupling is deliberate for this release (no separate expected-version variable was
+introduced); use branch/SHA refs only for local/dev experiments where a readiness
+rollback is acceptable. Keep the git tag and both `package.json` versions in lockstep.
+
+The `deploy-restart` test suite adds **25** hermetic assertions covering the
+restart wiring in all unit/promote combinations, handler/daemon-reload ordering, the
+stale-version-fails / correct-version-passes gate logic, and secret hygiene.
+
+---
+
 ## Standalone agent install (`install-agent.sh`)
 
 The Ansible playbook above provisions a whole box. If you already have a

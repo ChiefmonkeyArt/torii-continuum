@@ -398,6 +398,7 @@
         owner: root
         group: root
         mode: '0644'
+      register: continuum_unit_install
       notify:
         - reload systemd
         - restart continuum-agent
@@ -431,7 +432,35 @@
         - "'command not found' not in continuum_v8_smoke.stderr"
         - "'No such file' not in continuum_v8_smoke.stderr"
 
-    - name: Enable and start continuum-agent
+    # Deterministic restart-before-readiness (v0.2.48-alpha, OPS-DEPLOY-1).
+    #
+    # THE BUG THIS FIXES: a code-only redeploy promotes a new release tree but the
+    # rendered unit file is byte-identical (it is version-independent), so the
+    # `restart continuum-agent` handler is NOT notified, and a plain
+    # `state: started` is a NO-OP against the already-running old process. The
+    # atomic swap changed the code on disk but the live PID kept serving the
+    # PREVIOUS release — new routes 404, /api/health reports the stale version.
+    #
+    # FIX: force any unit-file-change restart to run NOW (before readiness), then
+    # explicitly restart when the release was promoted but the unit did NOT change
+    # (the exact code-only case the handler misses). Exactly one restart happens
+    # per real deploy: the handler path when the unit changed, the explicit path
+    # when only code changed. The final ensure-started is a genuine no-op when the
+    # process is already up (idempotent reruns don't churn the service).
+    - name: Flush handlers so a unit-file change restarts the agent before readiness
+      ansible.builtin.meta: flush_handlers
+
+    - name: Restart continuum-agent for a code-only promotion (unit file unchanged)
+      ansible.builtin.systemd:
+        name: continuum-agent
+        state: restarted
+        enabled: true
+        daemon_reload: true
+      when:
+        - continuum_promote.changed | default(false) | bool
+        - not (continuum_unit_install.changed | default(false) | bool)
+
+    - name: Ensure continuum-agent is enabled and running (idempotent no-op)
       ansible.builtin.systemd:
         name: continuum-agent
         enabled: true
@@ -481,14 +510,25 @@
       register: continuum_set_root
       changed_when: "'skipping set-root' not in continuum_set_root.stdout"
 
-    - name: Wait for agent to answer /api/health
+    # Readiness must prove the RESTARTED process is serving the release we just
+    # promoted — not merely that something answers 200. Require HTTP 200 AND the
+    # reported version to equal continuum_version with any leading `v` stripped
+    # (the tag `v0.2.48-alpha` → agent version `0.2.48-alpha`). A stale process
+    # left running by a missed restart reports the OLD version and fails this
+    # gate, tripping the rescue rollback instead of passing a broken deploy.
+    - name: Wait for agent to answer /api/health with the DEPLOYED version
       ansible.builtin.uri:
         url: "http://127.0.0.1:{{ continuum_agent_port }}/api/health"
         status_code: 200
+        return_content: true
       register: agent_health
       retries: 15
       delay: 2
-      until: agent_health.status == 200
+      until:
+        - agent_health.status is defined
+        - agent_health.status == 200
+        - agent_health.json is defined
+        - (agent_health.json.version | default('')) == (continuum_version | regex_replace('^v', ''))
 
   rescue:
     # Stop the half-started new unit so it never fights the restored one.
