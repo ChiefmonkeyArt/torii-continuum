@@ -10,7 +10,7 @@
 import { h, clear, timeAgo } from './util.js';
 import { listProjects, milestonesFor, todosFor, sessionsFor } from '../data/store.js';
 import { setChatContext } from '../chat.js';
-import { isAgentConfigured, isLoggedIn, healthModels } from '../data/agent.js';
+import { isAgentConfigured, isLoggedIn, healthModels, walletHealth } from '../data/agent.js';
 
 // Module-level poll handle mirrors the routstr.js pattern. A single dashboard
 // mount owns at most one interval; navigating away clears it via the
@@ -37,7 +37,7 @@ function pill(state, text) {
 // Render the provider card body into `body` given a resolved health payload
 // (or a failure envelope from the agent client). Idempotent — called on
 // every poll tick to refresh in place.
-function renderProviderBody(body, res, elapsedMs) {
+function renderProviderBody(body, res, elapsedMs, walletRes) {
   clear(body);
 
   // Not configured (demo build with VITE_AGENT_URL empty)
@@ -96,6 +96,62 @@ function renderProviderBody(body, res, elapsedMs) {
   if (ol.enabled && !ol.reachable && ol.reason) {
     body.appendChild(h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 6px;', text: `Ollama: ${ol.reason}` }));
   }
+
+  // CONT-HEALTH-2: wallet + mint health. Non-mutating validation of stored
+  // proofs against each configured mint (reachability + NUT-07 proof-state).
+  renderWalletHealth(body, walletRes);
+}
+
+// Overall wallet state → pill styling. Never renders proofs, tokens, or secrets
+// — only the coarse state + sanitized per-mint reasons the endpoint returns.
+function renderWalletHealth(body, walletRes) {
+  const wrap = h('div', { class: 'provider-wallet', style: 'margin-top: 14px; border-top: 1px solid hsl(var(--border)); padding-top: 12px;' });
+  wrap.appendChild(h('div', { class: 'muted', style: 'font-size: 12px; margin-bottom: 8px;', text: 'Wallet & mints' }));
+
+  if (!walletRes || !walletRes.ok) {
+    wrap.appendChild(h('div', {}, [
+      pill('danger', 'Unreachable'),
+      h('span', { style: 'margin-left: 8px; font-size: 13px;', text: (walletRes && walletRes.reason) || 'wallet health unavailable' }),
+    ]));
+    body.appendChild(wrap);
+    return;
+  }
+
+  const w = walletRes.data || {};
+  if (w.configured === false || w.overall === 'disabled') {
+    wrap.appendChild(h('div', {}, [
+      pill('muted', 'Disabled'),
+      h('span', { style: 'margin-left: 8px; font-size: 13px;', text: 'No Cashu mints configured.' }),
+    ]));
+    body.appendChild(wrap);
+    return;
+  }
+
+  const overallPill = w.overall === 'ok' ? pill('ok', 'Healthy')
+    : w.overall === 'unreachable' ? pill('danger', 'Unreachable')
+      : pill('warn', 'Degraded');
+  wrap.appendChild(h('div', { class: 'provider-row' }, [
+    h('div', { class: 'provider-name', text: 'Overall' }),
+    overallPill,
+  ]));
+
+  (Array.isArray(w.mints) ? w.mints : []).forEach((m) => {
+    const mp = m.state === 'ok' ? pill('ok', 'OK')
+      : m.state === 'unreachable' ? pill('danger', 'Unreachable')
+        : pill('warn', 'Degraded');
+    const bal = typeof m.balance_sats === 'number' ? `${m.balance_sats} sats` : '';
+    const name = (m.identity && m.identity.name) || m.mint_fingerprint || 'mint';
+    wrap.appendChild(h('div', { class: 'provider-row' }, [
+      h('div', { class: 'provider-name', text: name }),
+      mp,
+      h('span', { class: 'provider-model', text: bal }),
+    ]));
+    if (m.reason) {
+      wrap.appendChild(h('div', { class: 'muted', style: 'font-size: 12px; margin: 2px 0 6px;', text: m.reason }));
+    }
+  });
+
+  body.appendChild(wrap);
 }
 
 async function tickProvider(body) {
@@ -103,10 +159,10 @@ async function tickProvider(body) {
   // still detached — bail out to avoid a spurious render into limbo.
   if (!body.isConnected) { stopProviderPoll(); return; }
   const t0 = performance.now();
-  const res = await healthModels();
+  const [res, walletRes] = await Promise.all([healthModels(), walletHealth()]);
   const elapsedMs = Math.round(performance.now() - t0);
   if (!body.isConnected) return; // navigated away mid-await
-  renderProviderBody(body, res, elapsedMs);
+  renderProviderBody(body, res, elapsedMs, walletRes);
 }
 
 function ProviderCard() {

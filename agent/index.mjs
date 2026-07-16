@@ -35,6 +35,7 @@ import { createSecretStore } from './lib/secretstore.mjs';
 import { createNwcClient, createLiveNwcTransport } from './core/nwc.mjs';
 import { createRoutstrProvider } from './core/routstr-provider.mjs';
 import { createOnboarding } from './core/onboarding.mjs';
+import { createProjectSources } from './core/project-sources.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENT_ROOT = __dirname;
@@ -112,6 +113,11 @@ const auth = createAuth(cfg, {
 });
 const wallet = await createWallet(cfg, app.log);
 const routstr = createRoutstr(cfg, wallet, app.log);
+
+// Read-only project-source adapters (v0.2.47-alpha, CONT-KANBAN-SYNC). Imports
+// local Markdown to-do files + public GitHub issues into per-project Kanban
+// boards under strict allowlists. Disabled unless cfg.project_sources.enabled.
+const projectSources = createProjectSources(cfg, { log: app.log });
 
 // Ollama fallback (CONT-AGENT-1b) — optional local-model provider.
 // Disabled by default; enable via config.ollama.enabled: true when Ollama
@@ -274,6 +280,17 @@ const onboardingMax =
   Number.isFinite(cfg.rate_limit?.onboarding_per_min) && cfg.rate_limit.onboarding_per_min > 0
     ? cfg.rate_limit.onboarding_per_min
     : 12;
+const sourcesRefreshMax =
+  Number.isFinite(cfg.rate_limit?.project_sources_refresh_per_min) && cfg.rate_limit.project_sources_refresh_per_min > 0
+    ? cfg.rate_limit.project_sources_refresh_per_min
+    : 12;
+const walletHealthMax =
+  Number.isFinite(cfg.rate_limit?.wallet_health_per_min) && cfg.rate_limit.wallet_health_per_min > 0
+    ? cfg.rate_limit.wallet_health_per_min
+    : 6;
+
+// Continuum project slugs are lowercase kebab (see src/data/store.js slugify).
+const PROJECT_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 
 function rateLimitConfig(max, route) {
   if (!rateLimitEnabled) return undefined;
@@ -344,6 +361,34 @@ app.post('/api/wallet/receive', { preHandler: requireAdmin }, async (req, reply)
   return { ok: true, added_sats: result.added_sats, mint: result.mint };
 });
 
+// GET /api/wallet/health — CONT-HEALTH-2. Non-mutating wallet + mint health.
+// Admin-gated: it reveals mint identity + balance validation. Never spends,
+// never mutates proofs, never returns proofs/secrets/tokens. Surfaces honest
+// disabled/ok/degraded/unreachable states with sanitized reasons so the
+// dashboard Provider card can show real wallet reachability.
+//
+// The dashboard auto-polls this every 20s, and each probe issues a NUT-07
+// /checkstate to every mint. To keep an open dashboard (or several tabs) from
+// driving steady mint load, the route is rate-limited AND the result is cached
+// server-side for a short window — concurrent/rapid polls are served from cache
+// instead of re-probing the mints.
+const WALLET_HEALTH_CACHE_MS = 15000;
+let walletHealthCache = { at: 0, body: null };
+app.get(
+  '/api/wallet/health',
+  { preHandler: requireAdmin, config: rateLimitConfig(walletHealthMax, '/api/wallet/health') },
+  async () => {
+    const nowMs = Date.now();
+    if (walletHealthCache.body && nowMs - walletHealthCache.at < WALLET_HEALTH_CACHE_MS) {
+      return { ...walletHealthCache.body, cached: true };
+    }
+    const h = await wallet.health();
+    const body = { version: VERSION, ...h };
+    walletHealthCache = { at: nowMs, body };
+    return body;
+  },
+);
+
 app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
   const message = req.body?.message;
   const context = req.body?.context || null;
@@ -368,6 +413,36 @@ app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
     sats_spent: result.sats_spent,
   };
 });
+
+// ─────────────────────────────────────────────────────────────
+// Project-source routes (v0.2.47-alpha, CONT-KANBAN-SYNC) — admin-gated.
+//
+// GET  /api/projects/:slug/sources         — what's configured + last snapshot
+// POST /api/projects/:slug/sources/refresh — re-import (rate-limited)
+//
+// Read-only: these NEVER write back to Markdown or GitHub. The response carries
+// normalized, read-only records the SPA merges into the project's Kanban board
+// without touching local/manual cards.
+// ─────────────────────────────────────────────────────────────
+app.get('/api/projects/:slug/sources', { preHandler: requireAdmin }, async (req, reply) => {
+  const slug = req.params.slug;
+  if (!PROJECT_SLUG_RE.test(String(slug || ''))) {
+    return reply.code(400).send({ error: 'bad project slug' });
+  }
+  return projectSources.list(slug);
+});
+
+app.post(
+  '/api/projects/:slug/sources/refresh',
+  { preHandler: requireAdmin, config: rateLimitConfig(sourcesRefreshMax, '/api/projects/:slug/sources/refresh') },
+  async (req, reply) => {
+    const slug = req.params.slug;
+    if (!PROJECT_SLUG_RE.test(String(slug || ''))) {
+      return reply.code(400).send({ error: 'bad project slug' });
+    }
+    return projectSources.refresh(slug);
+  },
+);
 
 // ─────────────────────────────────────────────────────────────
 // Character + memory routes (all admin-gated)

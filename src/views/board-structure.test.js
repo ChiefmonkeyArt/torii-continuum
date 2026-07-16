@@ -60,3 +60,42 @@ describe('board cards — non-interactive container, explicit controls', () => {
     expect(boardSrc).toContain("el.addEventListener('dragstart'");
   });
 });
+
+describe('imported (read-only) source cards — never mutate local cards', () => {
+  it('imported records live in an ephemeral map, never written to the store', () => {
+    expect(boardSrc).toMatch(/const importState = new Map\(\)/);
+    // The board store mutators must never be called with imported records.
+    expect(boardSrc).not.toMatch(/addCard\([^)]*rec/);
+    expect(boardSrc).not.toMatch(/updateCard\([^)]*rec/);
+  });
+
+  it('imported cards are read-only: not draggable and carry no move/edit controls', () => {
+    // The imported card builder must not add draggable or a card-moves control block.
+    const fn = boardSrc.slice(boardSrc.indexOf('function renderImportedCard'), boardSrc.indexOf('function renderSyncBar'));
+    expect(fn.length).toBeGreaterThan(0);
+    expect(fn).not.toContain("draggable: 'true'");
+    expect(fn).not.toContain('card-moves');
+    expect(fn).toContain("class: 'board-card imported'");
+  });
+
+  it('imported cards announce their read-only state to assistive tech', () => {
+    expect(boardSrc).toContain('Read-only imported card:');
+    expect(boardSrc).toMatch(/imported-badge/);
+  });
+
+  it('external source links are safe (noopener noreferrer, new tab)', () => {
+    expect(boardSrc).toMatch(/rel:\s*'noopener noreferrer'/);
+    expect(boardSrc).toMatch(/target:\s*'_blank'/);
+  });
+
+  it('exposes source + status filters and a manual refresh control', () => {
+    expect(boardSrc).toContain("'aria-label': 'Filter by source'");
+    expect(boardSrc).toContain("'aria-label': 'Filter by status'");
+    expect(boardSrc).toMatch(/doRefresh\(slug\)/);
+  });
+
+  it('surfaces partial/stale/error sync states to the operator', () => {
+    expect(boardSrc).toMatch(/sync-banner/);
+    expect(boardSrc).toMatch(/st\.status === 'stale'|status === 'partial'|status === 'error'/);
+  });
+});
