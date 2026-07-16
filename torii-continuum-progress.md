@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.52-alpha — CHAT-CONTEXT-1: project-scoped + page-aware chat threads
+
+Frontend-only release (`src/chat.js` + new `src/chat-threads.js` + `src/chat-threads.test.js` + `src/styles/chat.css`; **no agent code changed, no agent version bump**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.51-alpha → 0.2.52-alpha` (agent stays at `0.2.49-alpha`).
+
+**Ask (jobs #5 + #6).** #5 *"The chat should be page aware… a side conversation like, whilst you're doing that job on continuum, can you find me the best things to do in Costa Rica."* #6 *"The chat in the Projects area however are specific to that project… these apps are all interoperable."*
+
+**Change.** The chat dock's single global message array is replaced by a per-thread map keyed by context+mode. A new pure DOM-free module `src/chat-threads.js` exports `threadKeyFor(ctx, mode)`: general mode → one shared `'general'` thread; page mode inside a project → `'project:<slug>'` (all pages of that project share the thread); page mode elsewhere → `'page:<route>'` (per page). Slug comes from an explicit router `projectSlug` else parsed from the view `where` (`project:<slug>`/`project-board:<slug>`; the `projects` index has no colon so it is a page thread). A small accessible `<button class="chat-mode">` next to the context chip flips "This page" (default) ↔ "General" (`aria-pressed` + dynamic `aria-label`; chip reads `context · general` in general mode). The context object sent to the agent is enriched with `label`, `where`, `mode`, `route`, `pageType` (via `pageTypeFor`), `projectSlug`, and best-effort `columnId`/`cardId` (null); the agent ignores unknown fields and mock replies still work. Threads persist to `localStorage['continuum.chat.threads']`, each bounded to `THREAD_CAP=100` (oldest trimmed via `trimThread`), loaded defensively (`sanitizeThreads`, try/catch → in-memory only on failure). `send()` pins the turn to `activeKey` before the await so a late AI reply lands in the originating thread. User/AI text is still rendered only via `textContent`. True in-app agent editing is **not in scope** — a follow-up TODO is recorded.
+
+**Tests.** New `src/chat-threads.test.js` (19 cases: thread-key derivation across project board/home/dashboard/marketplace/projects-index/general/missing-route, slug parsing, page-type mapping, trim cap, sanitize drop/cap). Root `vitest run` **875/875** (was 856, +19). Code + local commit only — not pushed, not a PR.
+
 ## v0.2.51-alpha — KANBAN-PROG-1: dashboard progress from real kanban data
 
 Frontend-only release (`src/data/store.js` + `src/views/dashboard.js` + `src/data/board.test.js`; **no agent code changed**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.50-alpha → 0.2.51-alpha` (agent stays at `0.2.49-alpha`).

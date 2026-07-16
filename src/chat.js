@@ -13,12 +13,21 @@
 
 import { chat as agentChat } from './data/agent.js';
 import { isSessionLive } from './auth.js';
+import { currentRoute } from './router.js';
+import { threadKeyFor, pageTypeFor, projectSlugFrom, trimThread, sanitizeThreads, THREAD_CAP } from './chat-threads.js';
 
-let logEl, inputEl, sendBtn, contextEl, toggleEl, dockEl;
-let messages = [];
+let logEl, inputEl, sendBtn, contextEl, modeEl, toggleEl, dockEl;
+// Per-thread message history. Each key (see chat-threads.threadKeyFor) maps to
+// its own message array so navigating between pages/projects swaps the visible
+// conversation without losing any thread's history.
+let threads = {};
+let activeKey = 'page:/';
+let mode = 'page'; // 'page' (default) | 'general'
 let context = { label: 'Continuum', where: 'projects' };
 let expanded = false;
 let thinking = false;
+
+const THREADS_STORAGE_KEY = 'continuum.chat.threads';
 
 export function mountChat(root) {
   dockEl = document.createElement('div');
@@ -27,6 +36,7 @@ export function mountChat(root) {
     <div class="chat-log" role="log" aria-live="polite"></div>
     <div class="chat-input-row">
       <span class="chat-context" title="Chat context"></span>
+      <button class="chat-mode" type="button"></button>
       <textarea class="chat-input" placeholder="Ask Continuum anything… (mock responses)" rows="1" aria-label="Chat input"></textarea>
       <button class="chat-send" type="button">Send</button>
       <button class="chat-toggle" type="button" aria-label="Toggle chat">▲</button>
@@ -38,6 +48,7 @@ export function mountChat(root) {
   inputEl = dockEl.querySelector('.chat-input');
   sendBtn = dockEl.querySelector('.chat-send');
   contextEl = dockEl.querySelector('.chat-context');
+  modeEl = dockEl.querySelector('.chat-mode');
   toggleEl = dockEl.querySelector('.chat-toggle');
 
   sendBtn.addEventListener('click', send);
@@ -45,10 +56,11 @@ export function mountChat(root) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
   inputEl.addEventListener('input', autosize);
+  modeEl.addEventListener('click', toggleMode);
   toggleEl.addEventListener('click', () => setExpanded(!expanded));
 
-  greet();
-  renderContext();
+  loadThreads();
+  syncActiveThread();
 }
 
 function autosize() {
@@ -65,23 +77,87 @@ function greet() {
 
 export function setChatContext(next) {
   context = { ...context, ...next };
+  syncActiveThread();
+}
+
+/**
+ * Build the enriched context sent to the agent: the label/where the current
+ * view set, plus the router-derived route/pageType/projectSlug and the current
+ * mode. columnId/cardId are best-effort (the board keeps them in-memory, not in
+ * the hash) so they are null here. Unknown fields are ignored server-side.
+ */
+function buildContext() {
+  const r = currentRoute() || { pattern: '/', params: {} };
+  const route = (typeof window !== 'undefined' && window.location.hash)
+    ? window.location.hash.slice(1) : '/';
+  return {
+    label: context.label,
+    where: context.where,
+    mode,
+    route,
+    pageType: pageTypeFor(r.pattern),
+    projectSlug: (r.params && r.params.slug) || projectSlugFrom(context) || null,
+    columnId: null,
+    cardId: null,
+  };
+}
+
+// Recompute the active thread key from the current context + mode, swap the
+// visible history to that thread, greet it if empty, and refresh the chrome.
+function syncActiveThread() {
+  activeKey = threadKeyFor(buildContext(), mode);
+  if (!Array.isArray(threads[activeKey])) threads[activeKey] = [];
+  if (threads[activeKey].length === 0) greet();
   renderContext();
+  renderLog();
+}
+
+function toggleMode() {
+  mode = mode === 'general' ? 'page' : 'general';
+  syncActiveThread();
+}
+
+function currentMessages() {
+  if (!Array.isArray(threads[activeKey])) threads[activeKey] = [];
+  return threads[activeKey];
 }
 
 function renderContext() {
   if (!contextEl) return;
-  contextEl.textContent = `context · ${context.label}`;
-  contextEl.title = `Context: ${context.label} · ${context.where}`;
+  const label = mode === 'general' ? 'general' : context.label;
+  contextEl.textContent = `context · ${label}`;
+  contextEl.title = `Context: ${label} · ${context.where} · ${mode}`;
+  if (modeEl) {
+    const general = mode === 'general';
+    modeEl.textContent = general ? 'General' : 'This page';
+    modeEl.classList.toggle('active', general);
+    modeEl.setAttribute('aria-pressed', String(general));
+    modeEl.setAttribute('aria-label', general
+      ? 'Chat scope: general side conversation. Switch to this page.'
+      : 'Chat scope: this page. Switch to a general side conversation.');
+  }
 }
 
 function push(who, text) {
-  messages.push({ who, text, at: Date.now() });
-  renderLog();
+  pushTo(activeKey, who, text);
+}
+
+function loadThreads() {
+  try {
+    const raw = localStorage.getItem(THREADS_STORAGE_KEY);
+    if (raw) threads = sanitizeThreads(JSON.parse(raw), THREAD_CAP);
+  } catch (_e) { threads = {}; }
+}
+
+function saveThreads() {
+  try {
+    localStorage.setItem(THREADS_STORAGE_KEY, JSON.stringify(threads));
+  } catch (_e) { /* quota / disabled storage — keep threads in-memory only */ }
 }
 
 function renderLog() {
   logEl.innerHTML = '';
-  for (const m of messages) {
+  for (const m of currentMessages()) {
     const el = document.createElement('div');
     el.className = 'chat-msg ' + m.who;
     el.innerHTML = `
@@ -111,6 +187,10 @@ function setExpanded(v) {
 async function send() {
   const text = (inputEl.value || '').trim();
   if (!text || thinking) return;
+  // Pin the turn to the thread it was sent from, so an AI reply that arrives
+  // after the user has navigated to another page still lands in the right
+  // conversation rather than the newly-active one.
+  const turnKey = activeKey;
   push('user', text);
   inputEl.value = '';
   autosize();
@@ -118,9 +198,18 @@ async function send() {
 
   thinking = true;
   renderLog();
-  const reply = await getReply(text, context);
+  const reply = await getReply(text, buildContext());
   thinking = false;
-  push('ai', reply);
+  pushTo(turnKey, 'ai', reply);
+}
+
+// Append to a specific thread; only re-render when it is the visible one.
+function pushTo(key, who, text) {
+  if (!Array.isArray(threads[key])) threads[key] = [];
+  threads[key].push({ who, text, at: Date.now() });
+  threads[key] = trimThread(threads[key], THREAD_CAP);
+  saveThreads();
+  if (key === activeKey) renderLog();
 }
 
 /**
