@@ -1,9 +1,38 @@
 ---
 # Role: continuum — default variables for standalone→Ansible adoption.
 #
-# These are SAFE, non-secret defaults. Domain/version/user come from
-# group_vars/all.yml; the values below only govern the adoption + backup +
-# config-preservation behaviour and rarely need overriding.
+# These are SAFE, non-secret defaults. The values below govern the adoption +
+# backup + config-preservation behaviour and rarely need overriding.
+#
+# OPS-CUTOVER-3 (v0.2.60-alpha): the structural identity vars below
+# (continuum_user, continuum_repo, continuum_agent_host/port, mount_path,
+# vite_agent_url) were previously supplied ONLY via a hand-copied
+# group_vars/all.yml (from all.yml.example). group_vars/all.yml is gitignored
+# and the unattended server-side pull (ops/deploy-unattended.sh) never created
+# it, so a pristine tagged checkout failed at the first role task with
+# `continuum_user is undefined`. They are now self-sufficient role defaults so a
+# pristine checkout converges with NO group_vars/all.yml. They remain fully
+# overridable (group_vars/all.yml or -e still win over defaults). Only the truly
+# per-host, non-secret values (torii_domain, continuum_version) are passed
+# explicitly by the wrapper via -e; secrets (admin_npub/session_secret) stay in
+# the optional vault and are only consulted when a config is genuinely rendered.
+
+# OS user the agent runs as, and where its app/state tree lives under /home.
+# REQUIRED by the very first role task (path resolution + user creation); a
+# missing value is the OPS-CUTOVER-3 root cause. Non-secret, safe to commit.
+continuum_user: "continuum"
+
+# Public HTTPS source for the app/agent checkout. Passed through to the git task;
+# a pristine checkout with no group_vars/all.yml would otherwise fail here next.
+continuum_repo: "https://github.com/ChiefmonkeyArt/torii-continuum.git"
+
+# Where the agent listens (loopback only) and the mount path the SPA + nginx use.
+# Consumed unconditionally by the nginx vhost template, the build env, and the
+# health gate — so they must resolve even in unattended preserve mode.
+continuum_agent_host: "127.0.0.1"
+continuum_agent_port: 8787
+continuum_mount_path: "/continuum"
+continuum_vite_agent_url: "/continuum"
 
 # Where a prior standalone install (ops/install-agent.sh) lives, and the unit it
 # runs under. If this layout is detected and the Ansible layout is not yet

@@ -9,6 +9,9 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.61-alpha — ops: unattended Ansible role-var resolution + retry-storm fix (OPS-CUTOVER-3)
+
+Ops-only hotfix from a **live v0.2.59-alpha run** that passed the torii-base phase and then failed the Continuum unattended converge at the first role task with `continuum_user is undefined` (no app/agent runtime code changed). Root cause: the server-side pull (`ops/deploy-unattended.sh`) never created the hand-copied, gitignored `group_vars/all.yml` that manual installs rely on for the role's structural identity vars; it wrote only `torii_domain`+`continuum_version`. Fixes: (1) the role now ships `continuum_user`, `continuum_repo`, `continuum_agent_host`, `continuum_agent_port`, `continuum_mount_path`, `continuum_vite_agent_url` as defaults, and the wrapper passes per-host values via a validated `-e @continuum-deploy.extra.json` (no `group_vars/all.yml`), with `continuum_version` kept required/fail-closed and domain+repo validated before interpolation; live config preserved byte-for-byte, vault-free. (2) The cutover installs the deploy timer with `--no-enable-timer`, runs the first converge manually + health-gates it, and enables the timer only after a fully successful cutover (no retry storm). Tests: deploy-unattended 97/97, cutover 65/65; root+agent package.json 0.2.61-alpha; torii-base v0.1.4 / preview v0.1.21-preview unchanged. Not deployed.
 ## v0.2.60-alpha — ui: raise login muted text to WCAG AA contrast
 
 Frontend-only release (`src/styles/landing.css` only — **no agent code changed**, `src/views/login.js` untouched; onboarding preview stays **v0.1.21-preview**). Root `package.json` + lockfile bumped `0.2.59-alpha → 0.2.60-alpha`. (v0.2.59-alpha was already claimed by OPS-CUTOVER-2 on main, so this ships as 0.2.60.)
