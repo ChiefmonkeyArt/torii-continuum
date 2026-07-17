@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Torii final VPS cutover — in-repo operator script (OPS-CUTOVER-2, v0.2.59-alpha).
+# Torii final VPS cutover — in-repo operator script (OPS-CUTOVER-3, v0.2.60-alpha).
 #
 # Root-owned, fail-closed cutover for chiefmonkey.art. Fetched from ONE immutable
 # annotated release tag and invoked with a short command from a verified clone:
@@ -10,7 +10,7 @@
 # It:
 #   - verifies exact annotated release tags + version markers before mutating live state
 #       torii-base            v0.1.4
-#       torii-continuum       v0.2.59-alpha  (this script's own release tag)
+#       torii-continuum       v0.2.60-alpha  (this script's own release tag)
 #       onboarding preview    v0.1.21-preview
 #   - backs up the current Torii base state to a root-only timestamped directory
 #   - redeploys torii-base via its sanctioned bootstrap (TORII_DOMAIN + SKIP_CERTBOT=1)
@@ -33,6 +33,18 @@
 #      shell (e.g. `-bash`), so that idiom re-execs the wrong thing. This script
 #      instead REQUIRES root and refuses to be sourced; the documented invocation
 #      is `sudo bash ops/torii-final-cutover.sh` from a verified clone.
+#
+# ── v0.2.60-alpha hotfix (OPS-CUTOVER-3), from a live v0.2.59-alpha run ────────
+#   1. UNATTENDED ROLE-VAR FIX. The Continuum unattended converge failed at the
+#      first role task with `continuum_user is undefined`: the server-side pull
+#      never created the hand-copied group_vars/all.yml that manual installs rely
+#      on. The role now ships those structural identity vars as defaults, and the
+#      wrapper passes per-host values via a validated -e extra-vars file instead
+#      of a gitignored group_vars/all.yml.
+#   2. NO RETRY STORM. The recurring deploy timer is installed but NOT enabled by
+#      the bootstrap here; the cutover runs the first converge manually, health-
+#      gates it, and enables the timer ONLY after a fully successful cutover, so a
+#      failed converge can never be retried every 5 min against a bad config.
 #
 # ── v0.2.59-alpha hotfix (OPS-CUTOVER-2), from a live v0.2.58-alpha run ────────
 #   1. PUBLIC-MODE FIX. The root-only umask 077 (correct for backups/state) also
@@ -75,8 +87,8 @@ readonly BASE_REPO="https://github.com/ChiefmonkeyArt/torii-base.git"
 readonly BASE_TAG="v0.1.4"
 readonly BASE_VERSION="0.1.4"
 readonly CONTINUUM_REPO="https://github.com/ChiefmonkeyArt/torii-continuum.git"
-readonly CONTINUUM_TAG="v0.2.59-alpha"
-readonly CONTINUUM_VERSION="0.2.59-alpha"
+readonly CONTINUUM_TAG="v0.2.60-alpha"
+readonly CONTINUUM_VERSION="0.2.60-alpha"
 readonly PREVIEW_DIR_NAME="onboarding-v0.1.21"
 readonly PREVIEW_VERSION="0.1.21-preview"
 readonly PREVIEW_CTA="Sign in with browser extension"
@@ -714,7 +726,14 @@ validate_torii_base() {
 
 bootstrap_and_deploy_continuum() {
   log "Bootstrapping Continuum unattended deploy"
-  bash "$CONTINUUM_SRC/ops/deploy-bootstrap.sh"
+  # OPS-CUTOVER-3: install the timer but DO NOT enable it here. Enabling the
+  # recurring timer before a first successful converge means a broken deploy
+  # (e.g. the v0.2.59-alpha `continuum_user is undefined` failure) would be
+  # retried every 5 min — a retry storm against a known-bad config. We run the
+  # first converge MANUALLY below, health-gate it, and only enable_deploy_timer()
+  # at the very end of a fully successful cutover. A failure anywhere leaves the
+  # timer disabled, so rollback cannot resurrect a retry loop.
+  bash "$CONTINUUM_SRC/ops/deploy-bootstrap.sh" --no-enable-timer
   [[ -f "$CONTINUUM_CONF" ]] || die "continuum deploy config missing after bootstrap"
   cp -a -- "$CONTINUUM_CONF" "$CONTINUUM_CONF_BACKUP"
   CONTINUUM_PIN_CHANGED=1
@@ -724,10 +743,20 @@ bootstrap_and_deploy_continuum() {
   chown root:root "$CONTINUUM_CONF"
   chmod 0600 "$CONTINUUM_CONF"
   systemctl daemon-reload
-  log "Triggering torii-continuum-deploy.service"
+  log "Triggering first manual converge via torii-continuum-deploy.service"
   systemctl start torii-continuum-deploy.service
   systemctl --no-pager --full status torii-continuum-deploy.service > "${LOG_ROOT}/torii-continuum-deploy.service.status.txt" 2>&1 || true
   wait_json_version "$CONTINUUM_HEALTH_URL" "$CONTINUUM_VERSION" 30 2 || die "continuum health did not report ${CONTINUUM_VERSION}"
+}
+
+# enable_deploy_timer — turn on the recurring unattended timer, but ONLY after a
+# fully successful cutover (last step of main). Reached only past every health
+# gate, so the timer never activates against a config that has not already
+# converged once. If the cutover fails earlier, this never runs and the timer
+# stays installed-but-disabled (no retry storm).
+enable_deploy_timer() {
+  log "Enabling torii-continuum-deploy.timer after successful first converge"
+  systemctl enable --now torii-continuum-deploy.timer
 }
 
 deploy_preview() {
@@ -800,6 +829,7 @@ main() {
   bootstrap_and_deploy_continuum
   deploy_preview
   write_report
+  enable_deploy_timer
   cleanup_success
   trap - ERR
   log "Cutover complete. Backup: ${BACKUP_ROOT}  Preview rollback: ${PREVIEW_PREV_PATH}"

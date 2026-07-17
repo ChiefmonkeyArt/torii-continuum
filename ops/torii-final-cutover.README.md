@@ -9,7 +9,7 @@ It:
 - verifies the exact annotated release tags + version markers **before** mutating
   live state:
   - `torii-base` **v0.1.4**
-  - `torii-continuum` **v0.2.59-alpha** (this script's own release tag)
+  - `torii-continuum` **v0.2.60-alpha** (this script's own release tag)
   - onboarding preview **v0.1.21-preview**
 - backs up the current Torii base state to a root-only timestamped directory
 - redeploys `torii-base` v0.1.4 via its sanctioned bootstrap
@@ -41,6 +41,36 @@ run. Two structural defenses fix that:
    ```bash
    sudo bash ops/torii-final-cutover.sh
    ```
+
+## v0.2.60-alpha hotfix (OPS-CUTOVER-3)
+
+A live v0.2.59-alpha run got past the torii-base phase and then the Continuum
+unattended converge failed at the **first role task** with
+`continuum_user is undefined`. Two bugs, both fixed here:
+
+1. **Unattended role vars did not resolve on a pristine checkout.** Manual
+   installs copy `group_vars/all.yml.example` → `group_vars/all.yml` (gitignored)
+   to supply the role's structural identity vars, but the server-side pull
+   (`ops/deploy-unattended.sh`) never created that file — it wrote a two-key
+   `group_vars/all.yml` (`torii_domain` + `continuum_version`), so
+   `continuum_user`, `continuum_repo`, `continuum_agent_host/port`,
+   `continuum_mount_path` and `continuum_vite_agent_url` were all undefined.
+   Fixed by shipping those non-secret structural vars as **role defaults**
+   (`ops/ansible/roles/continuum/defaults/main.yml`), so a pristine tagged
+   checkout converges with **no `group_vars/all.yml` at all**. The wrapper now
+   passes only the per-host values (`torii_domain`, `continuum_version`,
+   `continuum_repo`) via a validated **`-e @…extra.json`** file — the highest
+   Ansible precedence — and no longer writes a gitignored `group_vars/all.yml`.
+   `continuum_version` stays **required** (fail-closed, never defaulted). No
+   vault requirement is introduced for the existing-ansible redeploy, and live
+   `config.yaml` / `session_secret` / funded key are preserved byte-for-byte.
+2. **No retry storm after a failed converge.** The recurring deploy timer used
+   to be enabled by the bootstrap immediately, so a broken converge would be
+   retried every 5 min against a known-bad config. The cutover now installs the
+   timer with `--no-enable-timer`, runs the **first converge manually**,
+   health-gates it, and enables the timer **only after a fully successful
+   cutover**. A failure anywhere leaves the timer installed-but-disabled, and
+   rollback cannot resurrect a retry loop.
 
 ## v0.2.59-alpha hotfix (OPS-CUTOVER-2)
 
@@ -79,7 +109,7 @@ find /opt/torii/launcher -type f -exec chmod 0644 {} +
 ```
 
 which is exactly what `enforce_public_static_modes` now performs automatically.
-Re-running this v0.2.59-alpha cutover from the verified clone is idempotent for
+Re-running this v0.2.60-alpha cutover from the verified clone is idempotent for
 the base redeploy and proceeds through the Continuum and preview phases.
 
 ## Run it (from a verified clone, one sudo prompt)
@@ -87,9 +117,9 @@ the base redeploy and proceeds through the Continuum and preview phases.
 ```bash
 cd /tmp
 rm -rf torii-continuum
-git clone --depth 1 --branch v0.2.59-alpha https://github.com/ChiefmonkeyArt/torii-continuum.git
+git clone --depth 1 --branch v0.2.60-alpha https://github.com/ChiefmonkeyArt/torii-continuum.git
 cd torii-continuum
-[ "$(git cat-file -t v0.2.59-alpha)" = tag ] || { echo "not an annotated tag"; exit 1; }
+[ "$(git cat-file -t v0.2.60-alpha)" = tag ] || { echo "not an annotated tag"; exit 1; }
 sudo bash ops/torii-final-cutover.sh
 ```
 
@@ -166,7 +196,17 @@ v0.2.59-alpha hotfix adds functional replays: launcher modes forced to
 `0755`/`0644` under an initial `umask 077`, a backup→mutate→restore + absent-path
 cleanup, and a `die`-after-mutation harness proving the `EXIT`-trap chokepoint
 rolls back (with the recursion guard), plus static asserts that mode widening
-never reaches `/opt/torii/env`, `registry.json` or `root_app.conf`.
+never reaches `/opt/torii/env`, `registry.json` or `root_app.conf`. The
+v0.2.60-alpha hotfix adds asserts that the cutover bootstraps with
+`--no-enable-timer` and enables the deploy timer **only after** the converge +
+`write_report` (exactly one timer-enable call, never before the first converge).
+
+`ops/test/deploy-unattended.test.sh` additionally proves the wrapper passes
+per-host vars via a validated `-e` extra-vars JSON, writes **no**
+`group_vars/all.yml`, and that the role's structural identity vars
+(`continuum_user`, …) resolve from role defaults on a pristine checkout —
+optionally dumping `continuum_user` through `ansible` when it is installed, and
+falling back to static assertions otherwise.
 
 ```bash
 bash ops/test/torii-final-cutover.test.sh

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Torii Continuum — unattended deploy wrapper (OPS-DEPLOY-2, v0.2.50-alpha).
+# Torii Continuum — unattended deploy wrapper (OPS-CUTOVER-3, v0.2.60-alpha).
 #
 # WHY THIS EXISTS
 # ---------------
@@ -16,6 +16,28 @@
 # The unattended path is VAULT-FREE and preserves config.yaml / session_secret /
 # the funded Routstr key byte-for-byte (the role detects `existing-ansible` and
 # never rotates secrets). No secret is read, written, or logged here.
+#
+# OPS-CUTOVER-3 (v0.2.60-alpha) — ROLE-VAR RESOLUTION FIX
+# ------------------------------------------------------
+# A live v0.2.59-alpha unattended run failed at the FIRST role task with
+# `continuum_user is undefined`. Root cause: manual installs copy
+# group_vars/all.yml.example → group_vars/all.yml (gitignored) to supply the
+# role's structural identity vars, but this server-side pull never created that
+# file — it only wrote a two-key group_vars/all.yml (torii_domain +
+# continuum_version), so continuum_user / continuum_repo / continuum_agent_host /
+# continuum_agent_port / continuum_mount_path / continuum_vite_agent_url were all
+# undefined on a pristine tagged checkout.
+#
+# Two-part fix:
+#   1. The role now ships those structural, non-secret vars as role defaults
+#      (ops/ansible/roles/continuum/defaults/main.yml), so a pristine checkout
+#      converges with NO group_vars/all.yml at all.
+#   2. This wrapper NO LONGER writes a gitignored group_vars/all.yml. The only
+#      truly per-host, non-secret values (torii_domain, continuum_version, and
+#      continuum_repo for provenance) are passed EXPLICITLY and deterministically
+#      via a validated `-e @extra-vars.json` file — the highest-precedence,
+#      unambiguous Ansible input. All three inputs are strictly validated before
+#      being written, so the JSON cannot be injected into.
 #
 # FAIL-CLOSED. Every guard that cannot be satisfied aborts before any mutation.
 #
@@ -53,6 +75,14 @@ set -euo pipefail
 # is safe to interpolate into git args and group_vars YAML.
 readonly CONTINUUM_TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 
+# Strict DNS-name grammar for the domain, and a strict https(.git) grammar for
+# the repo URL. OPS-CUTOVER-3: these two values plus the tag are the only inputs
+# interpolated into the -e extra-vars JSON handed to Ansible, so each is pinned
+# to an alphabet that contains no quote, brace, backslash, or shell/JSON
+# metacharacter. A validated value is therefore safe to embed verbatim.
+readonly CONTINUUM_DOMAIN_RE='^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$'
+readonly CONTINUUM_REPO_RE='^https://[A-Za-z0-9._~/-]+\.git$'
+
 dep_log() { printf '[deploy-unattended] %s\n' "$*"; }
 dep_die() { printf '[deploy-unattended] FATAL: %s\n' "$*" >&2; exit 1; }
 
@@ -61,6 +91,22 @@ validate_tag() {
   local tag="${1:-}"
   [[ -n "$tag" ]] || return 1
   [[ "$tag" =~ $CONTINUUM_TAG_RE ]]
+}
+
+# validate_domain <domain> — 0 iff the domain matches the strict DNS grammar.
+validate_domain() {
+  local d="${1:-}"
+  [[ -n "$d" ]] || return 1
+  [[ "$d" =~ $CONTINUUM_DOMAIN_RE ]]
+}
+
+# validate_repo <url> — 0 iff the repo URL is a plain https://…​.git with no
+# metacharacters. Refuses ssh://, git://, file://, and any embedded shell/JSON
+# special so it is safe to interpolate.
+validate_repo() {
+  local u="${1:-}"
+  [[ -n "$u" ]] || return 1
+  [[ "$u" =~ $CONTINUUM_REPO_RE ]]
 }
 
 # version_matches <target-tag> <live-version> — 0 iff live == target with a
@@ -112,11 +158,17 @@ load_conf() {
   fi
 }
 
-# write_localhost_inventory <dir> <domain> <tag> — render the vault-free,
-# localhost, SSH-less inventory + non-secret vars the `existing-ansible`
-# redeploy needs. The tag is already regex-validated, so quoting it is belt.
+# write_localhost_inventory <dir> — render the vault-free, localhost, SSH-less
+# inventory the `existing-ansible` redeploy runs against.
+#
+# OPS-CUTOVER-3: this deliberately does NOT write group_vars/all.yml. The role's
+# structural identity vars are now self-sufficient defaults, and the per-host
+# values are supplied via write_extra_vars() below (an -e file, which outranks
+# both defaults and any group_vars). Writing a gitignored group_vars/all.yml here
+# was the fragile, incomplete path that caused the `continuum_user is undefined`
+# failure, so it is gone.
 write_localhost_inventory() {
-  local dir="${1:?}" domain="${2:?}" tag="${3:?}"
+  local dir="${1:?}"
   cat > "$dir/inventory.yml" <<YAML
 all:
   children:
@@ -125,11 +177,24 @@ all:
         localhost:
           ansible_connection: local
 YAML
-  mkdir -p "$dir/group_vars"
-  cat > "$dir/group_vars/all.yml" <<YAML
-torii_domain: "${domain}"
-continuum_version: "${tag}"
-YAML
+}
+
+# write_extra_vars <path> <domain> <version-tag> <repo> — emit the deterministic,
+# non-secret extra-vars JSON passed to ansible-playbook as `-e @<path>`. Only the
+# per-host values live here; every structural var comes from role defaults. All
+# three inputs are strictly pre-validated (validate_domain/validate_tag/
+# validate_repo) before this is called, so verbatim interpolation is injection-
+# safe. continuum_version carries the leading "v" exactly as the tag; the role
+# strips it where a bare semver is needed. No secret is ever written here.
+write_extra_vars() {
+  local path="${1:?}" domain="${2:?}" tag="${3:?}" repo="${4:?}"
+  cat > "$path" <<JSON
+{
+  "torii_domain": "${domain}",
+  "continuum_version": "${tag}",
+  "continuum_repo": "${repo}"
+}
+JSON
 }
 
 # prune_releases <deploy-root> <keep> <live-tag> — keep the newest <keep>
@@ -170,6 +235,10 @@ run_deploy() {
 
   validate_tag "$tag" \
     || dep_die "target '${tag}' is not a valid v<semver> release tag (branches/SHAs are refused by policy)."
+  validate_domain "$domain" \
+    || dep_die "domain '${domain}' is not a valid DNS name (refused before it reaches Ansible)."
+  validate_repo "$CONTINUUM_REPO" \
+    || dep_die "repo '${CONTINUUM_REPO}' is not a plain https://…​.git URL (refused by policy)."
   tag_allowed "$tag" "$CONTINUUM_ALLOWLIST_FILE" \
     || dep_die "target '${tag}' is not in the allowlist ${CONTINUUM_ALLOWLIST_FILE}."
 
@@ -212,13 +281,16 @@ run_deploy() {
 
   local ans="${src}/ops/ansible"
   [[ -f "${ans}/site.yml" ]] || dep_die "checkout is missing ops/ansible/site.yml."
-  write_localhost_inventory "$ans" "$domain" "$tag"
+  write_localhost_inventory "$ans"
+  write_extra_vars "${ans}/continuum-deploy.extra.json" "$domain" "$tag" "$CONTINUUM_REPO"
 
   # Delegate to the hardened role. It performs: fail-closed state backup,
   # staging build, atomic swap, restart-before-readiness, version-asserting
   # health gate, and rescue rollback on failure. Vault-free → no secret touched.
+  # Per-host values arrive via the deterministic -e extra-vars file (highest
+  # precedence); structural identity vars come from role defaults.
   dep_log "running existing-ansible redeploy (--tags continuum) for ${tag}"
-  ( cd "$ans" && ansible-playbook -i inventory.yml site.yml --tags continuum )
+  ( cd "$ans" && ansible-playbook -i inventory.yml -e "@continuum-deploy.extra.json" site.yml --tags continuum )
 
   # Independent post-verify on top of the role's own gate (belt-and-suspenders).
   local now; now="$(live_version "$CONTINUUM_HEALTH_URL")"

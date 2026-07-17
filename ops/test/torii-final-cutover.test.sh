@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Hermetic tests for the in-repo cutover operator script (OPS-CUTOVER-2, v0.2.59-alpha).
+# Hermetic tests for the in-repo cutover operator script (OPS-CUTOVER-3, v0.2.60-alpha).
 #
 # No real deploy, no network, no root. Concerns:
 #   1. Anti-partial-delivery — the whole body is a single brace group, so a
@@ -111,8 +111,8 @@ printf '%s' "$src_out" | grep -qiF 'do not source' \
 # ── 3. Pinned annotated tags + version markers ───────────────────────────────
 grep -qF 'BASE_TAG="v0.1.4"' "$CUTOVER"                 && ok "pins torii-base v0.1.4"             || bad "torii-base tag not pinned"
 grep -qF 'BASE_VERSION="0.1.4"' "$CUTOVER"              && ok "pins torii-base VERSION 0.1.4"      || bad "torii-base version not pinned"
-grep -qF 'CONTINUUM_TAG="v0.2.59-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.59-alpha" || bad "continuum tag not pinned to v0.2.59-alpha"
-grep -qF 'CONTINUUM_VERSION="0.2.59-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.59-alpha" || bad "continuum version not pinned"
+grep -qF 'CONTINUUM_TAG="v0.2.60-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.60-alpha" || bad "continuum tag not pinned to v0.2.60-alpha"
+grep -qF 'CONTINUUM_VERSION="0.2.60-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.60-alpha" || bad "continuum version not pinned"
 grep -qF 'PREVIEW_VERSION="0.1.21-preview"' "$CUTOVER"  && ok "pins onboarding preview 0.1.21-preview" || bad "preview version not pinned"
 grep -qF 'PREVIEW_CTA="Sign in with browser extension"' "$CUTOVER" && ok "pins exact preview CTA text" || bad "preview CTA text not pinned"
 
@@ -351,6 +351,38 @@ guard_out="$(bash -c '
 [[ "$guard_out" == "1" ]] \
   && ok "rollback recursion guard runs the body exactly once" \
   || bad "rollback recursion guard failed (runs='$guard_out')"
+
+# ── 11. OPS-CUTOVER-3: timer only after a successful converge (no retry storm) ─
+# 11a. The bootstrap is invoked with --no-enable-timer, so the recurring timer is
+#      installed but NOT enabled until the manual first converge has health-gated.
+awk '/^bootstrap_and_deploy_continuum\(\) \{/,/^\}/' "$CUTOVER" | grep -qE 'deploy-bootstrap\.sh"? --no-enable-timer' \
+  && ok "bootstrap runs with --no-enable-timer (no premature timer)" \
+  || bad "bootstrap does not pass --no-enable-timer"
+# 11b. A dedicated enable_deploy_timer step enables the timer, and it is called in
+#      main ONLY after write_report (i.e. past every health gate).
+grep -qF 'enable_deploy_timer() {' "$CUTOVER" && ok "defines enable_deploy_timer step" || bad "no enable_deploy_timer step"
+awk '/^enable_deploy_timer\(\) \{/,/^\}/' "$CUTOVER" | grep -qF 'systemctl enable --now torii-continuum-deploy.timer' \
+  && ok "enable_deploy_timer enables the recurring timer" || bad "enable_deploy_timer does not enable the timer"
+# main() ordering: enable_deploy_timer must come AFTER write_report and the
+# converge, and the ONLY enable of the timer must be in enable_deploy_timer (the
+# bootstrap path is --no-enable-timer). Verify main calls it last-ish.
+main_body="$(awk '/^main\(\) \{/,/^\}/' "$CUTOVER")"
+printf '%s' "$main_body" | grep -qF 'enable_deploy_timer' \
+  && ok "main invokes enable_deploy_timer" || bad "main never enables the timer"
+# The enable must not appear before bootstrap_and_deploy_continuum in main.
+order_ok=1
+line_boot="$(printf '%s\n' "$main_body" | grep -n 'bootstrap_and_deploy_continuum' | head -1 | cut -d: -f1)"
+line_enable="$(printf '%s\n' "$main_body" | grep -n 'enable_deploy_timer' | head -1 | cut -d: -f1)"
+line_report="$(printf '%s\n' "$main_body" | grep -n 'write_report' | head -1 | cut -d: -f1)"
+[[ -n "$line_boot" && -n "$line_enable" && -n "$line_report" && "$line_enable" -gt "$line_boot" && "$line_enable" -gt "$line_report" ]] \
+  && ok "main enables the timer only after converge + write_report" \
+  || bad "main enables the timer too early (boot=$line_boot report=$line_report enable=$line_enable)"
+# 11c. The ONLY `systemctl enable ... torii-continuum-deploy.timer` in the whole
+#      script lives in enable_deploy_timer (belt: no stray early enable).
+enable_hits="$(sed 's/#.*$//' "$CUTOVER" | grep -cF 'systemctl enable --now torii-continuum-deploy.timer')"
+[[ "$enable_hits" -eq 1 ]] \
+  && ok "exactly one timer-enable call in the script (in enable_deploy_timer)" \
+  || bad "unexpected number of timer-enable calls ($enable_hits)"
 
 printf '\n[torii-final-cutover.test] pass=%d fail=%d\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || exit 1
