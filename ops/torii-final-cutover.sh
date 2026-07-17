@@ -113,6 +113,12 @@ readonly PUBLIC_FILE_MODE="0644"
 readonly CONTINUUM_CONF="/etc/torii/continuum-deploy.conf"
 readonly TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 readonly RUN_ROOT="/root/torii-final-cutover-${TIMESTAMP}"
+# How many timestamped /root/torii-final-cutover-* staging dirs to keep after a
+# SUCCESSFUL cutover (the newest N, which always includes this run's RUN_ROOT).
+# Each run leaves a ~629M dir (clone + node_modules); they were never pruned, so
+# repeated attempts accumulated 2.5G+ and the unattended deploy hit ENOSPC at
+# `npm ci` on a 15G host. See prune_old_staging_dirs().
+readonly KEEP_STAGING_DIRS=1
 readonly SRC_ROOT="${RUN_ROOT}/src"
 readonly BACKUP_ROOT="${RUN_ROOT}/backup"
 readonly LOG_ROOT="${RUN_ROOT}/logs"
@@ -820,6 +826,46 @@ cleanup_success() {
   rm -rf -- "$SRC_ROOT"
 }
 
+# prune_old_staging_dirs — after a SUCCESSFUL cutover, keep only the newest N
+# /root/torii-final-cutover-* staging dirs and explicitly remove the older ones,
+# so repeated runs cannot accumulate (each is ~629M) and exhaust the disk (the
+# ENOSPC-at-`npm ci` failure this addresses). Placed LAST in main so a FAILED
+# cutover never reaches here and its newest staging dir survives for inspection.
+#
+# Safety:
+#   - Enumeration is explicit and NUL-safe via `find` (a bare
+#     `rm /root/torii-final-cutover-*` glob does NOT reliably expand in every
+#     shell and could delete nothing — or the wrong thing).
+#   - Scoped to /root at depth 1, name torii-final-cutover-*, dirs only — it can
+#     never reach /home/continuum/app, the live webroot /var/www/torii/continuum,
+#     or anything outside this staging namespace.
+#   - RUN_ROOT (the just-created dir) is skipped unconditionally, so even a
+#     misconfigured keep count can never remove the current run.
+prune_old_staging_dirs() {
+  local keep="$KEEP_STAGING_DIRS"
+  local -a dirs=()
+  local d
+  # Newest-first: the timestamped names (YYYYMMDDTHHMMSSZ) sort lexically by age.
+  while IFS= read -r -d '' d; do
+    dirs+=("$d")
+  done < <(find /root -maxdepth 1 -type d -name 'torii-final-cutover-*' -print0 | sort -zr)
+
+  local rank=0
+  for d in "${dirs[@]}"; do
+    if [[ "$d" == "$RUN_ROOT" ]]; then
+      log "Keeping current staging dir: ${d}"
+      continue
+    fi
+    rank=$((rank + 1))
+    if (( rank < keep )); then
+      log "Keeping recent staging dir: ${d}"
+      continue
+    fi
+    log "Pruning stale staging dir: ${d}"
+    rm -rf -- "$d"
+  done
+}
+
 main() {
   log "Starting final VPS cutover for ${DOMAIN}"
   log "Run directory (root-only): ${RUN_ROOT}"
@@ -832,6 +878,9 @@ main() {
   enable_deploy_timer
   cleanup_success
   trap - ERR
+  # LAST step: only a fully successful cutover reaches here, so a failed run
+  # always leaves its newest staging dir behind for inspection.
+  prune_old_staging_dirs
   log "Cutover complete. Backup: ${BACKUP_ROOT}  Preview rollback: ${PREVIEW_PREV_PATH}"
 }
 
