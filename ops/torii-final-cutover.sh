@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Torii final VPS cutover — in-repo operator script (OPS-CUTOVER-1, v0.2.57-alpha).
+# Torii final VPS cutover — in-repo operator script (OPS-CUTOVER-1, v0.2.58-alpha).
 #
 # Root-owned, fail-closed cutover for chiefmonkey.art. Fetched from ONE immutable
 # annotated release tag and invoked with a short command from a verified clone:
@@ -10,7 +10,7 @@
 # It:
 #   - verifies exact annotated release tags + version markers before mutating live state
 #       torii-base            v0.1.4
-#       torii-continuum       v0.2.57-alpha  (this script's own release tag)
+#       torii-continuum       v0.2.58-alpha  (this script's own release tag)
 #       onboarding preview    v0.1.21-preview
 #   - backs up the current Torii base state to a root-only timestamped directory
 #   - redeploys torii-base via its sanctioned bootstrap (TORII_DOMAIN + SKIP_CERTBOT=1)
@@ -63,8 +63,8 @@ readonly BASE_REPO="https://github.com/ChiefmonkeyArt/torii-base.git"
 readonly BASE_TAG="v0.1.4"
 readonly BASE_VERSION="0.1.4"
 readonly CONTINUUM_REPO="https://github.com/ChiefmonkeyArt/torii-continuum.git"
-readonly CONTINUUM_TAG="v0.2.57-alpha"
-readonly CONTINUUM_VERSION="0.2.57-alpha"
+readonly CONTINUUM_TAG="v0.2.58-alpha"
+readonly CONTINUUM_VERSION="0.2.58-alpha"
 readonly PREVIEW_DIR_NAME="onboarding-v0.1.21"
 readonly PREVIEW_VERSION="0.1.21-preview"
 readonly PREVIEW_CTA="Sign in with browser extension"
