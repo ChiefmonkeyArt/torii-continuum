@@ -9,6 +9,15 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.58-alpha — ui: fancy glass login with blurred Vermilion Dawn torii background
+
+Frontend-only release (`src/views/login.js` + `src/styles/landing.css` + new `src/assets/torii-login-bg.webp`; **no agent code changed**; onboarding preview stays **v0.1.20-preview**). Root `package.json` + lockfile bumped `0.2.57-alpha → 0.2.58-alpha`.
+
+**Why.** The unauthenticated login screen was a plain card. This redesigns it into a premium, branded surface without touching *when* it appears (the auth gate is unchanged — login still shows only when there is no live session).
+
+**Change.** Login now renders a full-viewport blurred "Vermilion Dawn" torii backdrop (`.login-bg`, `aria-hidden`) under a centered frosted-**glass** modal (`.login-card.glass`, `backdrop-filter: blur(22px) saturate(140%)`). The torii image ships as `src/assets/torii-login-bg.webp` (64 KB) referenced via CSS `url()` so Vite hashes/emits it for cache-busting. Premium wordmark ("Continuum" display + tracked "PROJECT ENGINE" subtitle with a vermilion accent rule), a full-width vermilion→gold gradient sign-in button, and secondary links below. Subtle motion (slow ken-burns on the backdrop + modal entrance) is fully disabled under `prefers-reduced-motion`. Reuses the existing `--font-display` system stack (no external fonts — strict no-CDN policy). Version stamp preserved as a small muted modal footer line. All rendering stays `h()`/textContent (no innerHTML); NIP-07 sign-in, "Explore the demo", and About links preserved verbatim.
+
+**Tests.** Root `vitest run` **1103/1103** (unchanged — source-structure login assertions still hold). `npm run build` clean; `dist/assets/torii-login-bg-*.webp` emitted and referenced from the hashed CSS.
 ## v0.2.58-alpha — OPS-CUTOVER-1: audited combined cutover as an in-repo, root-owned operator script
 
 Ops-only release (**no app/agent runtime code changed** — a new script + test + README under `ops/`, docs, and the version stamps; onboarding preview stays **v0.1.21-preview**). Root + agent `package.json` bumped `0.2.51-alpha → 0.2.52-alpha` (the script targets its own release tag and the Continuum health gate asserts that version).

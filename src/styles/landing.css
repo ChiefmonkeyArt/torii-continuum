@@ -299,56 +299,182 @@
 
 /* ── Login page (application root when logged out) ────────── */
 
-.login-wrap {
+/* Fancy glass login: full-viewport blurred Vermilion Dawn torii backdrop with
+ * a centered glass modal. Tokens for the glass treatment are local to this
+ * surface; everything else reuses the theme's amber/warm-dark palette. */
+
+.login-scene {
+  position: relative;
   min-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 48px 20px;
+  isolation: isolate; /* own stacking context so the fixed bg never bleeds */
 }
+
+/* Full-viewport decorative backdrop: torii image, blurred + scaled so the
+ * blurred edges never reveal the viewport border, under a darkening +
+ * vermilion-tinted gradient that guarantees text contrast on the glass. */
+.login-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(160deg, rgba(20, 12, 10, 0.45), rgba(10, 8, 14, 0.62)),
+    url('../assets/torii-login-bg.webp');
+  background-size: cover, cover;
+  background-position: center, center;
+  background-repeat: no-repeat, no-repeat;
+  filter: blur(12px);
+  transform: scale(1.08);
+  transform-origin: center;
+  animation: login-kenburns 26s ease-in-out infinite alternate;
+}
+
+@keyframes login-kenburns {
+  from { transform: scale(1.08); }
+  to   { transform: scale(1.14); }
+}
+
 .login-card {
   width: 100%;
-  max-width: 440px;
+  max-width: 470px;
   text-align: center;
-  padding: 32px 28px;
+  padding: 40px 40px 28px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  animation: login-enter 450ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+/* The glass surface itself. -webkit-backdrop-filter kept for Safari. */
+.login-card.glass {
+  background: rgba(24, 18, 16, 0.42);
+  border: 1px solid rgba(255, 238, 220, 0.14);
+  border-radius: 24px;
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  backdrop-filter: blur(22px) saturate(140%);
+  box-shadow:
+    0 30px 80px -20px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 120, 60, 0.06),
+    inset 0 1px 0 rgba(255, 238, 220, 0.10); /* faint inner top highlight */
+}
+
+@keyframes login-enter {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 .login-mark {
-  width: 120px;
-  margin: 0 auto 8px auto;
+  width: 92px;
+  margin: 0 auto 4px auto;
 }
-.login-mark .landing-torii-svg { width: 120px; height: auto; }
-.login-eyebrow {
-  font-size: 12px;
-  letter-spacing: 0.08em;
+.login-mark .landing-torii-svg { width: 92px; height: auto; }
+
+/* Premium wordmark: large display "Continuum" over a vermilion accent rule and
+ * a tracked-out subtitle. */
+.login-wordmark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 4px;
+}
+.login-brand {
+  font-family: var(--font-display);
+  font-size: 40px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: hsl(var(--foreground));
+  text-shadow: 0 1px 30px rgba(255, 120, 60, 0.18);
+}
+.login-rule {
+  width: 54px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, hsl(var(--primary)), transparent);
+}
+.login-subtitle {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.34em;
+  text-indent: 0.34em; /* balance the trailing tracking so it reads centered */
   text-transform: uppercase;
   color: hsl(var(--primary));
 }
-.login-title {
-  font-family: var(--font-display);
-  font-size: 26px;
-  margin: 4px 0 2px 0;
+
+.login-lede {
+  font-size: 13.5px;
+  line-height: 1.6;
+  margin: 4px 0 10px 0;
+  max-width: 34ch;
 }
-.login-lede { font-size: 14px; line-height: 1.55; margin: 0 0 8px 0; }
-.login-cta { margin: 8px 0 4px 0; width: 100%; }
+.login-cta { margin: 4px 0; width: 100%; }
 .login-btn {
   width: 100%;
-  padding: 11px 16px;
-  font-size: 14.5px;
-  border-radius: 10px;
+  padding: 13px 16px;
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: 12px;
   cursor: pointer;
+  background: linear-gradient(180deg, hsl(38 96% 60%), hsl(28 90% 52%));
+  border: 1px solid hsl(38 92% 62% / 0.6);
+  color: hsl(var(--primary-foreground));
+  box-shadow: 0 10px 26px -10px hsl(28 90% 50% / 0.7);
+  transition: transform 120ms ease, box-shadow 160ms ease, filter 160ms ease;
 }
-.login-status { font-size: 12.5px; margin-top: 6px; }
-.login-links { font-size: 12.5px; margin-top: 12px; }
+.login-btn:hover {
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+  box-shadow: 0 14px 32px -10px hsl(28 90% 50% / 0.85);
+}
+.login-btn:active { transform: translateY(0); }
+
+.login-status { font-size: 12.5px; margin-top: 8px; }
+.login-links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 12.5px;
+  margin-top: 14px;
+}
+.login-links-sep { color: hsl(var(--muted-foreground)); }
 .login-link {
-  color: hsl(var(--primary));
+  color: hsl(var(--foreground) / 0.9);
   text-decoration: none;
-  border-bottom: 1px dotted hsl(var(--primary) / .5);
+  border-bottom: 1px dotted hsl(var(--primary) / 0.5);
 }
-.login-link:hover { border-bottom-color: hsl(var(--primary)); }
+.login-link:hover { color: hsl(var(--primary)); border-bottom-color: hsl(var(--primary)); }
+
+.login-foot {
+  margin-top: 20px;
+  padding-top: 14px;
+  width: 100%;
+  border-top: 1px solid rgba(255, 238, 220, 0.10);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+
+/* Mobile: near-full-width glass, tighter padding, smaller wordmark. */
+@media (max-width: 480px) {
+  .login-scene { padding: 24px 14px; }
+  .login-card { padding: 30px 22px 22px; border-radius: 20px; }
+  .login-brand { font-size: 34px; }
+  .login-mark, .login-mark .landing-torii-svg { width: 78px; }
+}
+
+/* Respect reduced-motion: no ken-burns drift, no modal entrance transform. */
+@media (prefers-reduced-motion: reduce) {
+  .login-bg { animation: none; }
+  .login-card { animation: none; }
+}
 
 /* ── Login modal spinner ──────────────────────────────────── */
 
