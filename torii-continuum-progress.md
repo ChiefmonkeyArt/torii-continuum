@@ -9,6 +9,24 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.52-alpha — OPS-CUTOVER-1: audited combined cutover as an in-repo, root-owned operator script
+
+Ops-only release (**no app/agent runtime code changed** — a new script + test + README under `ops/`, docs, and the version stamps; onboarding preview stays **v0.1.21-preview**). Root + agent `package.json` bumped `0.2.51-alpha → 0.2.52-alpha` (the script targets its own release tag and the Continuum health gate asserts that version).
+
+**Why.** A prior delivery pasted the standalone cutover script body straight into an interactive VPS shell and the paste **truncated mid-function**. An interactive shell executes whatever it has received, so a truncated paste can begin a partial, dangerous run. This release incorporates the same audited cutover into the repo so it is fetched from **one immutable annotated release tag** and invoked with a short command from a verified clone: `sudo bash ops/torii-final-cutover.sh`.
+
+**Two structural defenses replace the broken delivery.**
+- **Anti-partial-delivery brace group.** The entire executable body lives inside a single `{ … }` group whose closing brace is the last line. `bash` parses to the matching brace before running anything, so a truncated copy is missing the brace, fails `bash -n`, and runs **nothing** (verified at four truncation depths).
+- **No `exec sudo -- bash "$0"`.** When pasted/sourced, `$0` is the interactive shell (e.g. `-bash`), so that idiom re-execs the wrong thing. The script instead **requires root** (dies with the documented invocation) and **refuses to be sourced** (`BASH_SOURCE[0]` ≠ `$0`).
+
+**Behaviour preserved from the audited source** (`/home/user/workspace/torii-final-cutover.sh`, reviewed line-by-line against the current repos): exact annotated-tag verification (`git cat-file -t` == `tag`) + version markers for torii-base **v0.1.4** (VERSION / sidecar `package.json` / `const VERSION = '0.1.4';` / launcher 'Continuum amber'), torii-continuum **v0.2.52-alpha**, onboarding preview **v0.1.21-preview** (VERSION + exact CTA "Sign in with browser extension"); root-only timestamped backups under `/root/torii-final-cutover-<UTC>/`; torii-base redeploy via its sanctioned bootstrap (`TORII_DOMAIN` + `SKIP_CERTBOT=1`); Continuum OPS-DEPLOY-2 bootstrap + root-only pin + `systemctl start` with a `/api/health` **version gate**; **fail-closed** onboarding-preview layout detection (root-symlink vs continuum-dir; ambiguity/absence aborts) with an atomic stage → `mv -T` → `.prev` swap that keeps exactly one rollback; registry `root_app` / app-name preservation checks; ERR-trap rollback. Also fixed the source draft's mixed-case `SIDEcar_HEALTH_URL` typo.
+
+**Security / privacy.** Public HTTPS clones only; no secret read, written, or printed; no broad sudoers, no `NOPASSWD`, no auth weakened; existing `config.yaml` / `session_secret` / funded key preserved byte-for-byte by the hardened role (the script delegates, never reimplements). This script does **not** deploy on your behalf.
+
+**Docs.** New `ops/torii-final-cutover.README.md` (invocation, rollback locations, and a **preflight** confirming the prior truncated paste made no mutations).
+
+**Tests / verification (Node 20.20.1).** New `ops/test/torii-final-cutover.test.sh` **36/36** (brace-group structure + truncation-fails-`bash -n`, root/source guards, no `exec sudo`, pinned annotated tags + version markers, fail-closed preview detection, atomic swap + single rollback, health gates, backups, no-secrets / no-broad-sudoers, HTTPS-only). All ops shell suites green (`continuum-adopt` 219, `deploy-unattended` 55, `deploy-restart` 25, `installer-preflight` 18, `installer-shared-parent` 10, `installer-signal` 9, `nginx-install` 13), root `vitest run` **1032/1032**, `npm run build` clean (0.2.52-alpha, `dist/` free of `preview-assets/`). shellcheck UNAVAILABLE in sandbox (`bash -n` clean on every ops script). Sole attribution Chiefmonkey. Code + PR only — **not merged, tagged, or deployed.**
+
 ## v0.2.51-alpha — ONBOARD-UI-1: clearer signer-extension login copy + stronger step wayfinding
 
 Onboarding-preview UI release (**no app/agent runtime code changed** — the change is confined to the vendored design-review mockup under `preview-assets/`, which `vite build` never bundles). Closes GitHub issue **#57**. Root + agent `package.json` bumped `0.2.50-alpha → 0.2.51-alpha`; onboarding preview advanced to **v0.1.21-preview** (`preview-assets/onboarding-v0.1.21/`, cut as a fresh self-contained version dir from v0.1.20 per the repo convention; v0.1.20 stays frozen).
