@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { id: 'marketplace', label: 'Marketplace', icon: iconMarket,      path: '/marketplace' },
   { id: 'routstr',     label: 'Routstr',     icon: iconRoutstr,     path: '/routstr' },
   { id: 'dashboard',   label: 'Dashboard',   icon: iconDashboard,   path: '/dashboard' },
+  { id: 'team',        label: 'Team',        icon: iconTeam,        path: '/team' },
 ];
 
 let mainEl, sidebarEl;
@@ -132,6 +133,7 @@ function getActiveNav() {
   if (cr.pattern.startsWith('/marketplace')) return 'marketplace';
   if (cr.pattern.startsWith('/routstr')) return 'routstr';
   if (cr.pattern.startsWith('/dashboard')) return 'dashboard';
+  if (cr.pattern.startsWith('/team')) return 'team';
   return 'projects';
 }
 
@@ -147,6 +149,9 @@ function iconRoutstr() {
 }
 function iconDashboard() {
   return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="1.5" width="13" height="13" rx="2"/><path d="M1.5 6h13M6 6v8.5"/></svg>`;
+}
+function iconTeam() {
+  return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="5" r="2.5"/><path d="M1.5 13.5c0-2.2 1.8-4 4-4s4 1.8 4 4"/><path d="M11 3.2a2.5 2.5 0 0 1 0 4.6M12 9.8c1.5.5 2.5 1.9 2.5 3.7"/></svg>`;
 }
 function iconStar() {
   return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M8 2l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.8 4.2 13.8l.7-4.3-3.1-3 4.3-.6z"/></svg>`;

@@ -50,6 +50,15 @@ export function createOnboarding(deps = {}) {
     return Math.floor(raw / 1000);
   }
 
+  // A bounded, secret-safe reason for a thrown error. Only ever logged — never
+  // returned over the API. Redacts any long hex run (the NWC secret and wallet
+  // pubkey are 64-hex) as defense in depth so a stray interpolated identifier
+  // can't reach a log line, and truncates so an upstream message can't flood.
+  function sanitizeReason(e) {
+    const raw = (e && typeof e.message === 'string' && e.message) || (e && e.name) || 'unknown error';
+    return raw.replace(/[0-9a-f]{16,}/gi, '[redacted]').slice(0, 120);
+  }
+
   async function loadEnvelope(name) {
     let raw;
     try {
@@ -87,9 +96,19 @@ export function createOnboarding(deps = {}) {
       };
     }
 
+    // get_info normally returns { ok:false, ... } on a wallet-side failure, but
+    // a live transport can THROW (relay unreachable, encrypt/decrypt failure,
+    // JSON parse). An uncaught throw here escapes the route handler and Fastify
+    // answers a bare 500 "Internal Server Error". Catch it and fold it into the
+    // same sanitized 502 shape the non-throwing failure uses so the frontend
+    // treats both identically. The reason is deliberately generic — never the
+    // URI/secret (secret-discipline invariant).
     let info;
     try {
       info = await client.getInfo();
+    } catch (e) {
+      log.warn(`[onboarding] get_info threw: ${sanitizeReason(e)}`);
+      info = { ok: false };
     } finally {
       await client.close?.();
     }
@@ -174,6 +193,9 @@ export function createOnboarding(deps = {}) {
     let info;
     try {
       info = await client.getInfo();
+    } catch (e) {
+      log.warn(`[onboarding] get_info threw: ${sanitizeReason(e)}`);
+      info = { ok: false };
     } finally {
       await client.close?.();
     }
@@ -346,9 +368,15 @@ export function createOnboarding(deps = {}) {
     } catch {
       return { code: 503, body: { ok: false, error: 'live NWC path unavailable on this runtime' } };
     }
+    // Same throw-hardening as get_info: a live NWC pay can throw (relay/encrypt
+    // failure) and must NOT escape as a bare 500. Fold a throw into the existing
+    // 502 shape with a sanitized reason (never the URI/secret/bolt11).
     let paid;
     try {
       paid = await client.payInvoice(bolt11);
+    } catch (e) {
+      log.warn(`[onboarding] pay_invoice threw: ${sanitizeReason(e)}`);
+      paid = { ok: false, reason: 'wallet did not complete pay_invoice' };
     } finally {
       await client.close?.();
     }

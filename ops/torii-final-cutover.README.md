@@ -9,7 +9,7 @@ It:
 - verifies the exact annotated release tags + version markers **before** mutating
   live state:
   - `torii-base` **v0.1.4**
-  - `torii-continuum` **v0.2.52-alpha** (this script's own release tag)
+  - `torii-continuum` **v0.2.57-alpha** (this script's own release tag)
   - onboarding preview **v0.1.21-preview**
 - backs up the current Torii base state to a root-only timestamped directory
 - redeploys `torii-base` v0.1.4 via its sanctioned bootstrap
@@ -47,9 +47,9 @@ run. Two structural defenses fix that:
 ```bash
 cd /tmp
 rm -rf torii-continuum
-git clone --depth 1 --branch v0.2.52-alpha https://github.com/ChiefmonkeyArt/torii-continuum.git
+git clone --depth 1 --branch v0.2.57-alpha https://github.com/ChiefmonkeyArt/torii-continuum.git
 cd torii-continuum
-[ "$(git cat-file -t v0.2.52-alpha)" = tag ] || { echo "not an annotated tag"; exit 1; }
+[ "$(git cat-file -t v0.2.57-alpha)" = tag ] || { echo "not an annotated tag"; exit 1; }
 sudo bash ops/torii-final-cutover.sh
 ```
 

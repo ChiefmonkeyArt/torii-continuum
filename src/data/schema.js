@@ -16,6 +16,7 @@
  *   30084 — Continuum Board card   (addressable, `d` = project:card:card-id)
  *   30090 — Marketplace task-listing
  *   30091 — Routstr wallet + prefs (addressable, `d` = 'default')
+ *   30093 — Continuum Team member  (addressable, `d` = member:npub)
  *
  * All events carry `content` (JSON string in real Nostr; kept as an
  * object here for ergonomics) and `tags` (array of [key, ...values]).
@@ -31,6 +32,7 @@ export const KIND = Object.freeze({
   BOARD_CARD: 30084,
   MARKET_TASK: 30090,
   ROUTSTR: 30091,
+  TEAM_MEMBER: 30093, // operator roster (local-first; multi-user auth deferred)
 });
 
 let _counter = 0;
