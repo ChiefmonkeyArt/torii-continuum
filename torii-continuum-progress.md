@@ -9,6 +9,23 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.51-alpha — ONBOARD-UI-1: clearer signer-extension login copy + stronger step wayfinding
+
+Onboarding-preview UI release (**no app/agent runtime code changed** — the change is confined to the vendored design-review mockup under `preview-assets/`, which `vite build` never bundles). Closes GitHub issue **#57**. Root + agent `package.json` bumped `0.2.50-alpha → 0.2.51-alpha`; onboarding preview advanced to **v0.1.21-preview** (`preview-assets/onboarding-v0.1.21/`, cut as a fresh self-contained version dir from v0.1.20 per the repo convention; v0.1.20 stays frozen).
+
+**Why.** Live review flagged two onboarding rough edges: the Step-1 login button named a specific product ("Sign with Plebeian Signer") rather than the signer *mechanism*, and the numbered step indicators didn't make "where am I / what's done" obvious enough.
+
+**Changes.**
+- **Login copy.** Primary Step-1 CTA now reads exactly **"Sign in with browser extension"**; the lede names the mechanism ("a browser extension such as Plebeian Signer, nos2x or Alby"); ghost button → "Use a remote signer instead"; no-signer message → "No browser extension signer found — install a NIP-07 extension (e.g. Plebeian Signer, nos2x or Alby)". No tracking/CDN/key material added; `onboarding-client.js` is byte-identical to v0.1.20 apart from that one message string (routing, `CONTINUUM_HOME`, `data-claimed`, `renderSuccessAdvance`, duplicate-pay guards all intact).
+- **Step wayfinding (`shared.css`).** Completed steps are **filled** (bronze `--bronze` chip, dark numeral, weight 600); the current step gets a **brighter** amber-bright 3px ring + glow + weight 600 (was a 2px `--amber` ring), 36px chip size preserved. Added `.step-dot:focus-visible` amber-bright outline for keyboard nav. No new animation (reduced-motion safe). Colour-blind safe via size + fill + ring cues.
+- **Doc fix.** Stale onboarding `README.md` header `0.1.19-preview` → `0.1.21-preview`; top-level `preview-assets/README.md` "Current preview" pointer → v0.1.21 with a rewritten deploy example.
+
+**Preserved.** Claimed-Routstr simplified terminal state + routing to app/login/dashboard unchanged.
+
+**Accessibility.** WCAG: completed numeral on bronze **5.78:1** (AA small text), current numeral on amber **10.75:1**, current/focus ring vs bar **14.15:1** (≥3 UI); keyboard focus ring added; reduced-motion honoured.
+
+**Tests / verification (Node 20.x).** New v0.1.21 tests assert the new button copy (+ absence of the old string), the browser-extension/Plebeian-Signer step-1 context, the new signer-not-found message + NIP-07 mention, the step-dot wayfinding states, and the README version header. Root `vitest run` **1032/1032** (19 files, +160), `npm run build` clean (0.2.51-alpha, `dist/` free of `preview-assets/`). No headed browser in sandbox → static QA artifact (desktop + mobile step strips, all states) + programmatic WCAG audit. Sole attribution Chiefmonkey. Code + PR only — **not merged, tagged, or deployed.**
+
 ## v0.2.50-alpha — OPS-DEPLOY-2: safe unattended deployment (server-side pull)
 
 Ops-only release (**no app/agent runtime code changed** — only new files under `ops/`, docs, and the version stamps). Closes GitHub issue **#54**. Root + agent `package.json` bumped `0.2.49-alpha → 0.2.50-alpha` for the health-gate version invariant.
