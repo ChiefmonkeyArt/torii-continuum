@@ -77,6 +77,23 @@ Frontend-only release (`src/data/store.js` + `src/views/dashboard.js` + `src/dat
 
 **Tests.** `src/data/board.test.js` +3: default Todo/Doing/Done buckets + percent; empty board → all zeros/percent 0; custom names (Review → doing, Icebox → backlog). Root suite 856 pass.
 
+## v0.2.51-alpha — ONBOARD-UI-1: clearer signer-extension login copy + stronger step wayfinding
+
+Onboarding-preview UI release (**no app/agent runtime code changed** — the change is confined to the vendored design-review mockup under `preview-assets/`, which `vite build` never bundles). Closes GitHub issue **#57**. Root + agent `package.json` bumped `0.2.50-alpha → 0.2.51-alpha`; onboarding preview advanced to **v0.1.21-preview** (`preview-assets/onboarding-v0.1.21/`, cut as a fresh self-contained version dir from v0.1.20 per the repo convention; v0.1.20 stays frozen).
+
+**Why.** Live review flagged two onboarding rough edges: the Step-1 login button named a specific product ("Sign with Plebeian Signer") rather than the signer *mechanism*, and the numbered step indicators didn't make "where am I / what's done" obvious enough.
+
+**Changes.**
+- **Login copy.** Primary Step-1 CTA now reads exactly **"Sign in with browser extension"**; the lede names the mechanism ("a browser extension such as Plebeian Signer, nos2x or Alby"); ghost button → "Use a remote signer instead"; no-signer message → "No browser extension signer found — install a NIP-07 extension (e.g. Plebeian Signer, nos2x or Alby)". No tracking/CDN/key material added; `onboarding-client.js` is byte-identical to v0.1.20 apart from that one message string (routing, `CONTINUUM_HOME`, `data-claimed`, `renderSuccessAdvance`, duplicate-pay guards all intact).
+- **Step wayfinding (`shared.css`).** Completed steps are **filled** (bronze `--bronze` chip, dark numeral, weight 600); the current step gets a **brighter** amber-bright 3px ring + glow + weight 600 (was a 2px `--amber` ring), 36px chip size preserved. Added `.step-dot:focus-visible` amber-bright outline for keyboard nav. No new animation (reduced-motion safe). Colour-blind safe via size + fill + ring cues.
+- **Doc fix.** Stale onboarding `README.md` header `0.1.19-preview` → `0.1.21-preview`; top-level `preview-assets/README.md` "Current preview" pointer → v0.1.21 with a rewritten deploy example.
+
+**Preserved.** Claimed-Routstr simplified terminal state + routing to app/login/dashboard unchanged.
+
+**Accessibility.** WCAG: completed numeral on bronze **5.78:1** (AA small text), current numeral on amber **10.75:1**, current/focus ring vs bar **14.15:1** (≥3 UI); keyboard focus ring added; reduced-motion honoured.
+
+**Tests / verification (Node 20.x).** New v0.1.21 tests assert the new button copy (+ absence of the old string), the browser-extension/Plebeian-Signer step-1 context, the new signer-not-found message + NIP-07 mention, the step-dot wayfinding states, and the README version header. Root `vitest run` **1032/1032** (19 files, +160), `npm run build` clean (0.2.51-alpha, `dist/` free of `preview-assets/`). No headed browser in sandbox → static QA artifact (desktop + mobile step strips, all states) + programmatic WCAG audit. Sole attribution Chiefmonkey. Code + PR only — **not merged, tagged, or deployed.**
+
 ## v0.2.50-alpha — LAYOUT-1: constrain chat dock to the main column + full-height sidebar
 
 Frontend-only release (CSS only — `src/styles/layout.css` + `src/styles/chat.css`; **no JS/shell/agent code changed**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.48-alpha → 0.2.50-alpha` (agent stays at `0.2.49-alpha` from the NWC-ERR-1 slice on this batch branch; root lockfile top-level `version` left as-is per prior convention).
@@ -88,6 +105,7 @@ Frontend-only release (CSS only — `src/styles/layout.css` + `src/styles/chat.c
 **Fix.** Changed the grid areas to `"sidebar main" / "sidebar chat"`: the sidebar now spans **both** rows (full height to the very bottom), and the chat dock occupies only the second column under `main`, so it's constrained to the main content width. Rows stay `1fr auto` (the `auto` row sizes to the chat dock's collapsed `--chat-h` / expanded `46vh`; `main` keeps `overflow-y: auto` and takes the `1fr` remainder, so there's no page overflow or double scrollbar). Aligned the chat dock's horizontal padding with the main column (`12px 16px → 12px 32px`, matching main's `32px` side padding) so the input row's edges line up with the content; on mobile (`max-width: 900px`, grid `68px 1fr`) the dock padding drops to `16px` to match the narrower mobile main padding. The chat dock remains a direct child of `#app` (`mountChat(root)` in `src/main.js`), so `grid-area: chat` still applies — no shell restructuring. `.sidebar { overflow-y: auto }` and `.sidebar-footer { margin-top: auto }` continue to scroll internally and pin the footer to the bottom of the now-full-height sidebar. Both light and dark themes unaffected (structural change only).
 
 **Tests.** No new tests (pure CSS). Full root suite green: `vitest run` **853/853** (incl. the `dist/`-building `no-external-cdn` + `nginx-continuum-routing` checks).
+
 
 ## v0.2.50-alpha — OPS-DEPLOY-2: safe unattended deployment (server-side pull)
 
