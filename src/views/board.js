@@ -13,6 +13,7 @@ import {
   getProject,
   boardColumnsFor,
   cardsFor,
+  todosFor,
   addColumn,
   renameColumn,
   moveColumn,
@@ -151,11 +152,15 @@ export function renderBoard(mount, slug) {
   mount.appendChild(renderProjectTabs(slug, 'board'));
 
   const columns = boardColumnsFor(slug);
-  // Count both native store cards AND the read-only imported cards currently
-  // shown (after filters) so the header total matches what is on the board.
-  // Excluding imports made a board with only imported work read "0 cards".
+  // Count native store cards, the read-only imported cards, AND the read-only
+  // project-todo cards currently shown so the header total matches what is on
+  // the board. Excluding these made a board with only todos/imports read
+  // "0 cards" even though the project had open work.
   const totalCards = columns.reduce(
-    (n, c) => n + cardsFor(slug, c.content.id).length + importedCardsFor(slug, c.content.id, columns).length,
+    (n, c) => n
+      + cardsFor(slug, c.content.id).length
+      + importedCardsFor(slug, c.content.id, columns).length
+      + todoCardsFor(slug, c.content.id, columns).length,
     0,
   );
 
@@ -215,6 +220,54 @@ function importedCardsFor(slug, colId, columns) {
   const st = importFor(slug);
   if (st.status === 'unavailable' || st.status === 'disabled') return [];
   return filterImportedForColumn(st.records, colId, columns, st.filters);
+}
+
+// ── Project todos as read-only board cards (KANBAN-TODO-OVERLAY, v0.2.63) ────
+//
+// A project's todos (kind 30081, edited on the Overview tab) are distinct
+// entities from board cards (kind 30084). Before this overlay, a brand-new or
+// migrated board showed "0 cards" even though the project had todos, because
+// the board only read cardsFor() (empty until someone adds a card) plus the
+// agent import set (empty when logged out). We surface each todo as a
+// read-only card so the board reflects the project's real work without a
+// destructive store rewrite. These cards are NEVER written to the store and
+// carry no move/edit controls — editing happens on the Overview tab.
+//
+// Pure and exported so the todo→column distribution + counting contract is
+// unit-tested without a DOM. A done todo lands in the Done-conventional column;
+// an open todo lands in the Todo-conventional column (via columnForStatus,
+// shared with the imported overlay so placement stays consistent).
+export function filterTodosForColumn(todos, colId, columns) {
+  return (Array.isArray(todos) ? todos : []).filter((t) => {
+    const status = t.content && t.content.done ? 'done' : 'todo';
+    const target = columnForStatus(status, columns);
+    return target && target.content.id === colId;
+  });
+}
+
+function todoCardsFor(slug, colId, columns) {
+  return filterTodosForColumn(todosFor(slug), colId, columns);
+}
+
+function renderTodoCard(slug, todo) {
+  const c = todo.content;
+  const meta = [
+    h('span', { class: 'imported-badge', text: 'Project todo · read-only' }),
+    h('a', {
+      class: 'imported-link',
+      href: `#/projects/${slug}`,
+      'aria-label': `Edit on the Overview tab: ${c.text}`,
+    }, ['edit on Overview ↗']),
+  ];
+  return h('div', {
+    class: 'board-card imported todo-card',
+    dataset: { todoId: c.id || '' },
+    'aria-label': `Read-only project todo card: ${c.text} (${c.done ? 'done' : 'open'})`,
+  }, [
+    h('div', { class: 'card-src muted', text: c.done ? 'Todo · done' : 'Todo · open' }),
+    h('div', { class: 'card-title', text: c.text }),
+    h('div', { class: 'card-meta muted' }, meta),
+  ]);
 }
 
 function sourceKey(rec) {
@@ -325,6 +378,7 @@ function renderColumn(slug, col, columns, index) {
   const colId = col.content.id;
   const cards = cardsFor(slug, colId);
   const imported = importedCardsFor(slug, colId, columns);
+  const todoCards = todoCardsFor(slug, colId, columns);
 
   const controls = h('div', { class: 'col-controls' }, [
     iconBtn('‹', 'Move column left', () => { moveColumn(slug, colId, 'left'); refresh(); }, index === 0),
@@ -338,16 +392,17 @@ function renderColumn(slug, col, columns, index) {
   const header = h('div', { class: 'col-header' }, [
     h('div', { class: 'col-title' }, [
       h('span', { class: 'col-name', text: col.content.name }),
-      h('span', { class: 'col-count', text: String(cards.length + imported.length) }),
+      h('span', { class: 'col-count', text: String(cards.length + imported.length + todoCards.length) }),
     ]),
     controls,
   ]);
 
   const list = h('div', { class: 'card-list', dataset: { columnId: colId } });
-  if (cards.length === 0 && imported.length === 0) {
+  if (cards.length === 0 && imported.length === 0 && todoCards.length === 0) {
     list.appendChild(h('div', { class: 'card-empty muted', text: 'No cards yet.' }));
   } else {
     cards.forEach((card, ci) => list.appendChild(renderCard(slug, card, columns, index, ci, cards.length)));
+    todoCards.forEach((todo) => list.appendChild(renderTodoCard(slug, todo)));
     imported.forEach((rec) => list.appendChild(renderImportedCard(slug, rec)));
   }
 

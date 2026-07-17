@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Hermetic tests for the in-repo cutover operator script (OPS-CUTOVER-3, v0.2.61-alpha).
+# Hermetic tests for the in-repo cutover operator script (OPS-CUTOVER-5, v0.2.63-alpha).
 #
 # No real deploy, no network, no root. Concerns:
 #   1. Anti-partial-delivery — the whole body is a single brace group, so a
@@ -111,8 +111,8 @@ printf '%s' "$src_out" | grep -qiF 'do not source' \
 # ── 3. Pinned annotated tags + version markers ───────────────────────────────
 grep -qF 'BASE_TAG="v0.1.4"' "$CUTOVER"                 && ok "pins torii-base v0.1.4"             || bad "torii-base tag not pinned"
 grep -qF 'BASE_VERSION="0.1.4"' "$CUTOVER"              && ok "pins torii-base VERSION 0.1.4"      || bad "torii-base version not pinned"
-grep -qF 'CONTINUUM_TAG="v0.2.61-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.61-alpha" || bad "continuum tag not pinned to v0.2.61-alpha"
-grep -qF 'CONTINUUM_VERSION="0.2.61-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.61-alpha" || bad "continuum version not pinned"
+grep -qF 'CONTINUUM_TAG="v0.2.63-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.63-alpha" || bad "continuum tag not pinned to v0.2.63-alpha"
+grep -qF 'CONTINUUM_VERSION="0.2.63-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.63-alpha" || bad "continuum version not pinned"
 grep -qF 'PREVIEW_VERSION="0.1.21-preview"' "$CUTOVER"  && ok "pins onboarding preview 0.1.21-preview" || bad "preview version not pinned"
 grep -qF 'PREVIEW_CTA="Sign in with browser extension"' "$CUTOVER" && ok "pins exact preview CTA text" || bad "preview CTA text not pinned"
 
@@ -448,6 +448,66 @@ survivors="$(find "$prune_sandbox" -maxdepth 1 -type d -name 'torii-final-cutove
   && ok "prune replay leaves unrelated /root entries untouched" \
   || bad "prune replay removed an unrelated dir"
 rm -rf "$prune_sandbox"
+
+# ── 13. OPS-CUTOVER-5: disk-safety (preflight free space + backup excludes) ────
+# 13a. A preflight free-space gate is defined, with a pinned MiB floor and the
+#      set of filesystems to check.
+grep -qF 'preflight_free_space() {' "$CUTOVER" && ok "defines preflight_free_space step" || bad "no preflight_free_space step"
+grep -qE 'readonly PREFLIGHT_MIN_FREE_MB=[0-9]+' "$CUTOVER" && ok "pins a preflight free-space floor (MiB)" || bad "no PREFLIGHT_MIN_FREE_MB floor"
+grep -qF 'readonly PREFLIGHT_PATHS=' "$CUTOVER" && ok "pins the filesystems to check for free space" || bad "no PREFLIGHT_PATHS list"
+# 13b. The gate must die (fail closed) when space is insufficient.
+awk '/^preflight_free_space\(\) \{/,/^\}/' "$CUTOVER" | grep -qF 'insufficient free space' \
+  && ok "preflight dies on insufficient free space" || bad "preflight does not fail closed on low space"
+# 13c. Ordering: preflight runs FIRST in main — before verify_release_sources
+#      (which clones) and before any mutation — so a starved host never mutates.
+ds_main_body="$(awk '/^main\(\) \{/,/^\}/' "$CUTOVER")"
+line_preflight="$(printf '%s\n' "$ds_main_body" | grep -n 'preflight_free_space' | head -1 | cut -d: -f1)"
+line_verify="$(printf '%s\n' "$ds_main_body" | grep -n 'verify_release_sources' | head -1 | cut -d: -f1)"
+line_deploybase="$(printf '%s\n' "$ds_main_body" | grep -n 'deploy_torii_base' | head -1 | cut -d: -f1)"
+[[ -n "$line_preflight" && -n "$line_verify" && -n "$line_deploybase" \
+   && "$line_preflight" -lt "$line_verify" && "$line_preflight" -lt "$line_deploybase" ]] \
+  && ok "main runs preflight_free_space before clone + any mutation" \
+  || bad "preflight not first in main (preflight=$line_preflight verify=$line_verify deploy=$line_deploybase)"
+# 13d. The rollback backup tar excludes regenerable cache/build artifacts.
+grep -qF 'readonly BACKUP_EXCLUDES=' "$CUTOVER" && ok "defines BACKUP_EXCLUDES for the backup tar" || bad "no BACKUP_EXCLUDES"
+awk '/^backup_torii_base_state\(\) \{/,/^\}/' "$CUTOVER" | grep -qF '"${BACKUP_EXCLUDES[@]}"' \
+  && ok "backup tar applies the cache/artifact excludes" || bad "backup tar does not use BACKUP_EXCLUDES"
+for pat in node_modules .git .cache dist; do
+  grep -qF -- "--exclude=*/${pat}" "$CUTOVER" && ok "backup excludes ${pat}" || bad "backup does not exclude ${pat}"
+done
+# 13e. Excludes must NOT drop config/state — env/registry.json/root_app.conf are
+#      still captured, so the excludes only ever match regenerable artifacts.
+code_ex="$(sed 's/#.*$//' "$CUTOVER")"
+if printf '%s' "$code_ex" | grep -qE -- '--exclude=[^ ]*(env|registry\.json|root_app\.conf)'; then
+  bad "a backup exclude matches a config/state path"
+else
+  ok "backup excludes never match env/registry.json/root_app.conf"
+fi
+
+# 13f. Functional replay: a tar built with the same excludes drops node_modules
+#      but preserves a config file, proving state survives the excludes.
+ex_sandbox="$(mktemp -d)"
+mkdir -p "$ex_sandbox/opt/torii/node_modules/pkg" "$ex_sandbox/opt/torii/.git"
+printf 'SECRET=1' > "$ex_sandbox/opt/torii/env"
+printf '{}'       > "$ex_sandbox/opt/torii/registry.json"
+printf 'junk'     > "$ex_sandbox/opt/torii/node_modules/pkg/index.js"
+printf 'g'        > "$ex_sandbox/opt/torii/.git/config"
+ex_tar="$ex_sandbox/base.tar"
+tar -cpf "$ex_tar" -C "$ex_sandbox" \
+  --exclude='*/node_modules' --exclude='*/.git' --exclude='*/.cache' \
+  --exclude='*/.npm' --exclude='*/dist' --exclude='*/.vite' \
+  opt/torii
+listing="$(tar -tf "$ex_tar")"
+printf '%s\n' "$listing" | grep -qF 'opt/torii/env' \
+  && printf '%s\n' "$listing" | grep -qF 'opt/torii/registry.json' \
+  && ok "backup replay preserves config/state (env, registry.json)" \
+  || bad "backup replay dropped config/state"
+if printf '%s\n' "$listing" | grep -qF 'node_modules'; then
+  bad "backup replay included node_modules (exclude ineffective)"
+else
+  ok "backup replay excludes node_modules"
+fi
+rm -rf "$ex_sandbox"
 
 printf '\n[torii-final-cutover.test] pass=%d fail=%d\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || exit 1
