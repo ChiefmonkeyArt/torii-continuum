@@ -413,6 +413,10 @@
   line-height: 1.6;
   margin: 4px 0 10px 0;
   max-width: 34ch;
+  /* Warm white overrides the dim .muted grey so body copy clears WCAG AA over
+   * the translucent glass, where the blurred torii glow can lighten the
+   * effective background. ~11:1 even against the brightest glass spots. */
+  color: rgba(255, 246, 236, 0.92);
 }
 .login-cta { margin: 4px 0; width: 100%; }
 .login-btn {
@@ -435,7 +439,7 @@
 }
 .login-btn:active { transform: translateY(0); }
 
-.login-status { font-size: 12.5px; margin-top: 8px; }
+.login-status { font-size: 12.5px; margin-top: 8px; color: rgba(255, 244, 232, 0.88); }
 .login-links {
   display: flex;
   align-items: center;
@@ -444,7 +448,7 @@
   font-size: 12.5px;
   margin-top: 14px;
 }
-.login-links-sep { color: hsl(var(--muted-foreground)); }
+.login-links-sep { color: rgba(255, 238, 220, 0.75); }
 .login-link {
   color: hsl(var(--foreground) / 0.9);
   text-decoration: none;
@@ -460,6 +464,8 @@
   font-family: var(--font-mono);
   font-size: 10.5px;
   letter-spacing: 0.04em;
+  /* Version stamp: warm off-white so the small mono footer clears AA (~9:1). */
+  color: rgba(255, 238, 220, 0.85);
 }
 
 /* Mobile: near-full-width glass, tighter padding, smaller wordmark. */
