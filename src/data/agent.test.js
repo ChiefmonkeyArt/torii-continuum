@@ -15,7 +15,9 @@ import {
   walletHealth,
   projectSources,
   refreshProjectSources,
+  logout,
 } from './agent.js';
+import { rootTarget } from '../nav-guard.js';
 
 // A live token mirrors the agent's `iat.exp.pubkey.sig` shape with a future exp.
 const future = Math.floor(Date.now() / 1000) + 3600;
@@ -114,6 +116,49 @@ describe('adoptOnboardingSession (torii.session → continuum.session.v1)', () =
     expect(adoptOnboardingSession()).toBe(false);
     stub.setItem('torii.session', JSON.stringify({ nope: true }));
     expect(adoptOnboardingSession()).toBe(false);
+  });
+});
+
+describe('logout (sign-out clears ALL auth/session keys) → refresh gate', () => {
+  let stub;
+  beforeEach(() => {
+    stub = makeStorageStub();
+    globalThis.localStorage = stub;
+  });
+  afterEach(() => {
+    delete globalThis.localStorage;
+  });
+
+  it('clears both the SPA token and the onboarding envelope', () => {
+    stub.setItem('continuum.session.v1', liveToken);
+    stub.setItem('torii.session', JSON.stringify({ token: liveToken, pubkey, method: 'nip07' }));
+    expect(isLoggedIn()).toBe(true);
+
+    logout();
+
+    // Every auth/session key is gone — no lingering token, no re-adoptable envelope.
+    expect(stub.getItem('continuum.session.v1')).toBeNull();
+    expect(stub.getItem('torii.session')).toBeNull();
+    expect(isLoggedIn()).toBe(false);
+  });
+
+  it('a hard refresh after sign-out cannot re-adopt a session → login gate', () => {
+    // Pre-sign-out: both a live SPA token and a live onboarding envelope exist.
+    stub.setItem('continuum.session.v1', liveToken);
+    stub.setItem('torii.session', JSON.stringify({ token: liveToken, pubkey, method: 'nip07' }));
+
+    logout();
+
+    // Simulate the next boot: adoptOnboardingSession() runs first, then the gate.
+    expect(adoptOnboardingSession()).toBe(false); // nothing left to adopt
+    expect(isLoggedIn()).toBe(false);
+    expect(rootTarget(isLoggedIn())).toBeNull(); // null → render login in place at root
+  });
+
+  it('a genuinely live session still resolves the root to the dashboard', () => {
+    stub.setItem('continuum.session.v1', liveToken);
+    expect(isLoggedIn()).toBe(true);
+    expect(rootTarget(isLoggedIn())).toBe('/dashboard');
   });
 });
 

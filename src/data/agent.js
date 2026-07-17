@@ -84,6 +84,16 @@ export function setStoredToken(tok) {
 export function clearStoredToken() { setStoredToken(null); }
 
 /**
+ * Remove the onboarding-wizard session envelope (localStorage['torii.session']).
+ * Sign-out must clear this too: otherwise adoptOnboardingSession() re-adopts a
+ * still-live envelope on the next boot and silently signs the operator back in,
+ * so the login gate becomes non-deterministic across a refresh.
+ */
+export function clearOnboardingSession() {
+  try { localStorage.removeItem(ONBOARDING_SESSION_KEY); } catch (_e) {}
+}
+
+/**
  * Cheap, HMAC-free liveness check of an agent session token. Mirrors the
  * agent's `iat.exp.pubkey.sig` shape and its `exp < now` rule (the server still
  * verifies the HMAC on every call — this only decides whether the UI shows a
@@ -201,7 +211,17 @@ export async function verifyChallenge(event) {
   return r;
 }
 
-export function logout() { clearStoredToken(); }
+/**
+ * Full sign-out. Clears every auth/session key so a hard refresh reliably lands
+ * on the login gate: the SPA session token AND the onboarding envelope that would
+ * otherwise be re-adopted on the next boot. Non-auth persisted app state (local
+ * projects/board under `continuum.v1`, theme, drafts) is intentionally left
+ * alone — the login gate is session-gated, not derived from that state.
+ */
+export function logout() {
+  clearStoredToken();
+  clearOnboardingSession();
+}
 
 // ─── Wallet ─────────────────────────────────────────────────
 
