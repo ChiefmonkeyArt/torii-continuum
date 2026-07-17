@@ -384,5 +384,70 @@ enable_hits="$(sed 's/#.*$//' "$CUTOVER" | grep -cF 'systemctl enable --now tori
   && ok "exactly one timer-enable call in the script (in enable_deploy_timer)" \
   || bad "unexpected number of timer-enable calls ($enable_hits)"
 
+# ── 12. Prune stale staging dirs after a successful cutover (ENOSPC fix) ──────
+# Each run leaves a ~629M /root/torii-final-cutover-<ts>Z dir (clone + node_modules);
+# they were never pruned, so repeats accumulated 2.5G+ and the unattended deploy
+# hit ENOSPC at `npm ci`. A prune step now keeps only the newest N after success.
+grep -qF 'prune_old_staging_dirs() {' "$CUTOVER" && ok "defines prune_old_staging_dirs step" || bad "no prune_old_staging_dirs step"
+grep -qF 'readonly KEEP_STAGING_DIRS=1' "$CUTOVER" && ok "keeps exactly the newest 1 staging dir" || bad "KEEP_STAGING_DIRS not pinned to 1"
+# 12a. Enumeration must be explicit find-based, NOT a bare glob (which does not
+#      reliably expand in every shell and could match nothing or the wrong path).
+awk '/^prune_old_staging_dirs\(\) \{/,/^\}/' "$CUTOVER" \
+  | grep -qE "find /root -maxdepth 1 -type d -name 'torii-final-cutover-\*' -print0" \
+  && ok "prune enumerates staging dirs via NUL-safe find (no bare glob)" \
+  || bad "prune does not use explicit find enumeration"
+if awk '/^prune_old_staging_dirs\(\) \{/,/^\}/' "$CUTOVER" | sed 's/#.*$//' | grep -qE 'rm[^\n]*/root/torii-final-cutover-\*'; then
+  bad "prune uses a bare rm glob (unreliable expansion)"
+else
+  ok "prune never uses a bare rm glob"
+fi
+# 12b. The just-created RUN_ROOT is skipped unconditionally.
+awk '/^prune_old_staging_dirs\(\) \{/,/^\}/' "$CUTOVER" | grep -qF '"$d" == "$RUN_ROOT"' \
+  && ok "prune never removes the current RUN_ROOT" || bad "prune does not guard RUN_ROOT"
+# 12c. Prune must not target the app dir or the live webroot.
+if awk '/^prune_old_staging_dirs\(\) \{/,/^\}/' "$CUTOVER" | grep -qE '/home/continuum/app|/var/www/torii/continuum'; then
+  bad "prune references the app dir or live webroot"
+else
+  ok "prune never touches /home/continuum/app or /var/www/torii/continuum"
+fi
+# 12d. Ordering: prune runs LAST in main (after enable_deploy_timer + cleanup),
+#      so a FAILED cutover leaves the newest staging dir for inspection.
+prune_main_body="$(awk '/^main\(\) \{/,/^\}/' "$CUTOVER")"
+line_prune="$(printf '%s\n' "$prune_main_body" | grep -n 'prune_old_staging_dirs' | head -1 | cut -d: -f1)"
+line_cleanup="$(printf '%s\n' "$prune_main_body" | grep -n 'cleanup_success' | head -1 | cut -d: -f1)"
+line_enable2="$(printf '%s\n' "$prune_main_body" | grep -n 'enable_deploy_timer' | head -1 | cut -d: -f1)"
+[[ -n "$line_prune" && -n "$line_cleanup" && -n "$line_enable2" && "$line_prune" -gt "$line_cleanup" && "$line_prune" -gt "$line_enable2" ]] \
+  && ok "main prunes only after enable_deploy_timer + cleanup_success" \
+  || bad "prune not placed last in main (enable=$line_enable2 cleanup=$line_cleanup prune=$line_prune)"
+
+# 12e. Functional replay: with N=1 the prune keeps only the newest (RUN_ROOT) and
+#      removes all older staging dirs, leaving unrelated /root entries untouched.
+prune_sandbox="$(mktemp -d)"
+mkdir -p "$prune_sandbox/torii-final-cutover-20260101T000000Z" \
+         "$prune_sandbox/torii-final-cutover-20260201T000000Z" \
+         "$prune_sandbox/torii-final-cutover-20260301T000000Z" \
+         "$prune_sandbox/torii-final-cutover-20260401T000000Z" \
+         "$prune_sandbox/unrelated-dir"
+run_root="$prune_sandbox/torii-final-cutover-20260401T000000Z"   # newest = current run
+keep=1
+declare -a sdirs=()
+while IFS= read -r -d '' d; do sdirs+=("$d"); done \
+  < <(find "$prune_sandbox" -maxdepth 1 -type d -name 'torii-final-cutover-*' -print0 | sort -zr)
+rank=0
+for d in "${sdirs[@]}"; do
+  if [[ "$d" == "$run_root" ]]; then continue; fi
+  rank=$((rank + 1))
+  (( rank < keep )) && continue
+  rm -rf -- "$d"
+done
+survivors="$(find "$prune_sandbox" -maxdepth 1 -type d -name 'torii-final-cutover-*' | sort | tr '\n' ' ')"
+[[ "$survivors" == "$run_root " ]] \
+  && ok "prune replay keeps only the newest staging dir (RUN_ROOT)" \
+  || bad "prune replay left the wrong survivors ('$survivors')"
+[[ -d "$prune_sandbox/unrelated-dir" ]] \
+  && ok "prune replay leaves unrelated /root entries untouched" \
+  || bad "prune replay removed an unrelated dir"
+rm -rf "$prune_sandbox"
+
 printf '\n[torii-final-cutover.test] pass=%d fail=%d\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || exit 1

@@ -42,6 +42,24 @@ run. Two structural defenses fix that:
    sudo bash ops/torii-final-cutover.sh
    ```
 
+## v0.2.62-alpha hotfix (OPS-CUTOVER-4)
+
+Every run creates a fresh timestamped staging dir under
+`/root/torii-final-cutover-<UTC_TIMESTAMP>/` (~629M each: a clone plus
+`node_modules`), but nothing ever pruned the old ones. Repeated attempts
+accumulated 2.5G+ of stale staging dirs on a small host and the unattended deploy
+failed with **`ENOSPC` at `npm ci`**. Fixed by a prune step
+(`prune_old_staging_dirs`) that runs **last** in `main`, so it is reached only
+after a fully successful cutover — a failed run still leaves its newest staging
+dir for inspection. It keeps only the newest `KEEP_STAGING_DIRS` (=1) dir, which
+always includes the just-created `RUN_ROOT`, and removes the older ones.
+Enumeration is explicit and NUL-safe via `find /root -maxdepth 1 -type d -name
+'torii-final-cutover-*' -print0` (a bare `rm /root/torii-final-cutover-*` glob
+does not reliably expand in every shell). The current `RUN_ROOT` is skipped
+unconditionally, and the prune is scoped strictly to that staging namespace — it
+never touches `/home/continuum/app` or the live webroot
+`/var/www/torii/continuum`.
+
 ## v0.2.61-alpha hotfix (OPS-CUTOVER-3)
 
 A live v0.2.59-alpha run got past the torii-base phase and then the Continuum
