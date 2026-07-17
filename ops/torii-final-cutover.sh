@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Torii final VPS cutover — in-repo operator script (OPS-CUTOVER-1, v0.2.58-alpha).
+# Torii final VPS cutover — in-repo operator script (OPS-CUTOVER-2, v0.2.59-alpha).
 #
 # Root-owned, fail-closed cutover for chiefmonkey.art. Fetched from ONE immutable
 # annotated release tag and invoked with a short command from a verified clone:
@@ -10,7 +10,7 @@
 # It:
 #   - verifies exact annotated release tags + version markers before mutating live state
 #       torii-base            v0.1.4
-#       torii-continuum       v0.2.58-alpha  (this script's own release tag)
+#       torii-continuum       v0.2.59-alpha  (this script's own release tag)
 #       onboarding preview    v0.1.21-preview
 #   - backs up the current Torii base state to a root-only timestamped directory
 #   - redeploys torii-base via its sanctioned bootstrap (TORII_DOMAIN + SKIP_CERTBOT=1)
@@ -33,6 +33,18 @@
 #      shell (e.g. `-bash`), so that idiom re-execs the wrong thing. This script
 #      instead REQUIRES root and refuses to be sourced; the documented invocation
 #      is `sudo bash ops/torii-final-cutover.sh` from a verified clone.
+#
+# ── v0.2.59-alpha hotfix (OPS-CUTOVER-2), from a live v0.2.58-alpha run ────────
+#   1. PUBLIC-MODE FIX. The root-only umask 077 (correct for backups/state) also
+#      applied to the git checkout of the public source, and torii-base installs
+#      its webroot with mode-preserving `cp -a`, so /opt/torii/launcher landed as
+#      0600/0700 and nginx returned HTTP 403. Sources are now checked out under a
+#      public umask (022), the bootstrap runs under 022, and the launcher webroot
+#      is force-set to 0755/0644 after install — scoped so secrets/config are
+#      never widened.
+#   2. ROLLBACK FIX. `die(){ exit 1; }` does NOT trigger the ERR trap, so the
+#      HTTP 403 failure exited WITHOUT rolling back. A robust EXIT trap now runs a
+#      reentrant rollback on every non-zero exit (die/exit included).
 #
 # Privacy/security: public HTTPS clones only; no secrets read/written/printed; no
 # broad sudoers; existing config/state preserved byte-for-byte by the hardened role.
@@ -63,8 +75,8 @@ readonly BASE_REPO="https://github.com/ChiefmonkeyArt/torii-base.git"
 readonly BASE_TAG="v0.1.4"
 readonly BASE_VERSION="0.1.4"
 readonly CONTINUUM_REPO="https://github.com/ChiefmonkeyArt/torii-continuum.git"
-readonly CONTINUUM_TAG="v0.2.58-alpha"
-readonly CONTINUUM_VERSION="0.2.58-alpha"
+readonly CONTINUUM_TAG="v0.2.59-alpha"
+readonly CONTINUUM_VERSION="0.2.59-alpha"
 readonly PREVIEW_DIR_NAME="onboarding-v0.1.21"
 readonly PREVIEW_VERSION="0.1.21-preview"
 readonly PREVIEW_CTA="Sign in with browser extension"
@@ -79,6 +91,13 @@ readonly SIDECAR_HEALTH_URL="http://127.0.0.1:8780/torii/healthz"
 readonly CONTINUUM_HEALTH_URL="http://127.0.0.1:8787/api/health"
 readonly TORII_REGISTRY="/opt/torii/registry.json"
 readonly TORII_ROOT_APP_CONF="/opt/torii/root_app.conf"
+# Public launcher webroot that nginx serves at `/` and `/assets/`. Static-only
+# (index.html + assets); it holds no secrets, so it must be world-readable. Scoped
+# strictly here so mode enforcement never touches /opt/torii/env, registry.json,
+# or root_app.conf (secrets/config live at the /opt/torii top level, not under it).
+readonly LAUNCHER_WEBROOT="/opt/torii/launcher"
+readonly PUBLIC_DIR_MODE="0755"
+readonly PUBLIC_FILE_MODE="0644"
 readonly CONTINUUM_CONF="/etc/torii/continuum-deploy.conf"
 readonly TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 readonly RUN_ROOT="/root/torii-final-cutover-${TIMESTAMP}"
@@ -235,15 +254,28 @@ wait_json_version() {
 
 # Clone exactly one annotated tag over a shallow fetch and refuse anything that
 # is not an annotated tag object (a lightweight tag or a moved branch fails here).
+#
+# The checkout runs under a PUBLIC umask (022), not the root-only 077 used for
+# backups/state. torii-base's bootstrap installs its public webroot with `cp -a`
+# (mode-preserving), so a working tree checked out under 077 would arrive in
+# /opt/torii/launcher as 0600 files / 0700 dirs and nginx would answer HTTP 403.
+# These are public source repos with no secrets, and the tree sits under the
+# root-only RUN_ROOT, so a world-readable working copy is safe.
 clone_annotated_tag() {
   local repo="$1" tag="$2" dest="$3"
   rm -rf -- "$dest"
   mkdir -p "$dest"
+  local prev_umask; prev_umask="$(umask)"
+  umask 022
   git -C "$dest" init -q
   git -C "$dest" remote add origin "$repo"
   git -C "$dest" fetch -q --depth 1 origin "refs/tags/${tag}:refs/tags/${tag}"
-  [[ "$(git -C "$dest" cat-file -t "refs/tags/${tag}")" == "tag" ]] || die "${repo} ${tag} is not an annotated tag"
+  if [[ "$(git -C "$dest" cat-file -t "refs/tags/${tag}")" != "tag" ]]; then
+    umask "$prev_umask"
+    die "${repo} ${tag} is not an annotated tag"
+  fi
   git -C "$dest" checkout -q "tags/${tag}"
+  umask "$prev_umask"
 }
 
 record_absent() {
@@ -339,11 +371,22 @@ restore_preview() {
   esac
 }
 
+# Roll back every mutation that was actually performed, in reverse order. Made
+# reentrant with a guard so it runs exactly once no matter which path triggers it
+# (ERR trap, EXIT trap, or an explicit die/exit). `set +e` keeps a failing
+# restore step from aborting the remaining restores. This function never exits —
+# it always returns to its caller (on_exit), which owns the final exit code.
 rollback() {
   local rc="$1"
-  trap - ERR
+  (( ROLLBACK_ACTIVE == 1 )) && return 0
   ROLLBACK_ACTIVE=1
-  log "Failure detected; attempting rollback"
+  trap - ERR
+  set +e
+  if (( BASE_MUTATED == 0 && CONTINUUM_PIN_CHANGED == 0 && PREVIEW_SWAPPED == 0 )); then
+    log "Failed before any live mutation (exit ${rc}); nothing to roll back"
+    return 0
+  fi
+  log "Failure detected (exit ${rc}); rolling back live mutations"
   if (( PREVIEW_SWAPPED == 1 )); then
     if ! restore_preview; then
       log "WARN preview rollback failed; inspect ${PREVIEW_PREV_PATH}"
@@ -360,15 +403,32 @@ rollback() {
     fi
   fi
   log "Check journals with: journalctl -u torii-base-sidecar.service -u torii-continuum-deploy.service -u continuum-agent.service -n 200 --no-pager"
-  exit "$rc"
+  return 0
 }
 
+# ERR trap: annotate the failing line, then exit; the EXIT trap performs the
+# rollback. A bare failing command triggers this under set -e.
 on_err() {
   local rc="$1" line="$2"
   printf '[cutover] ERROR at line %s (exit %s)\n' "$line" "$rc" >&2
-  rollback "$rc"
+  exit "$rc"
+}
+
+# EXIT trap: the single, robust rollback chokepoint. It fires for EVERY exit path
+# — an explicit `die`/`exit` (which do NOT trigger ERR), a `cmd || die`
+# short-circuit, a set -e abort, or normal completion — so no post-mutation
+# failure can slip past rollback the way the old `die(){ exit 1; }` path did in
+# the live run (HTTP 403 → die → exit with no rollback).
+on_exit() {
+  local rc=$?
+  trap - EXIT ERR
+  if (( rc != 0 )); then
+    rollback "$rc"
+  fi
+  exit "$rc"
 }
 trap 'on_err $? $LINENO' ERR
+trap on_exit EXIT
 
 set_conf_value() {
   local file="$1" key="$2" value="$3"
@@ -445,10 +505,31 @@ stat_owner_group() {
   stat -c '%u:%g' -- "$path"
 }
 
+# Force a public static tree to safe, world-readable modes: traversable dirs and
+# readable files. Strictly scoped to the given root — it never widens anything
+# outside it, so it is safe to run near (but never on) secret/config paths.
+set_public_tree_modes() {
+  local root="$1" dir_mode="$2" file_mode="$3"
+  [[ -d "$root" ]] || die "cannot set modes: ${root} is not a directory"
+  find "$root" -type d -exec chmod "$dir_mode" {} +
+  find "$root" -type f -exec chmod "$file_mode" {} +
+}
+
+# Defence-in-depth after the sanctioned bootstrap: force the public launcher
+# webroot to 0755 dirs / 0644 files so nginx can serve it even if a future
+# bootstrap regresses a mode. Scoped to LAUNCHER_WEBROOT only; /opt/torii/env,
+# registry.json and root_app.conf live above it and are never touched.
+enforce_public_static_modes() {
+  [[ -d "$LAUNCHER_WEBROOT" ]] || die "launcher webroot missing after bootstrap: ${LAUNCHER_WEBROOT}"
+  set_public_tree_modes "$LAUNCHER_WEBROOT" "$PUBLIC_DIR_MODE" "$PUBLIC_FILE_MODE"
+}
+
 prepare_preview_permissions() {
   local stage="$1"
-  find "$stage" -type d -exec chmod "$PREVIEW_DIR_MODE" {} +
-  find "$stage" -type f -exec chmod "$PREVIEW_FILE_MODE" {} +
+  # The stage dir is created via `mktemp -d` under the root-only umask (077), so
+  # it starts at 0700; this normalises it (and the copied payload) back to public
+  # modes before the atomic swap, closing the same 403 hazard for the preview.
+  set_public_tree_modes "$stage" "$PREVIEW_DIR_MODE" "$PREVIEW_FILE_MODE"
   chown -R -- "$PREVIEW_OWNER:$PREVIEW_GROUP" "$stage"
 }
 
@@ -601,12 +682,20 @@ deploy_torii_base() {
   capture_pre_state
   BASE_MUTATED=1
   log "Deploying torii-base ${BASE_TAG} via sanctioned bootstrap"
-  DEBIAN_FRONTEND=noninteractive \
-  APT_LISTCHANGES_FRONTEND=none \
-  NEEDRESTART_MODE=a \
-  TORII_DOMAIN="$DOMAIN" \
-  SKIP_CERTBOT=1 \
-  bash "$BASE_SRC/bootstrap.sh"
+  # Run the bootstrap under a PUBLIC umask (022) in a subshell so any file it
+  # creates directly defaults to world-readable modes. The subshell isolates the
+  # umask change; the script's root-only 077 default is restored on return.
+  (
+    umask 022
+    DEBIAN_FRONTEND=noninteractive \
+    APT_LISTCHANGES_FRONTEND=none \
+    NEEDRESTART_MODE=a \
+    TORII_DOMAIN="$DOMAIN" \
+    SKIP_CERTBOT=1 \
+    bash "$BASE_SRC/bootstrap.sh"
+  )
+  log "Enforcing public modes on ${LAUNCHER_WEBROOT} (0755 dirs / 0644 files)"
+  enforce_public_static_modes
 }
 
 validate_torii_base() {

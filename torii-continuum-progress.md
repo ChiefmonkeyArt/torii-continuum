@@ -9,6 +9,19 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.59-alpha — ops: cutover public-webroot 403 + rollback hotfix (OPS-CUTOVER-2)
+
+Ops-only hotfix to `ops/torii-final-cutover.sh` from a **live v0.2.58-alpha run** (no app/agent runtime code changed; onboarding preview stays **v0.1.21-preview**; root + agent package.json bumped 0.2.58→0.2.59-alpha). Two bugs observed live and fixed:
+
+1. **Public launcher served HTTP 403.** The script sets `umask 077` (correct for root-only backups/state), but the git checkout inherited it, producing 0600 files / 0700 dirs. torii-base copies its launcher with mode-preserving `cp -a`, so those private modes landed in `/opt/torii/launcher` and nginx answered 403. **Fix:** `clone_annotated_tag` checks out sources under a public `umask 022` (restoring the prior umask after); `deploy_torii_base` runs the sanctioned bootstrap under `umask 022` in a subshell; and a new `enforce_public_static_modes` forces the launcher webroot to **0755 dirs / 0644 files** — the exact manual recovery the operator ran. Widening is strictly scoped to `/opt/torii/launcher`; `/opt/torii/env` (0640, holds `TORII_ADMIN_TOKEN`), `registry.json` and `root_app.conf` sit above it and are never chmodded. The onboarding-preview stage (a `mktemp -d` at 0700) is normalised through the same shared `set_public_tree_modes` helper before its atomic swap.
+2. **A fatal error after mutation did not roll back.** `die(){ exit 1; }` bypassed the `ERR` trap, so `FATAL: public launcher probe failed with HTTP 403` exited with **no rollback**. **Fix:** rollback is now driven by a single recursion-guarded **`EXIT`-trap** chokepoint (`on_exit` → `rollback`) reached by every exit path — a `set -e` abort, a `cmd || die` short-circuit, or an explicit `die`/`exit`. `rollback` is reentrant (`ROLLBACK_ACTIVE` guard + `set +e`) and never calls `exit` itself; a failure before any mutation is a safe no-op.
+
+**Recovery / scope of the interrupted run.** The failed run stopped in `validate_torii_base`, which precedes `bootstrap_and_deploy_continuum` and `deploy_preview`. By phase order, **no Continuum pin or onboarding-preview state was mutated** — only torii-base was redeployed. Re-running v0.2.59-alpha from the verified clone is idempotent for the base redeploy and proceeds through the remaining phases.
+
+**Tests.** `ops/test/torii-final-cutover.test.sh` retargeted to v0.2.59-alpha and extended to **59 checks**: static asserts (umask 022 in checkout + bootstrap, `enforce_public_static_modes` on the launcher webroot, 0755/0644 pins, no chmod on env/registry/root_app, `trap on_exit EXIT`, rollback recursion guard + no-op guard + never-exits) plus functional replays (0600/0700 under `umask 077` → find-chmod → 0755/0644; backup→mutate→restore + absent-path cleanup; a `die`-after-mutation harness proving the EXIT-trap rolls back, and that a pre-mutation die is a no-op; recursion-guard runs the body exactly once).
+
+**Validation (Node 20.20.1).** `bash -n` clean; ops cutover suite 59/59; vitest and agent `node --test` green; `npm run build` clean; no conflict markers. `shellcheck` unavailable in this environment. **Not deployed** (per instruction).
+
 ## v0.2.58-alpha — ui: fancy glass login with blurred Vermilion Dawn torii background
 
 Frontend-only release (`src/views/login.js` + `src/styles/landing.css` + new `src/assets/torii-login-bg.webp`; **no agent code changed**; onboarding preview stays **v0.1.20-preview**). Root `package.json` + lockfile bumped `0.2.57-alpha → 0.2.58-alpha`.

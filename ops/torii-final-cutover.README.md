@@ -9,7 +9,7 @@ It:
 - verifies the exact annotated release tags + version markers **before** mutating
   live state:
   - `torii-base` **v0.1.4**
-  - `torii-continuum` **v0.2.58-alpha** (this script's own release tag)
+  - `torii-continuum` **v0.2.59-alpha** (this script's own release tag)
   - onboarding preview **v0.1.21-preview**
 - backs up the current Torii base state to a root-only timestamped directory
 - redeploys `torii-base` v0.1.4 via its sanctioned bootstrap
@@ -42,14 +42,54 @@ run. Two structural defenses fix that:
    sudo bash ops/torii-final-cutover.sh
    ```
 
+## v0.2.59-alpha hotfix (OPS-CUTOVER-2)
+
+A live v0.2.58-alpha run surfaced two bugs, both fixed here:
+
+1. **Public webroot served HTTP 403.** The script sets `umask 077` (correct for
+   root-only backups/state), but the git checkout inherited it, so the working
+   tree arrived as `0600` files / `0700` dirs. `torii-base` copies its launcher
+   with mode-preserving `cp -a`, so those private modes landed in
+   `/opt/torii/launcher` and nginx answered **403**. Fixed by checking out the
+   sources under a **public `umask 022`**, running the sanctioned bootstrap under
+   `umask 022` in a subshell, and then **enforcing `0755` dirs / `0644` files on
+   the launcher webroot only**. The widening is strictly scoped to
+   `/opt/torii/launcher`; `/opt/torii/env`, `registry.json` and `root_app.conf`
+   sit above it and are never touched. The onboarding-preview stage (a
+   `mktemp -d` created at `0700`) is normalised through the same helper before its
+   atomic swap.
+2. **A fatal error after mutation did not roll back.** The old `die(){ exit 1; }`
+   bypassed the `ERR` trap, so `FATAL: public launcher probe failed with HTTP 403`
+   exited with **no rollback**. Rollback is now driven by a single **`EXIT`-trap
+   chokepoint** that fires for every exit path — a bare `set -e` abort, a
+   `cmd || die` short-circuit, or an explicit `die`/`exit` — and is
+   recursion-guarded so it runs exactly once. A failure *before* any mutation is a
+   safe no-op.
+
+### Recovery from the interrupted live run
+
+The v0.2.58-alpha run failed in `validate_torii_base`, which runs **before**
+`bootstrap_and_deploy_continuum` and `deploy_preview`. By phase order, **no
+Continuum pin or onboarding-preview state was mutated** — only `torii-base` was
+redeployed. The operator manually restored serving with:
+
+```bash
+find /opt/torii/launcher -type d -exec chmod 0755 {} +
+find /opt/torii/launcher -type f -exec chmod 0644 {} +
+```
+
+which is exactly what `enforce_public_static_modes` now performs automatically.
+Re-running this v0.2.59-alpha cutover from the verified clone is idempotent for
+the base redeploy and proceeds through the Continuum and preview phases.
+
 ## Run it (from a verified clone, one sudo prompt)
 
 ```bash
 cd /tmp
 rm -rf torii-continuum
-git clone --depth 1 --branch v0.2.58-alpha https://github.com/ChiefmonkeyArt/torii-continuum.git
+git clone --depth 1 --branch v0.2.59-alpha https://github.com/ChiefmonkeyArt/torii-continuum.git
 cd torii-continuum
-[ "$(git cat-file -t v0.2.58-alpha)" = tag ] || { echo "not an annotated tag"; exit 1; }
+[ "$(git cat-file -t v0.2.59-alpha)" = tag ] || { echo "not an annotated tag"; exit 1; }
 sudo bash ops/torii-final-cutover.sh
 ```
 
@@ -96,9 +136,10 @@ Preview rollback is kept at exactly one of:
 - `/var/www/torii/onboarding-preview.prev`
 - `/var/www/torii/continuum/onboarding-preview.prev`
 
-On a failure after mutation, the `ERR` trap attempts to restore the preview, the
-Continuum pin file, and the torii-base backup, in that order. If rollback is
-incomplete:
+On a failure after mutation, a single recursion-guarded `EXIT`-trap chokepoint
+attempts to restore the preview, the Continuum pin file, and the torii-base
+backup, in that order — reached from every exit path, including explicit
+`die`/`exit` calls that do not fire the `ERR` trap. If rollback is incomplete:
 
 ```bash
 journalctl -u torii-base-sidecar.service -u torii-continuum-deploy.service \
@@ -120,7 +161,12 @@ journalctl -u torii-base-sidecar.service -u torii-continuum-deploy.service \
 anti-truncation brace group (including that truncated copies fail `bash -n`), the
 root/source guards, the absence of `exec sudo`, the pinned annotated tags +
 version markers, fail-closed preview detection, atomic swap + single rollback,
-health gates, backups, and the no-secrets / no-broad-sudoers invariants.
+health gates, backups, and the no-secrets / no-broad-sudoers invariants. The
+v0.2.59-alpha hotfix adds functional replays: launcher modes forced to
+`0755`/`0644` under an initial `umask 077`, a backup→mutate→restore + absent-path
+cleanup, and a `die`-after-mutation harness proving the `EXIT`-trap chokepoint
+rolls back (with the recursion guard), plus static asserts that mode widening
+never reaches `/opt/torii/env`, `registry.json` or `root_app.conf`.
 
 ```bash
 bash ops/test/torii-final-cutover.test.sh

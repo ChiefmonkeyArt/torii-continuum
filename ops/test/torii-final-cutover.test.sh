@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Hermetic tests for the in-repo cutover operator script (OPS-CUTOVER-1, v0.2.58-alpha).
+# Hermetic tests for the in-repo cutover operator script (OPS-CUTOVER-2, v0.2.59-alpha).
 #
-# No real deploy, no network, no root. Three concerns:
+# No real deploy, no network, no root. Concerns:
 #   1. Anti-partial-delivery — the whole body is a single brace group, so a
 #      truncated copy (the exact hazard that motivated this script: a heredoc
 #      paste that cut off mid-function) fails `bash -n` and runs NOTHING.
@@ -10,6 +10,12 @@
 #      uses the broken `exec sudo -- bash "$0"` re-exec.
 #   3. Static release/security invariants — pinned annotated tags + versions,
 #      fail-closed preview layout detection, no secrets, no broad sudoers.
+#   4. v0.2.59-alpha hotfix (OPS-CUTOVER-2): public static modes are forced to
+#      0755/0644 under an initial umask 077 (the live HTTP-403 bug), and EVERY
+#      fatal path after mutation — including explicit `die`/`exit`, which do NOT
+#      fire the ERR trap — reaches rollback via a single EXIT-trap chokepoint.
+#      Includes functional replays (mode enforcement; backup→mutate→restore +
+#      absent-path cleanup; die→rollback wiring) plus static asserts.
 #
 # Run:  bash ops/test/torii-final-cutover.test.sh   (from repo root)
 
@@ -105,8 +111,8 @@ printf '%s' "$src_out" | grep -qiF 'do not source' \
 # ── 3. Pinned annotated tags + version markers ───────────────────────────────
 grep -qF 'BASE_TAG="v0.1.4"' "$CUTOVER"                 && ok "pins torii-base v0.1.4"             || bad "torii-base tag not pinned"
 grep -qF 'BASE_VERSION="0.1.4"' "$CUTOVER"              && ok "pins torii-base VERSION 0.1.4"      || bad "torii-base version not pinned"
-grep -qF 'CONTINUUM_TAG="v0.2.58-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.58-alpha" || bad "continuum tag not pinned to v0.2.58-alpha"
-grep -qF 'CONTINUUM_VERSION="0.2.58-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.58-alpha" || bad "continuum version not pinned"
+grep -qF 'CONTINUUM_TAG="v0.2.59-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.59-alpha" || bad "continuum tag not pinned to v0.2.59-alpha"
+grep -qF 'CONTINUUM_VERSION="0.2.59-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.59-alpha" || bad "continuum version not pinned"
 grep -qF 'PREVIEW_VERSION="0.1.21-preview"' "$CUTOVER"  && ok "pins onboarding preview 0.1.21-preview" || bad "preview version not pinned"
 grep -qF 'PREVIEW_CTA="Sign in with browser extension"' "$CUTOVER" && ok "pins exact preview CTA text" || bad "preview CTA text not pinned"
 
@@ -171,6 +177,180 @@ else
   grep -qF 'https://github.com/ChiefmonkeyArt/torii-continuum.git' "$CUTOVER" \
     && ok "clones over public HTTPS only" || bad "continuum HTTPS repo not referenced"
 fi
+
+# ── 9. Hotfix static asserts (OPS-CUTOVER-2, v0.2.59-alpha) ───────────────────
+# 9a. The git checkout runs under a PUBLIC umask (022), not the root-only 077,
+#     so the working tree torii-base copies with `cp -a` is world-readable.
+awk '/^clone_annotated_tag\(\) \{/,/^\}/' "$CUTOVER" | grep -qF 'umask 022' \
+  && ok "clone_annotated_tag checks out sources under umask 022" \
+  || bad "clone_annotated_tag does not force umask 022 for the checkout"
+# It must restore the previous umask (no leak of 022 into root-only state).
+awk '/^clone_annotated_tag\(\) \{/,/^\}/' "$CUTOVER" | grep -qF 'umask "$prev_umask"' \
+  && ok "clone_annotated_tag restores the prior (root-only) umask" \
+  || bad "clone_annotated_tag leaks umask 022"
+
+# 9b. The sanctioned torii-base bootstrap runs under umask 022 in a subshell so
+#     any file it creates directly defaults to world-readable modes.
+awk '/^deploy_torii_base\(\) \{/,/^\}/' "$CUTOVER" | grep -qF 'umask 022' \
+  && ok "deploy_torii_base runs bootstrap under umask 022" \
+  || bad "bootstrap not run under umask 022"
+awk '/^deploy_torii_base\(\) \{/,/^\}/' "$CUTOVER" | grep -qF 'enforce_public_static_modes' \
+  && ok "deploy_torii_base enforces public modes after bootstrap" \
+  || bad "no post-bootstrap public-mode enforcement"
+
+# 9c. Public-mode enforcement is scoped to the launcher webroot ONLY and forces
+#     0755 dirs / 0644 files — exactly the manual recovery that fixed the 403.
+grep -qF 'LAUNCHER_WEBROOT="/opt/torii/launcher"' "$CUTOVER" \
+  && ok "launcher webroot pinned to /opt/torii/launcher" || bad "launcher webroot not pinned"
+grep -qF 'PUBLIC_DIR_MODE="0755"' "$CUTOVER" && grep -qF 'PUBLIC_FILE_MODE="0644"' "$CUTOVER" \
+  && ok "public static modes pinned to 0755 dirs / 0644 files" || bad "public static modes not pinned"
+awk '/^enforce_public_static_modes\(\) \{/,/^\}/' "$CUTOVER" | grep -qF '$LAUNCHER_WEBROOT' \
+  && ok "enforce_public_static_modes targets the launcher webroot" \
+  || bad "enforce_public_static_modes does not target the launcher webroot"
+awk '/^set_public_tree_modes\(\) \{/,/^\}/' "$CUTOVER" | grep -qE 'find .* -type d -exec chmod' \
+  && awk '/^set_public_tree_modes\(\) \{/,/^\}/' "$CUTOVER" | grep -qE 'find .* -type f -exec chmod' \
+  && ok "set_public_tree_modes chmods dirs and files separately" \
+  || bad "set_public_tree_modes does not chmod dirs+files"
+
+# 9d. Mode widening must NOT reach secrets/config. /opt/torii/env, registry.json
+#     and root_app.conf sit ABOVE the launcher webroot and are never chmodded.
+code_nc="$(sed 's/#.*$//' "$CUTOVER")"
+if printf '%s' "$code_nc" | grep -qE 'chmod[^\n]*/opt/torii/env|chmod[^\n]*registry\.json|chmod[^\n]*root_app\.conf'; then
+  bad "chmod touches a secret/config path (env/registry/root_app)"
+else
+  ok "no chmod on /opt/torii/env, registry.json or root_app.conf"
+fi
+
+# 9e. The preview stage (mktemp under 077 → 0700) is normalised to public modes
+#     via the same shared helper before the atomic swap.
+awk '/^prepare_preview_permissions\(\) \{/,/^\}/' "$CUTOVER" | grep -qF 'set_public_tree_modes' \
+  && ok "preview stage normalised via the shared public-mode helper" \
+  || bad "preview stage does not reuse the public-mode helper"
+
+# 9f. Rollback wiring: a single EXIT-trap chokepoint drives rollback so explicit
+#     die/exit paths (which do NOT fire ERR) still roll back; recursion-guarded.
+grep -qF 'trap on_exit EXIT' "$CUTOVER" && ok "installs an EXIT-trap rollback chokepoint" \
+  || bad "no EXIT-trap rollback chokepoint"
+awk '/^on_exit\(\) \{/,/^\}/' "$CUTOVER" | grep -qF 'rollback' \
+  && ok "on_exit invokes rollback on non-zero exit" || bad "on_exit does not call rollback"
+awk '/^rollback\(\) \{/,/^\}/' "$CUTOVER" | grep -qF 'ROLLBACK_ACTIVE == 1' \
+  && ok "rollback is recursion-guarded (runs exactly once)" || bad "rollback has no recursion guard"
+# rollback must not exit() — it returns to on_exit which owns the exit code. Match
+# only a statement-position `exit` (the word also appears inside log strings).
+if awk '/^rollback\(\) \{/,/^\}/' "$CUTOVER" | sed 's/#.*$//' | grep -qE '^[[:space:]]*exit([[:space:]]|$)'; then
+  bad "rollback calls exit (must return to on_exit)"
+else
+  ok "rollback never exits (returns to the EXIT-trap owner)"
+fi
+# A pre-mutation failure must be a no-op rollback (all mutation flags still 0).
+awk '/^rollback\(\) \{/,/^\}/' "$CUTOVER" \
+  | grep -qF 'BASE_MUTATED == 0 && CONTINUUM_PIN_CHANGED == 0 && PREVIEW_SWAPPED == 0' \
+  && ok "rollback is a no-op before any live mutation" || bad "no pre-mutation no-op guard in rollback"
+
+# ── 10. Hotfix functional replays (sandboxed; no root/network) ────────────────
+# 10a. Under an initial umask 077, files/dirs are created 0600/0700 (reproducing
+#      the live 403), then the exact enforcement the script runs (find -exec
+#      chmod) must yield 0755 dirs / 0644 files.
+mode_sandbox="$(mktemp -d)"
+(
+  umask 077
+  mkdir -p "$mode_sandbox/launcher/assets"
+  printf '<!doctype html>' > "$mode_sandbox/launcher/index.html"
+  printf 'body{}'          > "$mode_sandbox/launcher/assets/app.css"
+)
+pre_file="$(stat -c '%a' "$mode_sandbox/launcher/index.html")"
+pre_dir="$(stat -c '%a' "$mode_sandbox/launcher/assets")"
+[[ "$pre_file" == "600" && "$pre_dir" == "700" ]] \
+  && ok "umask 077 reproduces the 403 modes (0600 files / 0700 dirs)" \
+  || bad "sandbox did not reproduce 0600/0700 under umask 077 (file=$pre_file dir=$pre_dir)"
+# Replay the enforcement verbatim.
+find "$mode_sandbox/launcher" -type d -exec chmod 0755 {} +
+find "$mode_sandbox/launcher" -type f -exec chmod 0644 {} +
+post_idx="$(stat -c '%a' "$mode_sandbox/launcher/index.html")"
+post_css="$(stat -c '%a' "$mode_sandbox/launcher/assets/app.css")"
+post_root="$(stat -c '%a' "$mode_sandbox/launcher")"
+post_assets="$(stat -c '%a' "$mode_sandbox/launcher/assets")"
+[[ "$post_root" == "755" && "$post_assets" == "755" ]] \
+  && ok "enforcement sets launcher dirs to 0755" \
+  || bad "launcher dirs not 0755 after enforcement (root=$post_root assets=$post_assets)"
+[[ "$post_idx" == "644" && "$post_css" == "644" ]] \
+  && ok "enforcement sets launcher files to 0644" \
+  || bad "launcher files not 0644 after enforcement (index=$post_idx css=$post_css)"
+rm -rf "$mode_sandbox"
+
+# 10b. Backup → mutate → restore: a tar of pre-state is captured, a live mutation
+#      overwrites it AND creates a path that did not exist (recorded as absent),
+#      then restore returns the original content and removes the absent path —
+#      exactly what a post-mutation public-probe failure triggers.
+rb_sandbox="$(mktemp -d)"
+mkdir -p "$rb_sandbox/opt/torii/launcher"
+printf 'ORIGINAL' > "$rb_sandbox/opt/torii/launcher/index.html"
+absent_marker="$rb_sandbox/opt/torii/continuum"   # does not exist pre-mutation
+backup_tar="$rb_sandbox/base.tar"
+absent_list="$rb_sandbox/absent.list"
+: > "$absent_list"
+# Snapshot: launcher exists (back it up), continuum absent (record it).
+tar -cpf "$backup_tar" -C "$rb_sandbox" opt/torii/launcher
+printf '%s\n' "$absent_marker" > "$absent_list"
+# Mutate: clobber the backed-up file and create the previously-absent path.
+printf 'BROKEN'  > "$rb_sandbox/opt/torii/launcher/index.html"
+mkdir -p "$absent_marker"; printf 'NEW' > "$absent_marker/index.html"
+# Restore (mirrors restore_torii_base_backup): extract tar, remove absent paths.
+tar -xpf "$backup_tar" -C "$rb_sandbox"
+while IFS= read -r p; do [[ -n "$p" ]] && rm -rf -- "$p"; done < "$absent_list"
+restored="$(cat "$rb_sandbox/opt/torii/launcher/index.html")"
+[[ "$restored" == "ORIGINAL" ]] \
+  && ok "rollback restores the pre-mutation base backup" \
+  || bad "base backup not restored (got '$restored')"
+[[ ! -e "$absent_marker" ]] \
+  && ok "rollback removes paths absent before mutation (clean slate)" \
+  || bad "absent path not cleaned on rollback"
+rm -rf "$rb_sandbox"
+
+# 10c. die→rollback wiring: a harness mirroring the real trap chain proves that
+#      an explicit `die` AFTER a mutation flag is set still reaches rollback via
+#      the EXIT trap (the exact failure mode of the live run: 403 → die → the old
+#      code exited with NO rollback). Also proves the recursion guard and that a
+#      failure BEFORE any mutation is a no-op.
+harness() {
+  local set_flag="$1"   # 1 = simulate a post-mutation failure
+  bash -c '
+    set -euo pipefail
+    MUTATED=0; ROLLBACK_ACTIVE=0
+    rollback() {
+      (( ROLLBACK_ACTIVE == 1 )) && return 0
+      ROLLBACK_ACTIVE=1; trap - ERR; set +e
+      if (( MUTATED == 0 )); then echo "NOOP"; return 0; fi
+      echo "ROLLED_BACK"; return 0
+    }
+    on_exit() { local rc=$?; trap - EXIT ERR; (( rc != 0 )) && rollback "$rc"; exit "$rc"; }
+    die() { echo "FATAL: $*" >&2; exit 1; }
+    trap on_exit EXIT
+    MUTATED='"$set_flag"'
+    die "simulated public probe failed with HTTP 403"
+  '
+}
+set +e
+out_post="$(harness 1 2>/dev/null)"; rc_post=$?
+out_pre="$(harness 0 2>/dev/null)";  rc_pre=$?
+set -e
+[[ "$rc_post" -ne 0 && "$out_post" == "ROLLED_BACK" ]] \
+  && ok "die after mutation triggers rollback via the EXIT trap (exit ${rc_post})" \
+  || bad "die after mutation did NOT roll back (rc=$rc_post out='$out_post')"
+[[ "$rc_pre" -ne 0 && "$out_pre" == "NOOP" ]] \
+  && ok "die before mutation is a no-op rollback (exit ${rc_pre})" \
+  || bad "pre-mutation die was not a no-op (rc=$rc_pre out='$out_pre')"
+
+# 10d. Recursion guard holds even if rollback is re-entered (ERR during rollback
+#      must not re-run the restores).
+guard_out="$(bash -c '
+  ROLLBACK_ACTIVE=0; runs=0
+  rollback(){ (( ROLLBACK_ACTIVE == 1 )) && return 0; ROLLBACK_ACTIVE=1; runs=$((runs+1)); rollback; echo "$runs"; }
+  rollback
+' 2>/dev/null)"
+[[ "$guard_out" == "1" ]] \
+  && ok "rollback recursion guard runs the body exactly once" \
+  || bad "rollback recursion guard failed (runs='$guard_out')"
 
 printf '\n[torii-final-cutover.test] pass=%d fail=%d\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || exit 1
