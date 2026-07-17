@@ -16,9 +16,10 @@
 const TOKEN_KEY = 'continuum.session.v1';
 // The onboarding wizard (preview-assets/onboarding-*) writes its session here.
 // It is a JSON envelope { token, expires_at, pubkey, method, created_at } — the
-// same HMAC session token the agent issues, never a secret key. The SPA adopts
-// it on boot so a freshly onboarded operator is NOT bounced back to a login
-// screen when the wizard hands off to /continuum/#/dashboard.
+// same HMAC session token the agent issues, never a secret key. The SPA does
+// NOT adopt it as a login on boot (that silently established a session without
+// an explicit user action); it is only used below to detect that a same-origin
+// agent is reachable, and it is cleared on sign-out.
 const ONBOARDING_SESSION_KEY = 'torii.session';
 
 /**
@@ -106,30 +107,6 @@ export function isLoggedIn() {
 }
 
 /**
- * Adopt an onboarding-wizard session (localStorage['torii.session']) into the
- * SPA's own session slot when the SPA has no live session of its own. Called
- * once at boot so a freshly onboarded operator arriving at /continuum/#/dashboard
- * is already authenticated and is not forced back through a login screen. Only
- * a live token is adopted; a dead/absent one is ignored (fail closed). Never
- * writes any secret — the onboarding envelope carries only the session token
- * and public identity metadata.
- * @returns {boolean} true when a session was adopted
- */
-export function adoptOnboardingSession() {
-  if (isLoggedIn()) return false; // SPA already has a live session
-  let envelope;
-  try {
-    const raw = localStorage.getItem(ONBOARDING_SESSION_KEY);
-    if (!raw) return false;
-    envelope = JSON.parse(raw);
-  } catch { return false; }
-  const tok = envelope && envelope.token;
-  if (!tokenLooksLive(tok)) return false;
-  setStoredToken(tok);
-  return true;
-}
-
-/**
  * Build a human-readable, non-sensitive failure reason from an agent error
  * body. The agent's own handlers reply `{ error: <reason> }`; Fastify's
  * built-in errors reply `{ error: <generic>, message: <specific> }` (e.g.
@@ -201,7 +178,14 @@ export async function verifyChallenge(event) {
   return r;
 }
 
-export function logout() { clearStoredToken(); }
+// Sign-out must drop every auth-relevant token so a subsequent refresh reliably
+// lands on the login modal. That means the SPA session slot AND the onboarding
+// handoff envelope (torii.session) — otherwise a stale onboarding token would
+// linger and be treated as a live agent hint after sign-out.
+export function logout() {
+  clearStoredToken();
+  try { localStorage.removeItem(ONBOARDING_SESSION_KEY); } catch (_e) {}
+}
 
 // ─── Wallet ─────────────────────────────────────────────────
 

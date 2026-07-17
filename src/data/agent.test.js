@@ -6,9 +6,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   deriveSameOriginBase,
   tokenLooksLive,
-  adoptOnboardingSession,
   getStoredToken,
+  setStoredToken,
   isLoggedIn,
+  logout,
   errorReason,
   requestChallenge,
   verifyChallenge,
@@ -77,7 +78,7 @@ describe('tokenLooksLive (HMAC-free liveness gate)', () => {
   });
 });
 
-describe('adoptOnboardingSession (torii.session → continuum.session.v1)', () => {
+describe('index auth gate — no implicit session on boot', () => {
   let stub;
   beforeEach(() => {
     stub = makeStorageStub();
@@ -85,35 +86,42 @@ describe('adoptOnboardingSession (torii.session → continuum.session.v1)', () =
   });
   afterEach(() => {
     delete globalThis.localStorage;
+    delete globalThis.window;
   });
 
-  it('adopts a live onboarding session when the SPA has none', () => {
+  it('is logged out at the index when only an onboarding envelope is present (no auto-adopt)', () => {
+    // A live torii.session envelope survives storage wipes that only target
+    // continuum*/*nostr* keys; it must NOT flip the SPA into a logged-in state.
+    stub.setItem('torii.session', JSON.stringify({ token: liveToken, pubkey, method: 'nip07' }));
+    expect(getStoredToken()).toBeNull();
+    expect(isLoggedIn()).toBe(false);
+  });
+
+  it('stays logged out even with a NIP-07 signer present and no stored session', () => {
+    globalThis.window = { nostr: { signEvent: async () => ({}), getPublicKey: async () => pubkey } };
     stub.setItem('torii.session', JSON.stringify({ token: liveToken, pubkey, method: 'nip07' }));
     expect(isLoggedIn()).toBe(false);
-    expect(adoptOnboardingSession()).toBe(true);
-    expect(getStoredToken()).toBe(liveToken);
+  });
+
+  it('no longer exports adoptOnboardingSession (silent boot-adopt vector removed)', async () => {
+    const mod = await import('./agent.js');
+    expect(mod.adoptOnboardingSession).toBeUndefined();
+  });
+
+  it('a valid stored SPA session token routes straight in (explicit sign-in persisted)', () => {
+    setStoredToken(liveToken);
     expect(isLoggedIn()).toBe(true);
+    setStoredToken(deadToken);
+    expect(isLoggedIn()).toBe(false);
   });
 
-  it('does not overwrite an existing live SPA session', () => {
-    stub.setItem('continuum.session.v1', liveToken);
-    stub.setItem('torii.session', JSON.stringify({ token: `1000.${future}.${'b'.repeat(64)}.other`, pubkey, method: 'nip07' }));
-    expect(adoptOnboardingSession()).toBe(false);
-    expect(getStoredToken()).toBe(liveToken); // untouched
-  });
-
-  it('ignores a dead onboarding token (fail closed)', () => {
-    stub.setItem('torii.session', JSON.stringify({ token: deadToken, pubkey, method: 'nip07' }));
-    expect(adoptOnboardingSession()).toBe(false);
+  it('sign-out clears both the SPA session and the onboarding envelope', () => {
+    setStoredToken(liveToken);
+    stub.setItem('torii.session', JSON.stringify({ token: liveToken, pubkey, method: 'nip07' }));
+    logout();
     expect(getStoredToken()).toBeNull();
-  });
-
-  it('ignores a missing or malformed envelope', () => {
-    expect(adoptOnboardingSession()).toBe(false);
-    stub.setItem('torii.session', 'not json');
-    expect(adoptOnboardingSession()).toBe(false);
-    stub.setItem('torii.session', JSON.stringify({ nope: true }));
-    expect(adoptOnboardingSession()).toBe(false);
+    expect(stub.getItem('torii.session')).toBeNull();
+    expect(isLoggedIn()).toBe(false);
   });
 });
 

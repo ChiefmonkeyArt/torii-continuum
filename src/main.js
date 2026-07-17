@@ -14,7 +14,6 @@ import { initStore } from './data/store.js';
 import { mountShell, mainContent, renderSidebar, applyStoredTheme } from './shell.js';
 import { route, startRouter, currentRoute, navigate } from './router.js';
 import { mountChat } from './chat.js';
-import { adoptOnboardingSession } from './data/agent.js';
 import { isSessionLive } from './auth.js';
 import { rootTarget, guardRedirect, isProtectedPattern } from './nav-guard.js';
 
@@ -39,10 +38,10 @@ function boot() {
   if (!root) return;
 
   applyStoredTheme();
-  // Adopt a handed-off onboarding session (localStorage['torii.session']) before
-  // anything renders, so a freshly onboarded operator lands authenticated on
-  // #/dashboard instead of being bounced to a login/marketing screen.
-  adoptOnboardingSession();
+  // Boot never establishes a session implicitly. The index is gated solely by a
+  // valid stored SPA session token (continuum.session.v1); with none, the login
+  // modal is shown even when a NIP-07 signer is present. Signing in is always an
+  // explicit user action (the sign-in control runs the NIP-07 challenge flow).
   initStore();
   mountShell(root);
 

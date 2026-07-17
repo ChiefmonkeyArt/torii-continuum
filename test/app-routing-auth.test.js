@@ -30,7 +30,7 @@ import {
   rootTarget,
   guardRedirect,
 } from '../src/nav-guard.js';
-import { adoptOnboardingSession, getStoredToken, isLoggedIn } from '../src/data/agent.js';
+import { getStoredToken, setStoredToken, isLoggedIn, logout } from '../src/data/agent.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = join(__dirname, '..', 'src');
@@ -108,25 +108,38 @@ describe('nav-guard: #/about is public, isolated, never protected', () => {
   });
 });
 
-describe('onboarding session adoption → authenticated root', () => {
+describe('index gate: no implicit session on boot', () => {
   let stub;
   beforeEach(() => { stub = makeStorageStub(); globalThis.localStorage = stub; });
-  afterEach(() => { delete globalThis.localStorage; });
+  afterEach(() => { delete globalThis.localStorage; delete globalThis.window; });
 
-  it('adopts a live onboarding session so root resolves to the dashboard', () => {
+  it('(a) NIP-07 signer present + no valid session → root renders login, not dashboard', () => {
+    // Signer available, and even a live onboarding envelope lingering in storage:
+    // neither may authenticate the index. Only an explicit sign-in can.
+    globalThis.window = { nostr: { signEvent: async () => ({}), getPublicKey: async () => pubkey } };
     stub.setItem('torii.session', JSON.stringify({ token: liveToken, pubkey, method: 'nip07' }));
+    expect(getStoredToken()).toBeNull();
     expect(isLoggedIn()).toBe(false);
-    expect(adoptOnboardingSession()).toBe(true);
-    expect(getStoredToken()).toBe(liveToken);
-    // Now authed → root sends the operator to the dashboard, not a login bounce.
-    expect(rootTarget(isLoggedIn())).toBe(DASHBOARD_PATH);
+    expect(rootTarget(isLoggedIn())).toBeNull(); // render login in place
+    expect(guardRedirect('/dashboard', isLoggedIn())).toBe(LOGIN_PATH);
   });
 
-  it('a dead onboarding token is ignored → root stays on login', () => {
-    stub.setItem('torii.session', JSON.stringify({ token: deadToken, pubkey, method: 'nip07' }));
-    expect(adoptOnboardingSession()).toBe(false);
+  it('(b) explicit sign-in persists a valid session → next load resolves to the dashboard', () => {
+    // verifyChallenge stores the agent-issued token; simulate that persisted state.
+    setStoredToken(liveToken);
+    expect(isLoggedIn()).toBe(true);
+    expect(rootTarget(isLoggedIn())).toBe(DASHBOARD_PATH);
+    expect(guardRedirect('/dashboard', isLoggedIn())).toBeNull();
+  });
+
+  it('(c) sign-out clears session + onboarding envelope → next load shows login', () => {
+    setStoredToken(liveToken);
+    stub.setItem('torii.session', JSON.stringify({ token: liveToken, pubkey, method: 'nip07' }));
+    logout();
+    expect(getStoredToken()).toBeNull();
+    expect(stub.getItem('torii.session')).toBeNull();
     expect(isLoggedIn()).toBe(false);
-    expect(rootTarget(isLoggedIn())).toBeNull(); // render login
+    expect(rootTarget(isLoggedIn())).toBeNull();
   });
 });
 
