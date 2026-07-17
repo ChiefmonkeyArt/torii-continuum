@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.60-alpha — ui: raise login muted text to WCAG AA contrast
+
+Frontend-only release (`src/styles/landing.css` only — **no agent code changed**, `src/views/login.js` untouched; onboarding preview stays **v0.1.21-preview**). Root `package.json` + lockfile bumped `0.2.59-alpha → 0.2.60-alpha`. (v0.2.59-alpha was already claimed by OPS-CUTOVER-2 on main, so this ships as 0.2.60.)
+
+**Why.** The fancy glass login card's muted text (body lede, the "agent reachable · No account…" status line, the version footer, and the link separator) inherited the dim `--muted-foreground` grey (≈ rgb(166,160,150)). Over the translucent glass — where the blurred Vermilion Dawn torii glow can lighten the effective background to ≈ #3a2c22 — that grey drops to ~5:1 and can fall below the 4.5:1 WCAG AA floor on brighter spots.
+
+**Change.** Login-scoped colour overrides (landing.css loads after theme.css at equal specificity, so these win over `.muted` without touching the global token or any other surface): lede → `rgba(255,246,236,0.92)`; status → `rgba(255,244,232,0.88)`; version footer → `rgba(255,238,220,0.85)`; link separator → `rgba(255,238,220,0.75)`. All land ~8–14:1 against the dark glass, comfortably clearing AA (4.5:1 normal / 3:1 large). Warm off-whites preserve the amber-on-bronze aesthetic. No layout, glass treatment, background image, buttons, or subtitle/link colours changed (subtitle amber ~9.5:1 and links `--foreground/.9` already pass).
+
+**Tests.** Root `vitest run` **1103/1103** (unchanged — CSS-only, no source-structure assertions affected). `npm run build` clean; login webp still emitted/referenced.
+
 ## v0.2.59-alpha — ops: cutover public-webroot 403 + rollback hotfix (OPS-CUTOVER-2)
 
 Ops-only hotfix to `ops/torii-final-cutover.sh` from a **live v0.2.58-alpha run** (no app/agent runtime code changed; onboarding preview stays **v0.1.21-preview**; root + agent package.json bumped 0.2.58→0.2.59-alpha). Two bugs observed live and fixed:
