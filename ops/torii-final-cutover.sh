@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Torii final VPS cutover — in-repo operator script (OPS-CUTOVER-3, v0.2.61-alpha).
+# Torii final VPS cutover — in-repo operator script (OPS-CUTOVER-5, v0.2.63-alpha).
 #
 # Root-owned, fail-closed cutover for chiefmonkey.art. Fetched from ONE immutable
 # annotated release tag and invoked with a short command from a verified clone:
@@ -10,7 +10,7 @@
 # It:
 #   - verifies exact annotated release tags + version markers before mutating live state
 #       torii-base            v0.1.4
-#       torii-continuum       v0.2.61-alpha  (this script's own release tag)
+#       torii-continuum       v0.2.63-alpha  (this script's own release tag)
 #       onboarding preview    v0.1.21-preview
 #   - backs up the current Torii base state to a root-only timestamped directory
 #   - redeploys torii-base via its sanctioned bootstrap (TORII_DOMAIN + SKIP_CERTBOT=1)
@@ -33,6 +33,24 @@
 #      shell (e.g. `-bash`), so that idiom re-execs the wrong thing. This script
 #      instead REQUIRES root and refuses to be sourced; the documented invocation
 #      is `sudo bash ops/torii-final-cutover.sh` from a verified clone.
+#
+# ── v0.2.63-alpha disk-safety hardening (OPS-CUTOVER-5) ───────────────────────
+#   1. PREFLIGHT FREE-SPACE GATE. preflight_free_space() runs FIRST in main —
+#      before any clone or mutation — and dies if any filesystem we clone into,
+#      back up onto, or npm-install under has less than PREFLIGHT_MIN_FREE_MB
+#      free. This makes a space-starved host fail closed up front instead of
+#      half-applying the cutover and dying mid-`npm ci` (the live ENOSPC failure).
+#   2. BACKUP EXCLUDES. The rollback tar now excludes regenerable cache/build
+#      artifacts (node_modules, .git, .cache, .npm, dist, .vite) via
+#      BACKUP_EXCLUDES, so the backup can't itself exhaust the disk. Scoped to
+#      regenerable artifacts ONLY — config/state (env, registry.json,
+#      root_app.conf) is still captured byte-for-byte.
+#
+# ── v0.2.62-alpha hotfix (OPS-CUTOVER-4) ──────────────────────────────────────
+#   Prune stale /root/torii-final-cutover-* staging dirs after a successful
+#   cutover (prune_old_staging_dirs, KEEP_STAGING_DIRS=1) so repeated runs cannot
+#   accumulate and exhaust the disk. Runs LAST in main; a failed run leaves its
+#   newest staging dir for inspection.
 #
 # ── v0.2.61-alpha hotfix (OPS-CUTOVER-3), from a live v0.2.59-alpha run ────────
 #   1. UNATTENDED ROLE-VAR FIX. The Continuum unattended converge failed at the
@@ -87,8 +105,8 @@ readonly BASE_REPO="https://github.com/ChiefmonkeyArt/torii-base.git"
 readonly BASE_TAG="v0.1.4"
 readonly BASE_VERSION="0.1.4"
 readonly CONTINUUM_REPO="https://github.com/ChiefmonkeyArt/torii-continuum.git"
-readonly CONTINUUM_TAG="v0.2.61-alpha"
-readonly CONTINUUM_VERSION="0.2.61-alpha"
+readonly CONTINUUM_TAG="v0.2.63-alpha"
+readonly CONTINUUM_VERSION="0.2.63-alpha"
 readonly PREVIEW_DIR_NAME="onboarding-v0.1.21"
 readonly PREVIEW_VERSION="0.1.21-preview"
 readonly PREVIEW_CTA="Sign in with browser extension"
@@ -119,6 +137,18 @@ readonly RUN_ROOT="/root/torii-final-cutover-${TIMESTAMP}"
 # repeated attempts accumulated 2.5G+ and the unattended deploy hit ENOSPC at
 # `npm ci` on a 15G host. See prune_old_staging_dirs().
 readonly KEEP_STAGING_DIRS=1
+# Preflight free-space floor (MiB) required on every filesystem we clone into,
+# back up onto, or npm-install under, checked BEFORE any mutation. The live
+# ENOSPC-at-`npm ci` failure (a 15G host with accumulated staging dirs) proves a
+# space-starved run must fail closed up front rather than half-apply a cutover
+# and then die mid-install. Each staging run needs ~629M (clone + node_modules)
+# plus the base backup tar and preview stage; 2048 MiB is a conservative floor.
+readonly PREFLIGHT_MIN_FREE_MB=2048
+# Filesystems that must have headroom before we touch anything: the staging root
+# (/root), the app/npm target (/home), the base install (/opt), and the webroot
+# (/var/www). Deduped by mountpoint at check time so multiple paths on one FS are
+# only counted once.
+readonly PREFLIGHT_PATHS=(/root /home /opt /var/www)
 readonly SRC_ROOT="${RUN_ROOT}/src"
 readonly BACKUP_ROOT="${RUN_ROOT}/backup"
 readonly LOG_ROOT="${RUN_ROOT}/logs"
@@ -128,6 +158,19 @@ readonly NGINX_HITS_FILE="${STATE_ROOT}/preview-nginx-hits.txt"
 readonly BASE_BACKUP_TAR="${BACKUP_ROOT}/torii-base-backup.tar"
 readonly BASE_ABSENT_LIST="${BACKUP_ROOT}/torii-base-absent.txt"
 readonly CONTINUUM_CONF_BACKUP="${BACKUP_ROOT}/continuum-deploy.conf.before"
+# Cache / build-artifact globs excluded from the rollback backup tar. These are
+# regenerable (npm/pip caches, build output, VCS metadata) and can dominate the
+# archive size, so backing them up wastes the very disk this cutover is trying to
+# protect. Scoped to regenerable artifacts ONLY — never config/state: the tar
+# still captures /opt/torii/env, registry.json and root_app.conf byte-for-byte.
+readonly BACKUP_EXCLUDES=(
+  '--exclude=*/node_modules'
+  '--exclude=*/.git'
+  '--exclude=*/.cache'
+  '--exclude=*/.npm'
+  '--exclude=*/dist'
+  '--exclude=*/.vite'
+)
 
 BASE_MUTATED=0
 CONTINUUM_PIN_CHANGED=0
@@ -166,6 +209,36 @@ die() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "required command missing: $1"
+}
+
+# Preflight: refuse to start unless every filesystem we will clone into, back up
+# onto, or npm-install under has at least PREFLIGHT_MIN_FREE_MB free. Runs FIRST
+# in main — before verify_release_sources clones anything and before any live
+# mutation — so a space-starved host fails closed up front instead of half-
+# applying the cutover and dying mid-`npm ci` (the live ENOSPC failure). Paths
+# are deduped by mountpoint so co-located targets are only counted once.
+preflight_free_space() {
+  require_cmd df
+  local -A seen_mounts=()
+  local path mount avail_mb
+  for path in "${PREFLIGHT_PATHS[@]}"; do
+    # Resolve to an existing ancestor so df has something to report on even if a
+    # leaf (e.g. /var/www) does not exist yet on a fresh host.
+    local probe="$path"
+    while [[ ! -e "$probe" && "$probe" != "/" ]]; do
+      probe="$(dirname -- "$probe")"
+    done
+    mount="$(df -P -- "$probe" | awk 'NR==2 {print $6}')"
+    [[ -n "$mount" ]] || continue
+    [[ -n "${seen_mounts[$mount]:-}" ]] && continue
+    seen_mounts[$mount]=1
+    avail_mb="$(df -Pm -- "$probe" | awk 'NR==2 {print $4}')"
+    [[ "$avail_mb" =~ ^[0-9]+$ ]] || die "could not read free space for ${path} (mount ${mount})"
+    if (( avail_mb < PREFLIGHT_MIN_FREE_MB )); then
+      die "insufficient free space on ${mount} (${avail_mb} MiB free, need ${PREFLIGHT_MIN_FREE_MB} MiB) — free space before cutover"
+    fi
+    log "Preflight free space OK on ${mount}: ${avail_mb} MiB (>= ${PREFLIGHT_MIN_FREE_MB} MiB)"
+  done
 }
 
 assert_eq() {
@@ -322,7 +395,7 @@ backup_torii_base_state() {
     fi
   done
   if ((${#existing[@]} > 0)); then
-    tar -cpf "$BASE_BACKUP_TAR" --numeric-owner --xattrs --acls "${existing[@]}"
+    tar -cpf "$BASE_BACKUP_TAR" --numeric-owner --xattrs --acls "${BACKUP_EXCLUDES[@]}" "${existing[@]}"
   else
     : > "$BASE_BACKUP_TAR"
   fi
@@ -869,6 +942,7 @@ prune_old_staging_dirs() {
 main() {
   log "Starting final VPS cutover for ${DOMAIN}"
   log "Run directory (root-only): ${RUN_ROOT}"
+  preflight_free_space
   verify_release_sources
   deploy_torii_base
   validate_torii_base

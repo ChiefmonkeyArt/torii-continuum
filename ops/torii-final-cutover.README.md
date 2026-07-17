@@ -9,7 +9,7 @@ It:
 - verifies the exact annotated release tags + version markers **before** mutating
   live state:
   - `torii-base` **v0.1.4**
-  - `torii-continuum` **v0.2.61-alpha** (this script's own release tag)
+  - `torii-continuum` **v0.2.63-alpha** (this script's own release tag)
   - onboarding preview **v0.1.21-preview**
 - backs up the current Torii base state to a root-only timestamped directory
 - redeploys `torii-base` v0.1.4 via its sanctioned bootstrap
@@ -41,6 +41,25 @@ run. Two structural defenses fix that:
    ```bash
    sudo bash ops/torii-final-cutover.sh
    ```
+
+## v0.2.63-alpha disk-safety hardening (OPS-CUTOVER-5)
+
+Two safeguards make the cutover fail closed on a space-starved host **before** it
+mutates any live state, complementing the v0.2.62 prune:
+
+1. **Preflight free-space gate.** `preflight_free_space()` runs **first** in
+   `main` — before `verify_release_sources` clones anything and before any
+   mutation — and dies if any filesystem the cutover clones into, backs up onto,
+   or `npm`-installs under (`/root`, `/home`, `/opt`, `/var/www`, deduped by
+   mountpoint) has less than `PREFLIGHT_MIN_FREE_MB` (=2048 MiB) free. A starved
+   host now fails up front instead of half-applying the cutover and dying
+   mid-`npm ci` (the live **`ENOSPC`** failure).
+2. **Backup excludes.** The rollback tar now excludes regenerable cache/build
+   artifacts (`node_modules`, `.git`, `.cache`, `.npm`, `dist`, `.vite`) via
+   `BACKUP_EXCLUDES`, so the backup can't itself exhaust the disk it is meant to
+   protect. The excludes are scoped to regenerable artifacts **only** — the tar
+   still captures `/opt/torii/env`, `registry.json` and `root_app.conf`
+   byte-for-byte, so config/state is preserved for rollback.
 
 ## v0.2.62-alpha hotfix (OPS-CUTOVER-4)
 
