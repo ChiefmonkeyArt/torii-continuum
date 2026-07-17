@@ -9,6 +9,7 @@
 
 import { KIND, makeEvent, newId, nowSec } from './schema.js';
 import { seedProjects, seedSessions, seedMilestones, seedTodos, seedFiles, seedMarketTasks, seedRoutstr } from './seed.js';
+import { parseNpub } from '../lib/npub.js';
 
 const STORAGE_KEY = 'continuum.v1';
 
@@ -26,6 +27,7 @@ function emptyState() {
     cards: [],      // events kind 30084 (board cards)
     marketTasks: [],// events kind 30090
     routstr: null,  // event kind 30091
+    members: [],    // events kind 30093 (operator roster; global, not per-project)
   };
 }
 
@@ -57,6 +59,7 @@ export function initStore() {
     // lazily on first board access (see ensureBoard) — no destructive rewrite.
     if (!Array.isArray(state.columns)) state.columns = [];
     if (!Array.isArray(state.cards)) state.cards = [];
+    if (!Array.isArray(state.members)) state.members = [];
     if (!Array.isArray(state.marketTasks) || state.marketTasks.length === 0) {
       state.marketTasks = seedMarketTasks();
     }
@@ -268,6 +271,40 @@ function getColumn(slug, columnId) {
   return state.columns.find(
     (c) => c.content.projectSlug === slug && c.content.id === columnId,
   ) || null;
+}
+
+// Classify a column name into a status bucket. Inverse of board.js's
+// columnForStatus() and shares its regex vocabulary so board placement and
+// dashboard progress agree. Order matters: 'done' and 'doing' are checked
+// before the broad todo/backlog patterns. Unmatched names fall through to
+// 'todo' (the neutral default).
+function bucketForColumnName(name) {
+  const n = String(name || '');
+  if (/done|complete|shipped/i.test(n)) return 'done';
+  if (/doing|progress|active|wip|review/i.test(n)) return 'doing';
+  if (/backlog|icebox|someday/i.test(n)) return 'backlog';
+  if (/todo|to do|to-do|inbox/i.test(n)) return 'todo';
+  return 'todo';
+}
+
+/**
+ * Real kanban progress for a project's board. Pure data — no DOM. Counts cards
+ * per column, folds each column into a status bucket, and derives a completion
+ * percent as done/total. Safe for a project with no board or no cards (all
+ * zeros, percent 0). This is the single source of truth behind the dashboard's
+ * per-project progress.
+ */
+export function boardStatsFor(slug) {
+  ensureBoard(slug);
+  const stats = { total: 0, backlog: 0, todo: 0, doing: 0, done: 0, percent: 0 };
+  for (const col of boardColumnsFor(slug)) {
+    const bucket = bucketForColumnName(col.content.name);
+    const count = cardsFor(slug, col.content.id).length;
+    stats[bucket] += count;
+    stats.total += count;
+  }
+  stats.percent = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
+  return stats;
 }
 
 // Rewrite the `order` field of a column's cards to a dense 0..n-1 sequence,
@@ -486,6 +523,60 @@ export function getRoutstr() { return state.routstr; }
 export function updateRoutstr(patch) {
   state.routstr.content = { ...state.routstr.content, ...patch };
   state.routstr.created_at = nowSec();
+  persist();
+  notify();
+}
+
+// --- Team / operator roster (kind 30093) ---
+//
+// LOCAL-FIRST FOUNDATION. The roster is a local list of npubs the admin has
+// designated as operators. It carries NO authorization weight yet — the agent's
+// requireAdmin is unchanged. Real multi-user auth (agent-side operator
+// allow-list, relay sync, NIP-17 invite/accept) is deferred to TEAMS-2.
+//
+// Members are GLOBAL (workspace-wide), not per-project, so deleteProject does
+// not cascade to them.
+
+const MEMBER_LABEL_MAX = 40;
+
+export function listMembers() {
+  return state.members
+    .slice()
+    .sort((a, b) => a.content.addedAt - b.content.addedAt);
+}
+
+export function addMember({ npub, label } = {}) {
+  // Accept either `npub1…` (Bech32) or a raw 64-hex key; store the canonical
+  // hex so dedupe holds across equivalent input forms.
+  const r = parseNpub(npub);
+  if (!r.ok) throw new Error(r.reason);
+  const hex = r.hex;
+  if (state.members.some((m) => m.content.npub === hex)) {
+    throw new Error('That operator is already on the roster.');
+  }
+  const ev = makeEvent({
+    kind: KIND.TEAM_MEMBER,
+    d: `member:${hex}`,
+    content: {
+      npub: hex,
+      label: cleanText(label, MEMBER_LABEL_MAX),
+      role: 'operator',
+      addedAt: nowSec(),
+      addedBy: 'admin',
+    },
+    tags: [['t', 'continuum-team-member']],
+  });
+  state.members.push(ev);
+  persist();
+  notify();
+  return ev;
+}
+
+export function removeMember(npub) {
+  const hex = String(npub == null ? '' : npub).trim().toLowerCase();
+  const before = state.members.length;
+  state.members = state.members.filter((m) => m.content.npub !== hex);
+  if (state.members.length === before) return;
   persist();
   notify();
 }

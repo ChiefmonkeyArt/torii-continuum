@@ -21,10 +21,12 @@ import {
   updateCard,
   deleteCard,
   moveCard,
+  listMembers,
   BOARD_LIMITS,
 } from '../data/store.js';
 import { navigate } from '../router.js';
-import { setChatContext } from '../chat.js';
+import { setChatContext, compose } from '../chat.js';
+import { buildCardPrompt } from './card-prompt.js';
 import { renderProjectTabs } from './projectHome.js';
 import { timeAgo as _timeAgo } from './util.js';
 import {
@@ -401,6 +403,7 @@ function renderCard(slug, card, columns, colIndex, cardIndex, cardCount) {
       const next = columns[colIndex + 1];
       if (next) { safeMove(slug, c.id, next.content.id); }
     }, colIndex === columns.length - 1),
+    iconBtn('✦', 'Ask Continuum to work on this task', () => askContinuum(slug, card, columns)),
   ]);
 
   const el = h('div', {
@@ -461,6 +464,20 @@ function moveCardBy(slug, cardId, colId, cardIndex, delta) {
   refresh();
 }
 
+// Prefill (never auto-send) a task prompt into the chat dock so an operator can
+// "vibe code" a response with the Continuum agent. The consent boundary is
+// preserved: compose() only fills + expands + focuses the input; the operator
+// reviews the drafted turn and hits Send, because every agent turn spends sats.
+function askContinuum(slug, card, columns) {
+  const p = getProject(slug);
+  const projectName = p ? `${p.content.name} (${slug})` : slug;
+  const col = columns.find((c) => c.content.id === card.content.columnId);
+  const columnName = col ? col.content.name : '';
+  const prompt = buildCardPrompt(card, projectName, columnName);
+  setChatContext({ label: `${p ? p.content.name : slug} · Board`, where: 'project-board:' + slug });
+  compose(prompt);
+}
+
 function isOverdue(dueDate) {
   const today = new Date().toISOString().slice(0, 10);
   return dueDate < today;
@@ -478,6 +495,34 @@ function iconBtn(glyph, label, onClick, disabled = false) {
 
 // --- Modals ---
 
+// Assignee is picked from the operator roster (Team view). We store the
+// human-readable display string (label, else a short npub) in the existing
+// free-text `assignee` field so renderCard's pill stays readable and the card
+// data shape is unchanged. An empty roster degrades to just "Unassigned"; a
+// card whose current assignee predates the roster keeps its value as a
+// selectable option so editing never silently drops it.
+function assigneeDisplay(member) {
+  const c = member.content;
+  return c.label || (c.npub.length > 16 ? `${c.npub.slice(0, 8)}…${c.npub.slice(-6)}` : c.npub);
+}
+
+function buildAssigneeSelect(current) {
+  const select = h('select', {});
+  select.appendChild(h('option', { value: '', text: 'Unassigned' }));
+  const options = new Set();
+  for (const m of listMembers()) {
+    const label = assigneeDisplay(m);
+    if (options.has(label)) continue;
+    options.add(label);
+    select.appendChild(h('option', { value: label, text: label }));
+  }
+  if (current && !options.has(current)) {
+    select.appendChild(h('option', { value: current, text: `${current} (not on roster)` }));
+  }
+  select.value = current || '';
+  return select;
+}
+
 function openCardEditor(slug, columnId, card = null) {
   const editing = !!card;
   const c = card ? card.content : {};
@@ -485,7 +530,7 @@ function openCardEditor(slug, columnId, card = null) {
   const titleInput = h('input', { type: 'text', maxlength: String(BOARD_LIMITS.CARD_TITLE), placeholder: 'Card title', value: c.title || '' });
   const descInput = h('textarea', { rows: 4, maxlength: String(BOARD_LIMITS.CARD_DESCRIPTION), placeholder: 'Description (optional)' });
   descInput.value = c.description || '';
-  const assigneeInput = h('input', { type: 'text', maxlength: String(BOARD_LIMITS.CARD_ASSIGNEE), placeholder: 'Assignee (optional)', value: c.assignee || '' });
+  const assigneeInput = buildAssigneeSelect(c.assignee || '');
   const dueInput = h('input', { type: 'date', value: c.dueDate || '' });
   const errorEl = h('div', { class: 'muted', style: 'color: hsl(var(--destructive)); min-height: 18px;' });
 

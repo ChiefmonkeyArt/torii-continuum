@@ -9,6 +9,74 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.56-alpha — npub: add independent NIP-19 oracle test vectors (cross-validated against nostr-tools)
+
+Test-only release (frontend; `src/lib/npub.test.js` only — **no runtime code changed**, `src/lib/npub.js` untouched; onboarding preview stays **v0.1.20-preview**). Root `package.json` + lockfile bumped `0.2.55-alpha → 0.2.56-alpha`.
+
+**Why.** The hand-rolled Bech32 codec (`parseNpub`/`toNpub`/`shortNpub`) was cross-validated against nostr-tools `nip19` (the de-facto NIP-19 reference) on 131 checks, but the committed suite only asserted a single canonical vector + self round-trips. Two of those known-good real-world vectors are now permanent regression tests, tying the codec to the reference rather than to its own round-trip.
+
+**Change.** New `describe('npub — independent NIP-19 oracle vectors')` block asserting, per vector, `toNpub(hex) === npub`, `parseNpub(npub) === { ok:true, hex }`, and cross-form canonicalization (`parseNpub(npub).hex === parseNpub(hex).hex`). Vectors: fiatjaf `npub180cvv07tjdrrgpa0j7j7tmnymzyc8huy2kl8le9cy49xcrn63edql23cv2` and `npub1xtscya34g58tk0z605fvr788k263gsu6cy9x0mhnm87echycx3ys7gdt7w`.
+
+**Tests.** Root `vitest run` **938/938** (was 932, +6). `src/lib/npub.test.js` 12 → 18.
+
+## v0.2.55-alpha / agent v0.2.50-alpha — FIXUP-1: accept npub1 operator input + scrub error logs + dashboard caption
+
+Reviewer-remediation release on the `feature/continuum-extra-jobs-batch` branch, touching BOTH frontend and agent (new `src/lib/npub.js` + `src/lib/npub.test.js`, `src/data/store.js`, `src/views/team.js`, `src/data/members.test.js`, `src/views/dashboard.js`; new `agent/lib/scrub.mjs` + `agent/test/scrub.test.js`, `agent/index.mjs`). Root `package.json` bumped `0.2.54-alpha → 0.2.55-alpha`; agent `package.json` bumped `0.2.49-alpha → 0.2.50-alpha` (both lockfiles synced). Onboarding preview stays **v0.1.20-preview**.
+
+**FIX A (BLOCKING) — accept Bech32 `npub1…` operator input.** TEAMS-1 validated the operator npub as 64-hex only, so real `npub1…` keys were rejected. New **dependency-free** Bech32 codec `src/lib/npub.js` (`parseNpub`/`toNpub`/`shortNpub`; standard BIP-173 polymod, generator `[0x3b6a57b2,…]`, final XOR 1 — root frontend stays vite+vitest-only): `parseNpub` accepts a checksum-verified `npub1…` OR a raw 64-hex key, returning canonical lowercase hex. `store.js addMember` validates+normalizes via `parseNpub` and stores canonical hex so dedupe holds across equivalent forms; `team.js` uses the shared `shortNpub` and accepts either input form. Tests: `src/lib/npub.test.js` (12, canonical NIP-19 vector) + `members.test.js` +3.
+
+**FIX B — scrub the generic error-handler logging.** `agent/index.mjs`'s `setErrorHandler` logged the full `err` (stack/secret-bearing). Now logs `{url, code, name, msg: scrub(err.message)}` only. New `agent/lib/scrub.mjs` redacts ≥16-hex runs + `nostr+?walletconnect://…` URIs then truncates to 200 chars — its own module so it's testable without booting Fastify. <500 pass-through + sanitized 5xx unchanged. Test: `agent/test/scrub.test.js` (6).
+
+**FIX C — document a dashboard progress limitation.** `dashboard.js` per-project progress gains a muted caption ("Counts local board cards; imported read-only cards not included.") — imported read-only source-sync cards aren't persisted so `boardStatsFor` can't count them; folding them in is deferred as **KANBAN-PROG-2** (new not-started TODO).
+
+**Tests.** Root `vitest run` **913/913** (was 898, +15). Agent `node --test` **178/178** (+6). `npm run build` clean (version stamp 0.2.55-alpha). Code + local commit only — not pushed, not a PR.
+
+## v0.2.54-alpha — CARD-AGENT-1: Kanban card → agent "vibe code" action (prefill-only)
+
+Frontend-only release (`src/chat.js` + `src/views/board.js` + new `src/views/card-prompt.js` + new `src/views/card-prompt.test.js`; **no agent code changed, no agent version bump**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.53-alpha → 0.2.54-alpha` (agent stays at `0.2.49-alpha`).
+
+**Ask (job #1 tail).** *"The team can get tasks and vibe code their responses."*
+
+**Change.** Each Kanban card gains one new action button (glyph `✦`, aria-label "Ask Continuum to work on this task") in the existing `.card-moves` row. Clicking it drafts a bounded task prompt from the card and **prefills it into the chat dock — it does not send it.** A new chat export `compose(text)` (`src/chat.js`) sets `mode='page'`, re-derives the active thread via `syncActiveThread()` (so the turn lands in the project board thread), fills + autosizes the input, expands + focuses the dock, and re-renders the context chip — it never calls `send()` and no-ops if the dock isn't mounted. In `board.js`, the new iconBtn calls `askContinuum(slug, card, columns)`, which derives the project name (+ slug) and column name, re-asserts the board chat context, and calls `compose(prompt)`; the button is always enabled (works in mock mode too). The pure DOM-free `buildCardPrompt(card, projectName, columnName)` (`src/views/card-prompt.js`) composes `Work on this task.\nTitle: …` + optional `Details: …` (omitted when empty) + `Project: …` + `Status: …`, trims each field, and caps the total at ~600 chars.
+
+**Consent boundary (critical).** The agent spends sats per request, so `compose()` only prefills/expands/focuses — the operator reviews the drafted turn and explicitly hits Send. A consent gate on `/api/chat` itself and the agent-side "task → pending draft" skill (vibe-coded output landing in `agent/pending/` for human approve + sign/publish) are deferred to **CARD-AGENT-2** (new not-started TODO); no `agent/` code changed here.
+
+**Tests.** New `src/views/card-prompt.test.js` (6 cases: full shape; Details omitted on empty/missing description; each field trimmed; ~600-char cap; bare content object). Root `vitest run` **898/898** (was 892, +6). `npm run build` clean. Code + local commit only — not pushed, not a PR.
+
+## v0.2.53-alpha — TEAMS-1: operator roster + Kanban card attribution (local-first foundation)
+
+Frontend-only release (`src/data/schema.js` + `src/data/store.js` + new `src/views/team.js` + `src/main.js` + `src/shell.js` + `src/views/board.js` + new `src/data/members.test.js`; **no agent code changed, no agent version bump**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.52-alpha → 0.2.53-alpha` (agent stays at `0.2.49-alpha`).
+
+**Ask (job #1).** *"Lets open up teams… the admin can invite other npubs to an editors level… maybe we should call them operators… the team can all add their own notes and tasks… and these can be entered on the kanban and moved around."*
+
+**Scope decision.** LOCAL-FIRST FOUNDATION only. The roster is a local list of operator npubs the admin has designated; it carries **no authorization weight** and the agent's `requireAdmin` is untouched. Real server-side operator authorization + relay multi-user sync are explicitly deferred to TEAMS-2.
+
+**Change.** New addressable kind `KIND.TEAM_MEMBER = 30093` (`d = member:<npub>`). `emptyState()` gains a **global** `members: []` (workspace-wide, so `deleteProject` does NOT cascade to it), with defensive `initStore()` coercion. Three exported store helpers mirror `addTodo`/`addCard`: `listMembers()` (sorted by `addedAt`), `addMember({npub,label})` (validates a 64-hex npub, lowercases + trims, rejects duplicates, clamps label to 40 via `cleanText`, role `'operator'`, `addedBy 'admin'`), and `removeMember(npub)` (case-insensitive, no-op on unknown). A new Team view (`src/views/team.js`, route `/team`, nav item after Dashboard) lets the admin add operator npubs (with optional labels) and remove them; every row renders via `h()`/`textContent` only and re-renders in place through a `subscribe()` handler. On the Kanban, `openCardEditor`'s free-text assignee input becomes a `<select>` populated from the roster ("Unassigned" + operator display strings), reusing the existing `assignee` field unchanged; an empty roster degrades to just "Unassigned" and a pre-roster assignee is preserved as a "(not on roster)" option.
+
+**Tests.** New `src/data/members.test.js` (17 cases: npub validate/lowercase/trim, empty/short/non-hex reject, duplicate reject, label clamp, default empty label, `listMembers` sort + copy, `removeMember` variants, persistence, legacy coercion, no `deleteProject` cascade). Root `vitest run` **892/892** (was 875, +17). `npm run build` clean. Code + local commit only — not pushed, not a PR.
+
+## v0.2.52-alpha — CHAT-CONTEXT-1: project-scoped + page-aware chat threads
+
+Frontend-only release (`src/chat.js` + new `src/chat-threads.js` + `src/chat-threads.test.js` + `src/styles/chat.css`; **no agent code changed, no agent version bump**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.51-alpha → 0.2.52-alpha` (agent stays at `0.2.49-alpha`).
+
+**Ask (jobs #5 + #6).** #5 *"The chat should be page aware… a side conversation like, whilst you're doing that job on continuum, can you find me the best things to do in Costa Rica."* #6 *"The chat in the Projects area however are specific to that project… these apps are all interoperable."*
+
+**Change.** The chat dock's single global message array is replaced by a per-thread map keyed by context+mode. A new pure DOM-free module `src/chat-threads.js` exports `threadKeyFor(ctx, mode)`: general mode → one shared `'general'` thread; page mode inside a project → `'project:<slug>'` (all pages of that project share the thread); page mode elsewhere → `'page:<route>'` (per page). Slug comes from an explicit router `projectSlug` else parsed from the view `where` (`project:<slug>`/`project-board:<slug>`; the `projects` index has no colon so it is a page thread). A small accessible `<button class="chat-mode">` next to the context chip flips "This page" (default) ↔ "General" (`aria-pressed` + dynamic `aria-label`; chip reads `context · general` in general mode). The context object sent to the agent is enriched with `label`, `where`, `mode`, `route`, `pageType` (via `pageTypeFor`), `projectSlug`, and best-effort `columnId`/`cardId` (null); the agent ignores unknown fields and mock replies still work. Threads persist to `localStorage['continuum.chat.threads']`, each bounded to `THREAD_CAP=100` (oldest trimmed via `trimThread`), loaded defensively (`sanitizeThreads`, try/catch → in-memory only on failure). `send()` pins the turn to `activeKey` before the await so a late AI reply lands in the originating thread. User/AI text is still rendered only via `textContent`. True in-app agent editing is **not in scope** — a follow-up TODO is recorded.
+
+**Tests.** New `src/chat-threads.test.js` (19 cases: thread-key derivation across project board/home/dashboard/marketplace/projects-index/general/missing-route, slug parsing, page-type mapping, trim cap, sanitize drop/cap). Root `vitest run` **875/875** (was 856, +19). Code + local commit only — not pushed, not a PR.
+
+## v0.2.51-alpha — KANBAN-PROG-1: dashboard progress from real kanban data
+
+Frontend-only release (`src/data/store.js` + `src/views/dashboard.js` + `src/data/board.test.js`; **no agent code changed**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.50-alpha → 0.2.51-alpha` (agent stays at `0.2.49-alpha`).
+
+**Ask (job #2).** *"Connect the progress to the data on the Kanban."*
+
+**Root cause.** The dashboard's per-project progress and the top "Overall progress" card were both derived from milestone status (`milestonesFor`), which is mock-ish seed data disconnected from what the operator actually manages on the Kanban boards.
+
+**Change.** New pure store helper `boardStatsFor(slug)` (exported) returns `{ total, backlog, todo, doing, done, percent }` by counting cards per column and folding each column name into a status bucket via `bucketForColumnName()` — the inverse of `board.js`'s `columnForStatus()`, sharing its regex vocabulary (done|complete|shipped → done; doing|progress|active|wip|review → doing; backlog|icebox|someday → backlog; todo|to do|to-do|inbox → todo; default → todo) so board placement and dashboard progress agree. `percent` = done/total rounded, 0 when total is 0; safe for a project with no board/cards. The dashboard's "Overall progress" card now aggregates board stats across all projects (done/total cards), and the "By project" section shows per-project total, a Done/Doing/Todo/Backlog breakdown line, and a done/total progress bar. The per-project section is now re-rendered in place via a `subscribe()` handler (cleaned up alongside the provider poll on leaving `#/dashboard`) so adding/moving a card reflects immediately.
+
+**Tests.** `src/data/board.test.js` +3: default Todo/Doing/Done buckets + percent; empty board → all zeros/percent 0; custom names (Review → doing, Icebox → backlog). Root suite 856 pass.
+
 ## v0.2.51-alpha — ONBOARD-UI-1: clearer signer-extension login copy + stronger step wayfinding
 
 Onboarding-preview UI release (**no app/agent runtime code changed** — the change is confined to the vendored design-review mockup under `preview-assets/`, which `vite build` never bundles). Closes GitHub issue **#57**. Root + agent `package.json` bumped `0.2.50-alpha → 0.2.51-alpha`; onboarding preview advanced to **v0.1.21-preview** (`preview-assets/onboarding-v0.1.21/`, cut as a fresh self-contained version dir from v0.1.20 per the repo convention; v0.1.20 stays frozen).
@@ -25,6 +93,19 @@ Onboarding-preview UI release (**no app/agent runtime code changed** — the cha
 **Accessibility.** WCAG: completed numeral on bronze **5.78:1** (AA small text), current numeral on amber **10.75:1**, current/focus ring vs bar **14.15:1** (≥3 UI); keyboard focus ring added; reduced-motion honoured.
 
 **Tests / verification (Node 20.x).** New v0.1.21 tests assert the new button copy (+ absence of the old string), the browser-extension/Plebeian-Signer step-1 context, the new signer-not-found message + NIP-07 mention, the step-dot wayfinding states, and the README version header. Root `vitest run` **1032/1032** (19 files, +160), `npm run build` clean (0.2.51-alpha, `dist/` free of `preview-assets/`). No headed browser in sandbox → static QA artifact (desktop + mobile step strips, all states) + programmatic WCAG audit. Sole attribution Chiefmonkey. Code + PR only — **not merged, tagged, or deployed.**
+
+## v0.2.50-alpha — LAYOUT-1: constrain chat dock to the main column + full-height sidebar
+
+Frontend-only release (CSS only — `src/styles/layout.css` + `src/styles/chat.css`; **no JS/shell/agent code changed**; onboarding preview stays **v0.1.20-preview**). Root `package.json` bumped `0.2.48-alpha → 0.2.50-alpha` (agent stays at `0.2.49-alpha` from the NWC-ERR-1 slice on this batch branch; root lockfile top-level `version` left as-is per prior convention).
+
+**Ask (job #4).** *"Make the chat bar at the bottom stay within the page content… and the left sidebar should extend to the bottom of the page 100%."*
+
+**Root cause.** `#app` is a CSS grid (`grid-template-columns: var(--sidebar-w) 1fr; grid-template-rows: 1fr auto`) whose areas were `"sidebar main" / "chat chat"` — so the chat dock spanned **both** columns at the bottom, sitting under the sidebar too, and the sidebar stopped at the top of that chat row instead of running full height.
+
+**Fix.** Changed the grid areas to `"sidebar main" / "sidebar chat"`: the sidebar now spans **both** rows (full height to the very bottom), and the chat dock occupies only the second column under `main`, so it's constrained to the main content width. Rows stay `1fr auto` (the `auto` row sizes to the chat dock's collapsed `--chat-h` / expanded `46vh`; `main` keeps `overflow-y: auto` and takes the `1fr` remainder, so there's no page overflow or double scrollbar). Aligned the chat dock's horizontal padding with the main column (`12px 16px → 12px 32px`, matching main's `32px` side padding) so the input row's edges line up with the content; on mobile (`max-width: 900px`, grid `68px 1fr`) the dock padding drops to `16px` to match the narrower mobile main padding. The chat dock remains a direct child of `#app` (`mountChat(root)` in `src/main.js`), so `grid-area: chat` still applies — no shell restructuring. `.sidebar { overflow-y: auto }` and `.sidebar-footer { margin-top: auto }` continue to scroll internally and pin the footer to the bottom of the now-full-height sidebar. Both light and dark themes unaffected (structural change only).
+
+**Tests.** No new tests (pure CSS). Full root suite green: `vitest run` **853/853** (incl. the `dist/`-building `no-external-cdn` + `nginx-continuum-routing` checks).
+
 
 ## v0.2.50-alpha — OPS-DEPLOY-2: safe unattended deployment (server-side pull)
 
@@ -44,6 +125,18 @@ Ops-only release (**no app/agent runtime code changed** — only new files under
 
 **Tests / verification.** New `ops/test/deploy-unattended.test.sh` **55/55** (tag grammar incl. injection strings, version gate, allowlist fail-closed, version extraction, localhost/vault-free inventory, prune-keeps-live, wrapper fail-closed guards, oneshot/timer wiring, scoped-sudo/no-`NOPASSWD: ALL`, bootstrap modes/visudo/locked-principal/host-key-pin/no-clobber). Existing `deploy-restart` **25/25**, root `npx vitest run` **872/872**, `npm run build` clean (0.2.50-alpha). No hostnames/devices/secrets. Sole attribution Chiefmonkey. Code + PR only — not merged/tagged/deployed.
 
+## v0.2.49-alpha — NWC-ERR-1: harden NWC onboarding Step 2 error paths
+
+Agent-only release (onboarding preview stays **v0.1.20-preview**; only `agent/` changed). Agent `package.json` + lockfile bumped `0.2.48-alpha → 0.2.49-alpha`; root untouched.
+
+**Root cause.** Step 2 of onboarding (connecting an NWC wallet) surfaced a raw "Internal Server Error" to the operator. `walletConnect()` / `walletTest()` in `agent/core/onboarding.mjs` called `client.getInfo()` inside a `try { … } finally { close() }` with **no catch**. The live NIP-47 path can *throw* (relay unreachable, nip04 encrypt/decrypt failure, JSON parse) rather than returning `{ ok:false }`; the uncaught exception propagated out of the thin Fastify route adapter, and with no app-level error handler Fastify answered a bare `500 "Internal Server Error"`.
+
+**Fix.**
+- `agent/core/onboarding.mjs`: wrapped `getInfo()` in `walletConnect()` and `walletTest()` (and `payInvoice()` in `routstrPay()`) with `try/catch`, keeping the `finally { close() }`. A throw now folds into the existing sanitized `502 { ok:false, error:'wallet did not respond to get_info' }` shape so the frontend treats it identically to a non-throwing failure. A new `sanitizeReason()` helper logs a short, bounded reason with any long hex run (secret/pubkey) redacted — the URI/secret never enters a log line or response.
+- `agent/index.mjs`: added an app-level `app.setErrorHandler` — defense in depth. Client errors (`statusCode < 500`, e.g. Fastify validation/empty-body 400s) pass through unchanged; any 5xx/unexpected throw is logged in full server-side and answered with a sanitized JSON `500 { ok:false, error:'internal error' }` (no stack, no message, no secret). Structured `{code,body}` onboarding responses, auth 401/403, and rate-limit 429s are all sent via `reply.code().send()` / the rate-limit `errorResponseBuilder`, so they never reach the handler.
+
+**Tests.** Extended `agent/test/onboarding.test.js`: a throwing `getInfo` in `walletConnect()` and `walletTest()` each return 502 (not a bare 500) with `close()` still called; a throwing `payInvoice` in `routstrPay()` returns 502 with `close()` still called; and a secret-discipline test proves the URI/secret never appears in the response body or any log line even when the thrown error message embeds them. Full agent suite: **172 pass / 0 fail**.
+
 ## v0.2.49-alpha — CONT-LIVE-UI-1: surface live provider/wallet/kanban data in the UI
 
 Frontend-only release (onboarding preview stays **v0.1.20-preview**; **no agent runtime code changed** — only `src/views/{dashboard,routstr,board}.js`, three new vitest files, docs, and the version stamps). Closes GitHub issue **#52**. Root + agent `package.json` bumped `0.2.48-alpha → 0.2.49-alpha` for the health-gate version invariant.
@@ -61,6 +154,7 @@ Frontend-only release (onboarding preview stays **v0.1.20-preview**; **no agent 
 **Note on "expected blank" vs bug.** The dashboard wallet card already states `disabled`/`unreachable`/`degraded` honestly for an unconfigured/missing wallet. The Routstr hero previously rendered `—` for a *configured* wallet purely because of the field bug; with the fix a funded-but-empty or freshly-configured wallet now shows an honest `0 sats` (`/api/wallet/balance` sums to 0 across mints) rather than an em dash. Requirement to see a non-zero balance: one or more `cashu.mints` configured on the agent AND proofs redeemed via top-up (`/api/wallet/receive`).
 
 **Tests.** `src/views/routstr.test.js` (8), `src/views/board-counts.test.js` (7), `src/views/dashboard-structure.test.js` (4). Verification (Node 20.x): root `npx vitest run` **872/872** (18 files, +19), agent `node --test` **168/168** (unchanged), `npm run build` clean (0.2.49-alpha), `npm audit --omit=dev` root prod **0** / agent prod **0**; root full audit **5** dev-only (vite/vitest/esbuild). Sole attribution Chiefmonkey. Code + PR only — not merged/tagged/deployed.
+
 
 ## v0.2.48-alpha — OPS-DEPLOY-1: restart the promoted agent + verify the deployed version
 

@@ -176,6 +176,87 @@ test('walletDisconnect removes the secret', async () => {
   }
 });
 
+// ── NWC-ERR-1: a throwing get_info must not escape as a bare 500 ────────────
+
+// A fake client whose getInfo() THROWS (as a live relay/encrypt failure can),
+// with a close() spy so we can assert cleanup still runs.
+function throwingGetInfoConnect(closeSpy, message = 'boom') {
+  return async () => ({
+    async getInfo() { throw new Error(message); },
+    async payInvoice() { return { ok: true, preimage: 'deadbeef' }; },
+    close() { if (closeSpy) closeSpy.called = true; },
+  });
+}
+
+test('walletConnect: a throwing get_info returns 502 (not a bare 500) and still closes', async () => {
+  const dir = tmp();
+  try {
+    const closeSpy = { called: false };
+    const { onboarding } = build(dir, { connectNwc: throwingGetInfoConnect(closeSpy) });
+    let r;
+    await assert.doesNotReject(async () => { r = await onboarding.walletConnect({ nwcUri: NWC_URI }); });
+    assert.equal(r.code, 502);
+    assert.equal(r.body.ok, false);
+    assert.equal(r.body.error, 'wallet did not respond to get_info');
+    assert.equal(closeSpy.called, true, 'client.close() must still run in finally');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('walletTest: a throwing get_info returns 502 (not a bare 500) and still closes', async () => {
+  const dir = tmp();
+  try {
+    const closeSpy = { called: false };
+    // Connect with a healthy client first so a wallet is stored, then swap in a
+    // throwing client for the test() re-probe.
+    const { secretStore } = build(dir);
+    await build(dir).onboarding.walletConnect({ nwcUri: NWC_URI });
+    const onboarding = createOnboarding({
+      secretStore,
+      routstrProvider: fakeProvider(),
+      connectNwc: throwingGetInfoConnect(closeSpy),
+      log: { info() {}, warn() {}, error() {} },
+    });
+    let r;
+    await assert.doesNotReject(async () => { r = await onboarding.walletTest(); });
+    assert.equal(r.code, 502);
+    assert.equal(r.body.ok, false);
+    assert.equal(r.body.error, 'wallet did not respond to get_info');
+    assert.equal(closeSpy.called, true, 'client.close() must still run in finally');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('NWC-ERR-1: a throwing get_info never leaks the URI/secret in body or logs', async () => {
+  const dir = tmp();
+  try {
+    const logs = [];
+    const log = { info(m) { logs.push(String(m)); }, warn(m) { logs.push(String(m)); }, error(m) { logs.push(String(m)); } };
+    const secretStore = createSecretStore({ session_secret: SESSION }, { dir });
+    // Error message embeds the raw secret to prove sanitizeReason redacts it.
+    const onboarding = createOnboarding({
+      secretStore,
+      routstrProvider: fakeProvider(),
+      connectNwc: async () => ({
+        async getInfo() { throw new Error(`relay blew up with secret=${SK} uri=${NWC_URI}`); },
+        close() {},
+      }),
+      log,
+    });
+    const r = await onboarding.walletConnect({ nwcUri: NWC_URI });
+    assert.equal(r.code, 502);
+    const body = JSON.stringify(r.body);
+    assert.ok(!body.includes(SK) && !body.includes(NWC_URI), 'secret/URI must never cross the API boundary');
+    const allLogs = logs.join('\n');
+    assert.ok(!allLogs.includes(SK), 'secret must never reach a log line');
+    assert.ok(!allLogs.includes(WP), 'wallet pubkey must never reach a log line');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── Routstr ─────────────────────────────────────────────────────────────
 
 test('routstrKey verifies + stores + returns redacted, never the full key', async () => {
@@ -362,6 +443,28 @@ test('routstrPay returns a RECOVERABLE state when the key is not yet mintable', 
     assert.equal(r.body.key_stored, false);
     assert.equal(r.body.recoverable, true);
     assert.equal(r.body.bolt11, 'lnbc_fake');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('routstrPay: a throwing payInvoice returns 502 (not a bare 500) and still closes', async () => {
+  const dir = tmp();
+  try {
+    const closeSpy = { called: false };
+    const connectNwc = async () => ({
+      async getInfo() { return { ok: true, ...buildCapabilityMatrix(['pay_invoice', 'get_info']) }; },
+      async payInvoice() { throw new Error('relay dropped mid-pay'); },
+      close() { closeSpy.called = true; },
+    });
+    const { onboarding } = build(dir, { connectNwc });
+    await onboarding.walletConnect({ nwcUri: NWC_URI });
+    await onboarding.routstrQuote({ amountSats: 100 });
+    let r;
+    await assert.doesNotReject(async () => { r = await onboarding.routstrPay({ confirm: true }); });
+    assert.equal(r.code, 502);
+    assert.equal(r.body.ok, false);
+    assert.equal(closeSpy.called, true, 'client.close() must still run in finally');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

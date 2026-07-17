@@ -28,6 +28,7 @@ import { createOllama } from './core/ollama.mjs';
 import { createModelRouter } from './core/model-router.mjs';
 import { createChatSkill } from './skills/chat.mjs';
 import { createMemoryCache, validateCiphertext, ciphertextFilename, fingerprintCiphertext } from './lib/crypto.mjs';
+import { scrub } from './lib/scrub.mjs';
 import { createMemoryLoader } from './lib/memory.mjs';
 import { createReflector } from './lib/reflect.mjs';
 import { KINDS, dirForKind } from './lib/events.mjs';
@@ -103,6 +104,32 @@ if (rateLimitEnabled) {
 } else {
   app.log.warn({ evt: 'auth.ratelimit.disabled', note: 'cfg.rate_limit.enabled=false' });
 }
+
+// App-level error handler (v0.2.49-alpha, NWC-ERR-1) — defense in depth so NO
+// uncaught throw from a route handler ever surfaces as a bare "Internal Server
+// Error" string or leaks a stack/secret to the client. The onboarding routes
+// return structured { code, body } via reply.code().send() (NOT thrown), so
+// those responses never reach here; likewise auth 401/403 and the rate-limit
+// 429 (which @fastify/rate-limit builds via its own errorResponseBuilder). Only
+// genuinely-thrown errors land here:
+//   • client errors (Fastify validation / empty-body 400s, etc. — statusCode
+//     < 500) are passed through unchanged so their shape is preserved;
+//   • anything 5xx / unexpected is logged in full server-side and answered with
+//     a sanitized JSON 500 that carries no message, stack, or secret material.
+app.setErrorHandler((err, req, reply) => {
+  const status = err.statusCode || 500;
+  if (status < 500) {
+    reply.send(err);
+    return;
+  }
+  app.log.error({
+    url: req.url,
+    code: err.statusCode || 500,
+    name: err.name || 'Error',
+    msg: scrub(err && err.message),
+  }, 'unhandled route error');
+  reply.code(500).send({ ok: false, error: 'internal error' });
+});
 
 // First-touch admin bootstrap (v0.2.26-alpha): the persister is injected so
 // auth stays filesystem-agnostic + unit-testable. It writes the claimed npub

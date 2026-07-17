@@ -8,7 +8,7 @@
   grid-template-rows: 1fr auto;
   grid-template-areas:
     "sidebar main"
-    "chat    chat";
+    "sidebar chat";
   height: 100vh;
   width: 100vw;
 }
@@ -247,5 +247,7 @@
   .brand-name, .brand-sub, .nav-item span:not(.nav-badge), .nav-section,
   .sidebar-footer .footer-note { display: none; }
   .main { padding: 16px; }
+  /* Keep the chat dock's edges aligned with the narrower mobile main padding. */
+  .chat-dock { padding-left: 16px; padding-right: 16px; }
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
 }
