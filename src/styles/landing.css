@@ -372,6 +372,14 @@
 }
 .sidebar-footer .footer-note { flex: 0 1 auto; }
 
+.sidebar-version {
+  font-family: var(--font-mono, var(--font-sans));
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: hsl(var(--muted-foreground));
+  margin-top: 8px;
+}
+
 .sidebar-footer-row {
   display: flex;
   gap: 6px;

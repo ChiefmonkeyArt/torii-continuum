@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.57-alpha — ui: build-time version stamp in sidebar footer + login modal
+
+Frontend-only release (`src/shell.js` + `src/styles/landing.css` + `vitest.config.js` + new `src/version-stamp.test.js`; **no agent code changed**; onboarding preview stays **v0.1.20-preview**). Root `package.json` + lockfile bumped `0.2.56-alpha → 0.2.57-alpha`.
+
+**Why.** The UI showed no version anywhere in the shell, so an operator couldn't tell which build was deployed. The Vite build already baked `__APP_VERSION__` (read from `package.json`) into the bundle — the login card + landing eyebrow used it, but the always-visible sidebar did not.
+
+**Change.** The sidebar footer now renders a small muted `v0.2.57-alpha` stamp beneath the "Local-first…" blurb, visible to both logged-in and demo/unauthenticated users. New exported `appVersion()` helper in `src/shell.js` returns `v${__APP_VERSION__}` (falls back to `v—` outside Vite); `renderSidebar()` fills a `data-app-version` placeholder via **textContent** (never innerHTML, even though the constant is a trusted build value). New `.sidebar-version` style reuses existing muted tokens (no new design language — the login redesign is a separate later PR). The login modal already surfaces the version in its eyebrow; unchanged.
+
+**Tests.** `vitest.config.js` now mirrors the Vite `__APP_VERSION__` define so tests exercise the real stamp. New `src/version-stamp.test.js` (5): `appVersion()` equals `v${pkg.version}` + shape; sidebar placeholder + textContent wiring; login eyebrow version. Root `vitest run` **1103/1103** (was 1098, +5). `npm run build` clean; `dist/assets/*.js` contains `0.2.57-alpha`.
+
 ## v0.2.56-alpha — npub: add independent NIP-19 oracle test vectors (cross-validated against nostr-tools)
 
 Test-only release (frontend; `src/lib/npub.test.js` only — **no runtime code changed**, `src/lib/npub.js` untouched; onboarding preview stays **v0.1.20-preview**). Root `package.json` + lockfile bumped `0.2.55-alpha → 0.2.56-alpha`.

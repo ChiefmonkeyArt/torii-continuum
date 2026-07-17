@@ -1,6 +1,6 @@
 # Continuum — Session Handover
 
-**Current version:** v0.2.56-alpha (npub-VECTOR — test-only; adds two independent NIP-19 npub↔hex oracle vectors to `src/lib/npub.test.js`, cross-validated against nostr-tools `nip19`; root package.json bumped `0.2.55 → 0.2.56`; no runtime code changed; onboarding preview v0.1.20-preview — unchanged)
+**Current version:** v0.2.57-alpha (VERSION-STAMP — frontend-only; build-time `__APP_VERSION__` version stamp now shown in the sidebar footer (logged-in + demo) and login modal, via textContent; root package.json bumped `0.2.56 → 0.2.57`; no agent runtime code changed; onboarding preview v0.1.20-preview — unchanged)
 **Currently deployed server version:** v0.2.29-alpha (deployed to the SHC VPS on a Node 22.23.1 host). **v0.2.30-alpha through v0.2.41-alpha are code+PR only. v0.2.42-alpha was deployed manually to the live box (cutover succeeded, funded state/admin preserved); v0.2.43-alpha through v0.2.55-alpha are code+PR only — not yet deployed.**
 
 Paste this whole block at the start of a new Perplexity Computer session to resume work seamlessly.

@@ -36,6 +36,13 @@ export function mountShell(root) {
 
 export function mainContent() { return mainEl; }
 
+// Build-time version string baked in by Vite (`define: __APP_VERSION__`).
+// Returns e.g. "v0.2.57-alpha", or "v—" when the constant is absent (running
+// outside Vite's pipeline, e.g. a bare unit test).
+export function appVersion() {
+  return `v${typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '—'}`;
+}
+
 export function renderSidebar() {
   const projectCount = listProjects().length;
   const active = getActiveNav();
@@ -72,6 +79,7 @@ export function renderSidebar() {
       <div class="footer-note">
         <b>Local-first.</b> Continuum stores your projects as nostr-shaped events — portable, signable, yours.
       </div>
+      <div class="sidebar-version" data-app-version></div>
       <div class="sidebar-footer-row">
         <button class="session-btn ${isSessionLive() ? 'logged-in' : ''}" data-session-toggle title="${isSessionLive() ? 'Sign out' : 'Sign in with Nostr'}">
           <span class="session-icon">${isSessionLive() ? iconLogout() : iconKey()}</span>
@@ -81,6 +89,12 @@ export function renderSidebar() {
       </div>
     </div>
   `;
+  // Build-time version stamp so every deploy self-identifies. Rendered via
+  // textContent (never innerHTML) even though __APP_VERSION__ is a trusted
+  // build constant. Visible to logged-in and demo/unauthenticated users alike.
+  const versionEl = sidebarEl.querySelector('[data-app-version]');
+  if (versionEl) versionEl.textContent = appVersion();
+
   const toggle = sidebarEl.querySelector('[data-theme-toggle]');
   if (toggle) toggle.addEventListener('click', (e) => { e.stopPropagation(); toggleTheme(); renderSidebar(); });
   const sessionBtn = sidebarEl.querySelector('[data-session-toggle]');
