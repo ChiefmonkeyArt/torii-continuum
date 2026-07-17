@@ -9,7 +9,7 @@ It:
 - verifies the exact annotated release tags + version markers **before** mutating
   live state:
   - `torii-base` **v0.1.4**
-  - `torii-continuum` **v0.2.60-alpha** (this script's own release tag)
+  - `torii-continuum` **v0.2.61-alpha** (this script's own release tag)
   - onboarding preview **v0.1.21-preview**
 - backs up the current Torii base state to a root-only timestamped directory
 - redeploys `torii-base` v0.1.4 via its sanctioned bootstrap
@@ -42,7 +42,7 @@ run. Two structural defenses fix that:
    sudo bash ops/torii-final-cutover.sh
    ```
 
-## v0.2.60-alpha hotfix (OPS-CUTOVER-3)
+## v0.2.61-alpha hotfix (OPS-CUTOVER-3)
 
 A live v0.2.59-alpha run got past the torii-base phase and then the Continuum
 unattended converge failed at the **first role task** with
@@ -109,7 +109,7 @@ find /opt/torii/launcher -type f -exec chmod 0644 {} +
 ```
 
 which is exactly what `enforce_public_static_modes` now performs automatically.
-Re-running this v0.2.60-alpha cutover from the verified clone is idempotent for
+Re-running this v0.2.61-alpha cutover from the verified clone is idempotent for
 the base redeploy and proceeds through the Continuum and preview phases.
 
 ## Run it (from a verified clone, one sudo prompt)
@@ -117,9 +117,9 @@ the base redeploy and proceeds through the Continuum and preview phases.
 ```bash
 cd /tmp
 rm -rf torii-continuum
-git clone --depth 1 --branch v0.2.60-alpha https://github.com/ChiefmonkeyArt/torii-continuum.git
+git clone --depth 1 --branch v0.2.61-alpha https://github.com/ChiefmonkeyArt/torii-continuum.git
 cd torii-continuum
-[ "$(git cat-file -t v0.2.60-alpha)" = tag ] || { echo "not an annotated tag"; exit 1; }
+[ "$(git cat-file -t v0.2.61-alpha)" = tag ] || { echo "not an annotated tag"; exit 1; }
 sudo bash ops/torii-final-cutover.sh
 ```
 
@@ -197,7 +197,7 @@ v0.2.59-alpha hotfix adds functional replays: launcher modes forced to
 cleanup, and a `die`-after-mutation harness proving the `EXIT`-trap chokepoint
 rolls back (with the recursion guard), plus static asserts that mode widening
 never reaches `/opt/torii/env`, `registry.json` or `root_app.conf`. The
-v0.2.60-alpha hotfix adds asserts that the cutover bootstraps with
+v0.2.61-alpha hotfix adds asserts that the cutover bootstraps with
 `--no-enable-timer` and enables the deploy timer **only after** the converge +
 `write_report` (exactly one timer-enable call, never before the first converge).
 

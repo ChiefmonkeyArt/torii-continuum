@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Torii Continuum — unattended deploy wrapper (OPS-CUTOVER-3, v0.2.60-alpha).
+# Torii Continuum — unattended deploy wrapper (OPS-CUTOVER-3, v0.2.61-alpha).
 #
 # WHY THIS EXISTS
 # ---------------
@@ -17,7 +17,7 @@
 # the funded Routstr key byte-for-byte (the role detects `existing-ansible` and
 # never rotates secrets). No secret is read, written, or logged here.
 #
-# OPS-CUTOVER-3 (v0.2.60-alpha) — ROLE-VAR RESOLUTION FIX
+# OPS-CUTOVER-3 (v0.2.61-alpha) — ROLE-VAR RESOLUTION FIX
 # ------------------------------------------------------
 # A live v0.2.59-alpha unattended run failed at the FIRST role task with
 # `continuum_user is undefined`. Root cause: manual installs copy

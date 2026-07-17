@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Hermetic tests for the in-repo cutover operator script (OPS-CUTOVER-3, v0.2.60-alpha).
+# Hermetic tests for the in-repo cutover operator script (OPS-CUTOVER-3, v0.2.61-alpha).
 #
 # No real deploy, no network, no root. Concerns:
 #   1. Anti-partial-delivery — the whole body is a single brace group, so a
@@ -111,8 +111,8 @@ printf '%s' "$src_out" | grep -qiF 'do not source' \
 # ── 3. Pinned annotated tags + version markers ───────────────────────────────
 grep -qF 'BASE_TAG="v0.1.4"' "$CUTOVER"                 && ok "pins torii-base v0.1.4"             || bad "torii-base tag not pinned"
 grep -qF 'BASE_VERSION="0.1.4"' "$CUTOVER"              && ok "pins torii-base VERSION 0.1.4"      || bad "torii-base version not pinned"
-grep -qF 'CONTINUUM_TAG="v0.2.60-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.60-alpha" || bad "continuum tag not pinned to v0.2.60-alpha"
-grep -qF 'CONTINUUM_VERSION="0.2.60-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.60-alpha" || bad "continuum version not pinned"
+grep -qF 'CONTINUUM_TAG="v0.2.61-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.61-alpha" || bad "continuum tag not pinned to v0.2.61-alpha"
+grep -qF 'CONTINUUM_VERSION="0.2.61-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.61-alpha" || bad "continuum version not pinned"
 grep -qF 'PREVIEW_VERSION="0.1.21-preview"' "$CUTOVER"  && ok "pins onboarding preview 0.1.21-preview" || bad "preview version not pinned"
 grep -qF 'PREVIEW_CTA="Sign in with browser extension"' "$CUTOVER" && ok "pins exact preview CTA text" || bad "preview CTA text not pinned"
 

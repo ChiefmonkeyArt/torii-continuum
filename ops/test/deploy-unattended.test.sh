@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Hermetic tests for the unattended deploy wrapper (OPS-CUTOVER-3, v0.2.60-alpha).
+# Hermetic tests for the unattended deploy wrapper (OPS-CUTOVER-3, v0.2.61-alpha).
 #
 # Two halves, no real deploy and no network:
 #   1. Pure-function unit cases — source deploy-unattended.sh and exercise the
@@ -105,10 +105,10 @@ rm -rf "$tmp_ans"
 
 # ── 5a. Extra-vars JSON (deterministic, non-secret, injection-safe) ──────────
 tmp_ev="$(mktemp -d)"
-write_extra_vars "$tmp_ev/ev.json" "chiefmonkey.art" "v0.2.60-alpha" \
+write_extra_vars "$tmp_ev/ev.json" "chiefmonkey.art" "v0.2.61-alpha" \
   "https://github.com/ChiefmonkeyArt/torii-continuum.git"
 grep -qF '"torii_domain": "chiefmonkey.art"' "$tmp_ev/ev.json" && ok "extra-vars carries the domain" || bad "extra-vars missing domain"
-grep -qF '"continuum_version": "v0.2.60-alpha"' "$tmp_ev/ev.json" && ok "extra-vars pins continuum_version to the tag" || bad "extra-vars missing tag"
+grep -qF '"continuum_version": "v0.2.61-alpha"' "$tmp_ev/ev.json" && ok "extra-vars pins continuum_version to the tag" || bad "extra-vars missing tag"
 grep -qF '"continuum_repo": "https://github.com/ChiefmonkeyArt/torii-continuum.git"' "$tmp_ev/ev.json" && ok "extra-vars carries the repo" || bad "extra-vars missing repo"
 # It must be valid JSON and expose no secret.
 if command -v python3 >/dev/null; then
@@ -138,7 +138,7 @@ grep -qE '^continuum_user:' "${REPO_ROOT}/ops/ansible/group_vars/all.yml.example
 if command -v ansible-playbook >/dev/null && command -v ansible >/dev/null; then
   ev_dir="$(mktemp -d)"
   write_localhost_inventory "$ev_dir"
-  write_extra_vars "$ev_dir/ev.json" "chiefmonkey.art" "v0.2.60-alpha" \
+  write_extra_vars "$ev_dir/ev.json" "chiefmonkey.art" "v0.2.61-alpha" \
     "https://github.com/ChiefmonkeyArt/torii-continuum.git"
   # Resolve continuum_user via the role defaults + extra-vars, no mutation.
   if ANSIBLE_ROLES_PATH="${REPO_ROOT}/ops/ansible/roles" \
