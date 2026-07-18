@@ -30,6 +30,31 @@ let expanded = false;
 let thinking = false;
 
 const THREADS_STORAGE_KEY = 'continuum.chat.threads';
+// Read by the Routstr page (src/views/routstr.js) on mount: when set, the page
+// auto-reveals and focuses the Cashu receive/top-up form so the operator lands
+// exactly where they need to add funds after tapping "Top Up" in the chat dock.
+const ROUTSTR_FOCUS_TOPUP_KEY = 'continuum.routstr.focusTopUp';
+
+/**
+ * Decide whether a failed agent chat result is an insufficient-funds condition,
+ * so the dock can offer a top-up path instead of a generic "(agent error…)"
+ * mock. Prefers a structured `code === "insufficient_funds"` if the agent ever
+ * exposes one (checked on the result and on result.data), and falls back to
+ * text-matching the human reason string the agent returns today, e.g.
+ *   "routstr: wallet: insufficient balance across all mints for 50 sats
+ *    (need +100 floor); ollama: timeout after 60000ms"
+ * Pure + exported so the contract is unit-tested without a network.
+ * @param {any} result agent.chat() result ({ ok, reason, code?, data?, status? })
+ * @returns {boolean}
+ */
+export function isInsufficientFundsReply(result) {
+  if (!result || typeof result !== 'object') return false;
+  if (result.code === 'insufficient_funds') return true;
+  if (result.data && result.data.code === 'insufficient_funds') return true;
+  const reason = typeof result.reason === 'string' ? result.reason.toLowerCase() : '';
+  if (!reason) return false;
+  return /insufficient balance|insufficient funds|insufficient_funds|hard_floor|need \+\d+ floor|\b402\b/.test(reason);
+}
 
 export function mountChat(root) {
   dockEl = document.createElement('div');
@@ -41,7 +66,7 @@ export function mountChat(root) {
     <div class="chat-input-row">
       <span class="chat-context" title="Chat context"></span>
       <button class="chat-mode" type="button"></button>
-      <textarea class="chat-input" placeholder="Ask Continuum anything… (mock responses)" rows="1" aria-label="Chat input"></textarea>
+      <textarea class="chat-input" placeholder="Ask Continuum anything…" rows="1" aria-label="Chat input"></textarea>
       <button class="chat-send" type="button">Send</button>
       <button class="chat-toggle" type="button" aria-label="Toggle chat">▲</button>
     </div>
@@ -76,8 +101,19 @@ export function mountChat(root) {
 
   loadThreads();
   syncActiveThread();
+  updatePlaceholder();
   autosize();
   reserveSpace();
+}
+
+// The placeholder should only advertise mock replies when we're NOT live —
+// once signed in, replies are real agent calls, so drop the "(mock responses)"
+// qualifier rather than lie to the operator.
+function updatePlaceholder() {
+  if (!inputEl) return;
+  inputEl.placeholder = isSessionLive()
+    ? 'Ask Continuum anything…'
+    : 'Ask Continuum anything… (mock responses)';
 }
 
 // Auto-grow the textarea with its content up to a sensible max, then let it
@@ -144,6 +180,7 @@ function syncActiveThread() {
   if (!Array.isArray(threads[activeKey])) threads[activeKey] = [];
   if (threads[activeKey].length === 0) greet();
   renderContext();
+  updatePlaceholder();
   renderLog();
 }
 
@@ -199,7 +236,16 @@ function renderLog() {
       <div class="avatar">${m.who === 'user' ? 'you' : 'AI'}</div>
       <div class="bubble"></div>
     `;
-    el.querySelector('.bubble').textContent = m.text;
+    const bubble = el.querySelector('.bubble');
+    bubble.textContent = m.text;
+    if (m.action === 'topup') {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chat-topup primary';
+      btn.textContent = 'Top Up';
+      btn.addEventListener('click', goToTopUp);
+      bubble.appendChild(btn);
+    }
     logEl.appendChild(el);
   }
   if (thinking) {
@@ -236,13 +282,16 @@ async function send() {
   renderLog();
   const reply = await getReply(text, buildContext());
   thinking = false;
-  pushTo(turnKey, 'ai', reply);
+  if (reply && typeof reply === 'object') pushTo(turnKey, 'ai', reply.text, reply.action);
+  else pushTo(turnKey, 'ai', reply);
 }
 
-// Append to a specific thread; only re-render when it is the visible one.
-function pushTo(key, who, text) {
+// Append to a specific thread; only re-render when it is the visible one. An
+// optional `action` tags the message so renderLog can attach an affordance
+// (e.g. a "Top Up" button for an insufficient-funds reply).
+function pushTo(key, who, text, action) {
   if (!Array.isArray(threads[key])) threads[key] = [];
-  threads[key].push({ who, text, at: Date.now() });
+  threads[key].push({ who, text, at: Date.now(), ...(action ? { action } : {}) });
   threads[key] = trimThread(threads[key], THREAD_CAP);
   saveThreads();
   if (key === activeKey) renderLog();
@@ -257,11 +306,24 @@ async function getReply(text, ctx) {
   if (isSessionLive()) {
     const r = await agentChat({ message: text, context: ctx });
     if (r.ok && r.data?.reply) return r.data.reply;
-    // Fall through to mock on any failure, with a hint prefix so the user knows
+    // Insufficient funds is a recoverable, user-actionable state — surface a
+    // clear message + a Top Up path instead of a generic "(agent error…)" mock.
+    if (isInsufficientFundsReply(r)) {
+      return { text: 'You have insufficient funds to route this request. Top up your wallet to keep chatting.', action: 'topup' };
+    }
+    // Fall through to mock on any other failure, with a hint prefix so the user knows
     if (r.reason && !r.offline) return `(agent error: ${r.reason})\n\n` + await mockReply(text, ctx);
     return `(agent unreachable — served mock)\n\n` + await mockReply(text, ctx);
   }
   return mockReply(text, ctx);
+}
+
+// Navigate to the Routstr page and ask it to focus the top-up/receive form.
+// The sessionStorage flag is best-effort — navigation still happens if storage
+// is unavailable; the page just won't auto-open the receive section.
+function goToTopUp() {
+  try { sessionStorage.setItem(ROUTSTR_FOCUS_TOPUP_KEY, '1'); } catch (_e) {}
+  if (typeof window !== 'undefined') window.location.hash = '#/routstr';
 }
 
 /**

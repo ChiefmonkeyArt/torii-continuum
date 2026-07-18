@@ -87,6 +87,11 @@
   font-family: var(--font-sans);
   font-size: 13px;
 }
+/* "Top Up" affordance rendered inside an insufficient-funds assistant bubble. */
+.chat-msg .bubble .chat-topup {
+  display: inline-block;
+  margin-top: 10px;
+}
 .chat-msg.user { align-self: flex-end; flex-direction: row-reverse; }
 .chat-msg.user .bubble {
   background: hsl(var(--primary) / .08);
