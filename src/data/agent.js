@@ -245,3 +245,35 @@ export async function health() {
 export async function healthModels() {
   return req('GET', '/api/health/models');
 }
+
+// ─── Version / self-update (VERSION-UPDATE-1) ───────────────
+
+/**
+ * GET /api/version — PUBLIC, non-secret version summary. Works logged out so
+ * the login card can show current + latest. Returns { ok, data:{ current,
+ * latest, update_available, channel, checked_at, source, stale } } or offline.
+ */
+export async function versionInfo() {
+  return req('GET', '/api/version');
+}
+
+/**
+ * POST /api/update — queue an admin-vetted self-update. Admin-gated; sends
+ * confirm:true so a stray call can't trigger a deploy. The server independently
+ * re-validates the tag (must be the vetted latest or allowlisted, strictly
+ * newer). The client only ever passes the server-known latest tag.
+ * @param {string} tag v-prefixed release tag
+ */
+export async function requestUpdate(tag) {
+  return req('POST', '/api/update', { tag, confirm: true });
+}
+
+/** GET /api/update/status — admin view of any queued update request. */
+export async function updateStatus() {
+  return req('GET', '/api/update/status');
+}
+
+/** POST /api/update/cancel — admin cancels a queued update request. */
+export async function cancelUpdate() {
+  return req('POST', '/api/update/cancel', {});
+}

@@ -440,6 +440,47 @@
 .login-btn:active { transform: translateY(0); }
 
 .login-status { font-size: 12.5px; margin-top: 8px; color: rgba(255, 244, 232, 0.88); }
+
+/* AUTH-DIRECT-1: inline login status/errors (replaces the removed modal). */
+.login-inline-status {
+  min-height: 0;
+  margin-top: 10px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: rgba(255, 244, 232, 0.92);
+}
+.login-inline-status:empty { margin-top: 0; }
+.login-inline-status.error { color: hsl(var(--destructive, 0 72% 62%)); }
+.login-inline-status.done { color: hsl(140 55% 62%); }
+.login-inline-links { margin-top: 4px; display: flex; gap: 4px; justify-content: center; }
+.login-inline-links a {
+  color: hsl(var(--primary));
+  text-decoration: none;
+  border-bottom: 1px dotted hsl(var(--primary) / 0.5);
+}
+
+/* VERSION-UPDATE-1: pre-login current + latest version (non-interactive). */
+.login-version {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: rgba(255, 238, 220, 0.85);
+}
+.login-version-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid hsl(var(--border));
+  font-size: 10.5px;
+}
+.login-version-badge.newer { border-color: hsl(var(--primary) / 0.6); color: hsl(var(--primary)); }
+.login-version-badge.current { color: hsl(140 45% 68%); border-color: hsl(140 40% 50% / 0.5); }
+
 .login-links {
   display: flex;
   align-items: center;
@@ -511,6 +552,42 @@
   color: hsl(var(--muted-foreground));
   margin-top: 8px;
 }
+
+/* VERSION-UPDATE-1: sidebar update affordance (shown only when a newer release
+   is known AND the operator is logged in). */
+.sidebar-update {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sidebar-update[hidden] { display: none; }
+.sidebar-update-label {
+  font-family: var(--font-mono, var(--font-sans));
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: hsl(var(--primary));
+}
+.sidebar-update-btn {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: hsl(var(--primary) / 0.14);
+  border: 1px solid hsl(var(--primary) / 0.55);
+  color: hsl(var(--primary));
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.sidebar-update-btn:hover { background: hsl(var(--primary) / 0.22); }
+.sidebar-update-btn.armed { background: hsl(var(--primary) / 0.28); font-weight: 600; }
+.sidebar-update-btn:disabled { opacity: 0.6; cursor: default; }
+.sidebar-update-status { font-size: 10.5px; color: hsl(var(--muted-foreground)); line-height: 1.4; }
+.sidebar-update-status.error { color: hsl(var(--destructive, 0 72% 62%)); }
+
+/* Inline sidebar login status (no modal). */
+.sidebar-login-status { font-size: 10.5px; color: hsl(var(--muted-foreground)); line-height: 1.4; }
+.sidebar-login-status:empty { display: none; }
+.sidebar-login-status.error { color: hsl(var(--destructive, 0 72% 62%)); }
 
 .sidebar-footer-row {
   display: flex;
