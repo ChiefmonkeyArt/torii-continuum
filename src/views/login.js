@@ -16,7 +16,6 @@
  */
 
 import { h, clear } from './util.js';
-import { navigate } from '../router.js';
 import { startLogin } from '../auth.js';
 import { isAgentConfigured, versionInfo } from '../data/agent.js';
 import { describeVersionState } from '../data/release.js';
@@ -78,15 +77,10 @@ export function renderLogin(mount) {
 
     versionRow,
 
-    h('div', { class: 'login-links' }, [
-      h('a', { href: '#/about', class: 'login-link' }, ['About Continuum']),
-      h('span', { class: 'login-links-sep', 'aria-hidden': 'true' }, ['·']),
-      h('a', {
-        href: '#/projects',
-        class: 'login-link',
-        onClick: (e) => { e.preventDefault(); navigate('/projects'); },
-      }, ['Explore the demo']),
-    ]),
+    // No unauthenticated entry points. Every screen beyond this login card
+    // requires a live session (default-deny; see nav-guard), so the former
+    // demo and About links — which pointed at now-gated routes — are gone.
+    // A logged-out visitor sees ONLY this login card.
 
     h('div', { class: 'login-foot muted', text: version }),
   ]);
