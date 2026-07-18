@@ -12,10 +12,10 @@
  */
 import { initStore } from './data/store.js';
 import { mountShell, mainContent, renderSidebar, applyStoredTheme } from './shell.js';
-import { route, startRouter, currentRoute, navigate } from './router.js';
+import { route, startRouter, navigate } from './router.js';
 import { mountChat } from './chat.js';
 import { isSessionLive } from './auth.js';
-import { rootTarget, guardRedirect, isProtectedPattern } from './nav-guard.js';
+import { rootTarget, guardRedirect, sessionChangeTarget } from './nav-guard.js';
 
 import { renderAbout } from './views/landing.js';
 import { renderLogin } from './views/login.js';
@@ -71,20 +71,18 @@ function boot() {
   startRouter();
   mountChat(root);
 
-  // React to session changes so the shell and route stay honest.
+  // React to session changes so the shell and route stay honest. A mid-session
+  // auth change (post-verify sign-in, or sign-out / expiry) must force a route
+  // transition from ANY current surface — not only the login page or a
+  // protected view. Previously demo routes (/projects, /marketplace, /routstr,
+  // /team) reached via the sidebar sign-in/out control fell through this handler
+  // and left the SPA stranded: sign-in never completed, sign-out never exited.
+  // sessionChangeTarget() returns a concrete path (dashboard when authed, root/
+  // login otherwise); navigate() re-resolves even when the hash is unchanged, so
+  // the view always transitions to match the new auth state.
   document.addEventListener('continuum:session-changed', () => {
     renderSidebar();
-    const cr = currentRoute();
-    if (!cr) return;
-    const authed = isSessionLive();
-    if (cr.pattern === '/') {
-      // Just logged in at the login page → go to the app; else re-render login.
-      if (authed) navigate('/dashboard');
-      else renderLogin(mainContent());
-    } else if (isProtectedPattern(cr.pattern) && !authed) {
-      // Session dropped (e.g. expired / signed out) while on a protected view.
-      navigate('/');
-    }
+    navigate(sessionChangeTarget(isSessionLive()));
   });
 
   // Prevent double-tap zoom on the chat button on iOS

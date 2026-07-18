@@ -51,3 +51,20 @@ export function guardRedirect(pattern, isAuthed) {
   if (isProtectedPattern(pattern) && !isAuthed) return LOGIN_PATH;
   return null;
 }
+
+/**
+ * Where must the SPA route to when the auth state changes MID-SESSION — i.e.
+ * after a successful NIP-07 verify (sign-in) or after a sign-out / expiry? This
+ * fires from ANY current route, not just the login page or a protected view:
+ *   • authed  → the dashboard (leave whatever surface triggered sign-in);
+ *   • else    → root, which renders the login surface in place.
+ * A concrete path is always returned (never null) so the caller can force a
+ * router re-resolve and the view transitions even when the hash is unchanged —
+ * this is the invariant that makes sign-in complete and sign-out exit from
+ * every screen, including the demo routes (/projects, /marketplace, …).
+ * @param {boolean} isAuthed the auth state AFTER the change
+ * @returns {string} DASHBOARD_PATH when authed, else ROOT_PATH
+ */
+export function sessionChangeTarget(isAuthed) {
+  return isAuthed ? DASHBOARD_PATH : ROOT_PATH;
+}
