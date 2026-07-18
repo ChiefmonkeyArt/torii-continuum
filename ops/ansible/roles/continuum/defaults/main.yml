@@ -80,6 +80,32 @@ continuum_webroot: "/var/www/torii/continuum"
 continuum_webroot_stage: "/var/www/torii/continuum.staging-{{ continuum_stamp }}"
 continuum_webroot_backup: "/var/www/torii/continuum.backup-{{ continuum_stamp }}"
 
+# Post-success disk retention (v0.2.75-alpha, extends OPS-RETENTION-1). After a
+# verified-good cutover + health gate, the role runs the anchored disk-retention
+# sweep (ops/torii-disk-retention.sh) to reclaim regenerable deploy artefacts that
+# otherwise fill the small VPS disk: obsolete /opt/deploy/torii-continuum-<tag>/
+# tooling clones, older /root/continuum-backup-<UTC>/ state backups, and any
+# failed-clone app.staging residue. The sweep is fail-closed (it refuses to prune
+# unless the live agent serves exactly the pinned tag) and anchored strictly to
+# those globs; it can NEVER touch the live app tree, the pinned clone, the pin
+# file, or config.yaml. Cleanup is best-effort: a prune failure never fails an
+# already-successful deploy.
+#
+#   keep_sources — /opt/deploy/torii-continuum-* clones to keep. The CURRENT
+#                  pinned clone is ALWAYS kept on top of this; default 1 keeps the
+#                  pinned clone ONLY (a non-current tag is re-cloned on rollback).
+#   keep_backups — newest /root/continuum-backup-* dirs to keep, by mtime.
+continuum_retention_enabled: true
+continuum_retention_keep_sources: 1
+continuum_retention_keep_backups: 3
+
+# Anchored roots the post-success sweep is allowed to prune, plus the pin file it
+# reads (line-wise, never sourced) to resolve the current target tag. These MUST
+# match ops/deploy-unattended.sh (CONTINUUM_DEPLOY_ROOT / CONTINUUM_CONF) so the
+# playbook prunes exactly the tooling checkouts the deploy wrapper creates.
+continuum_deploy_root: "/opt/deploy"
+continuum_deploy_conf: "/etc/torii/continuum-deploy.conf"
+
 # torii launcher registration (v0.2.43-alpha). The installed Torii CLI parses
 # `torii register <name> [--display ...] [--desc ...] [--version ...]` with FLAGS,
 # not positional args (the old positional form failed with `unknown flag`). The

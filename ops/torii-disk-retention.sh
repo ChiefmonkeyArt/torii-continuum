@@ -66,6 +66,21 @@ set -euo pipefail
 : "${RET_STAGING_PARENT:=/root}"
 : "${RET_LOG_DIR:=/var/log/torii-continuum}"
 : "${RET_LOCKFILE:=/run/torii-continuum-retention.lock}"
+# Pre-mutation state backups the deploy role writes as
+# <parent>/continuum-backup-<UTC>/ (one per deploy run, root-only 0700). Never
+# pruned centrally before v0.2.75-alpha, so they accumulated one-per-deploy.
+: "${RET_BACKUP_PARENT:=/root}"
+# The deploy role's staging/release dir (built then renamed into the live app on a
+# successful cutover). On success it is normally gone (renamed to the app tree);
+# this is the belt-and-suspenders sweep of any failed-clone residue.
+: "${RET_APP_STAGING:=/home/continuum/app.staging}"
+# Keep policy (configurable via the deploy role vars, see defaults/main.yml):
+#   sources  — how many /opt/deploy/torii-continuum-* clones to keep. The current
+#              PINNED clone is ALWAYS kept on top of this; the default 1 means the
+#              pinned clone ONLY (a non-current tag can be re-cloned on rollback).
+#   backups  — how many newest /root/continuum-backup-* dirs to keep, by mtime.
+: "${RET_SOURCE_KEEP:=1}"
+: "${RET_BACKUP_KEEP:=3}"
 # The floor the deploy/cutover preflight enforces (2 GiB fail-before-mutation
 # gate). Retained here only for reporting parity; this sweep frees space, it does
 # not require it.
@@ -81,6 +96,7 @@ set -euo pipefail
 # Names the sweep will act on, at depth 1 under their approved root only.
 readonly RET_STAGING_GLOB='torii-final-cutover-*'
 readonly RET_SOURCE_GLOB='torii-continuum-*'
+readonly RET_BACKUP_GLOB='continuum-backup-*'
 # A cutover run is VERIFIED (successful) iff this completed-summary marker exists.
 readonly RET_SUCCESS_MARKER='cutover-summary.txt'
 
@@ -273,20 +289,79 @@ ret_prune_superseded_staging() {
   done < <(find "$parent" -maxdepth 1 -type d -name "$RET_STAGING_GLOB" -print0 2>/dev/null | sort -zr)
 }
 
-# ret_prune_source_clones <deploy-root> <live-tag> — keep the live release's
-# source clone; delete every other torii-continuum-* clone.
+# ret_prune_source_clones <deploy-root> <live-tag> [keep] — ALWAYS keep the live
+# (pinned) release's source clone; additionally keep the newest (keep-1) OTHER
+# clones by mtime, deleting every remaining torii-continuum-* clone. keep defaults
+# to RET_SOURCE_KEEP (1 → the pinned clone ONLY; a non-current tag can be
+# re-cloned on rollback). The pinned clone is never counted against the budget and
+# never deleted, whatever its mtime.
 ret_prune_source_clones() {
-  local root="${1:?}" live_tag="${2:?}"
+  local root="${1:?}" live_tag="${2:?}" keep="${3:-$RET_SOURCE_KEEP}"
   [[ -d "$root" ]] || return 0
+  [[ "$keep" =~ ^[0-9]+$ ]] || keep=1
   local keep_name="torii-continuum-${live_tag}" d base
+  # Extra non-pin clones to retain on top of the pin (never negative).
+  local extra=$(( keep > 0 ? keep - 1 : 0 ))
+  local kept_extra=0
+  # Newest-first by mtime so the extras we retain are the most recent non-pin ones.
   while IFS= read -r -d '' d; do
     base="$(basename -- "$d")"
     if [[ "$base" == "$keep_name" ]]; then
-      ret_log "retaining live source clone: ${d}"
+      ret_log "retaining pinned source clone: ${d}"
+      continue
+    fi
+    if (( kept_extra < extra )); then
+      kept_extra=$(( kept_extra + 1 ))
+      ret_log "retaining recent source clone (${kept_extra}/${extra}): ${d}"
       continue
     fi
     ret_reclaim "$d" "$root" "obsolete source clone"
-  done < <(find "$root" -maxdepth 1 -type d -name "$RET_SOURCE_GLOB" -print0 2>/dev/null | sort -zr)
+  done < <(find "$root" -maxdepth 1 -type d -name "$RET_SOURCE_GLOB" -printf '%T@\t%p\0' 2>/dev/null | sort -zrn | cut -zf2-)
+}
+
+# ret_prune_backups <backup-parent> [keep] — keep the newest <keep> pre-mutation
+# state backups (<parent>/continuum-backup-*) by mtime; delete every older one.
+# keep defaults to RET_BACKUP_KEEP (3). Each backup is a rollback set, so we keep
+# a small window rather than only the current one. Deletion goes through the same
+# safety re-check (ret_safe_target) as every other reclaim — anchored to depth-1
+# children of the approved parent, never a symlink, never a protected path.
+ret_prune_backups() {
+  local parent="${1:?}" keep="${2:-$RET_BACKUP_KEEP}"
+  [[ -d "$parent" ]] || return 0
+  [[ "$keep" =~ ^[0-9]+$ ]] || keep=3
+  local d kept=0
+  # Newest-first by mtime.
+  while IFS= read -r -d '' d; do
+    kept=$(( kept + 1 ))
+    if (( kept <= keep )); then
+      ret_log "retaining recent state backup (${kept}/${keep}): ${d}"
+      continue
+    fi
+    ret_reclaim "$d" "$parent" "old state backup"
+  done < <(find "$parent" -maxdepth 1 -type d -name "$RET_BACKUP_GLOB" -printf '%T@\t%p\0' 2>/dev/null | sort -zrn | cut -zf2-)
+}
+
+# ret_prune_app_staging <staging-path> — remove the deploy role's staging/release
+# dir if any residue remains after a successful cutover (normally it was renamed
+# into the live app tree). STRICT anchoring: the basename must be exactly
+# 'app.staging' (never 'app'), the entry must not be a symlink, and it must pass
+# the protected-path refusal — so this can never touch /home/continuum/app (live)
+# or any protected tree even if misconfigured.
+ret_prune_app_staging() {
+  local staging="${1:?}"
+  [[ -e "$staging" ]] || { ret_log "no staging residue at ${staging}; nothing to clear"; return 0; }
+  [[ -L "$staging" ]] && { ret_warn "refusing to remove a symlinked staging path: ${staging}"; return 0; }
+  if [[ "$(basename -- "$staging")" != "app.staging" ]]; then
+    ret_warn "refusing to remove a staging path whose name is not exactly 'app.staging': ${staging}"
+    return 0
+  fi
+  local real; real="$(ret_canon "$staging")" || { ret_warn "cannot resolve staging path ${staging}"; return 0; }
+  if ret_is_protected "$real"; then
+    ret_warn "refusing to remove a protected staging path: ${real}"
+    return 0
+  fi
+  local parent; parent="$(dirname -- "$real")"
+  ret_reclaim "$real" "$parent" "failed-clone staging residue"
 }
 
 # ret_rotate_logs <dir> — cap deployment-specific logs. Refuses any dir that is
@@ -373,7 +448,7 @@ ret_resolve_live_tag() {
 ret_report() {
   ret_log "reclaimed ${RET_PRUNED_COUNT} item(s), $(ret_human "$RET_RECLAIMED_BYTES") total"
   local p pct free
-  for p in "$RET_DEPLOY_ROOT" "$RET_STAGING_PARENT" "$RET_LOG_DIR"; do
+  for p in "$RET_DEPLOY_ROOT" "$RET_STAGING_PARENT" "$RET_BACKUP_PARENT" "$RET_LOG_DIR"; do
     pct="$(ret_fs_percent "$p")"; free="$(ret_fs_free_mb "$p")"
     [[ -n "$pct" ]] || continue
     ret_log "filesystem for ${p}: ${pct}% used, ${free:-?} MiB free"
@@ -394,6 +469,8 @@ retention_sweep() {
 
   ret_prune_source_clones "$RET_DEPLOY_ROOT" "$live_tag"
   ret_prune_superseded_staging "$RET_STAGING_PARENT"
+  ret_prune_backups "$RET_BACKUP_PARENT"
+  ret_prune_app_staging "$RET_APP_STAGING"
   ret_rotate_logs "$RET_LOG_DIR"
   ret_report
   ret_log "retention sweep complete."
