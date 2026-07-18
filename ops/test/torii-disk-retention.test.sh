@@ -42,8 +42,12 @@ export RET_DEPLOY_ROOT="$WORK/opt-deploy"
 export RET_STAGING_PARENT="$WORK/root-staging"
 export RET_LOG_DIR="$WORK/var-log"
 export RET_CONF="$WORK/deploy.conf"
-export RET_PROTECTED_PATHS_OVERRIDE="$WORK/protected $WORK/opt-torii"
-mkdir -p "$RET_DEPLOY_ROOT" "$RET_STAGING_PARENT" "$RET_LOG_DIR" "$WORK/protected" "$WORK/opt-torii"
+export RET_BACKUP_PARENT="$WORK/root-backups"
+# app.staging fixture lives under a sandbox "home" whose sibling "app" is protected,
+# mirroring /home/continuum/{app,app.staging} on the box.
+export RET_APP_STAGING="$WORK/home/app.staging"
+export RET_PROTECTED_PATHS_OVERRIDE="$WORK/protected $WORK/opt-torii $WORK/home/app"
+mkdir -p "$RET_DEPLOY_ROOT" "$RET_STAGING_PARENT" "$RET_LOG_DIR" "$RET_BACKUP_PARENT" "$WORK/protected" "$WORK/opt-torii" "$WORK/home/app"
 
 # shellcheck disable=SC1090
 source "$TOOL"
@@ -154,6 +158,93 @@ ret_prune_source_clones "$RET_DEPLOY_ROOT" "v0.2.67-alpha" >/dev/null 2>&1
 [[ -d "$WORK/protected" ]] && ok "source prune never follows a symlink into a protected path" || bad "followed symlink and deleted protected target!"
 rm -f "$RET_DEPLOY_ROOT/torii-continuum-v0.0.1-evil"
 
+# 7b. Configurable source keep-count: pin is ALWAYS kept; keep=2 retains the pin
+#     plus the single newest OTHER clone; older non-pin clones are pruned.
+rm -rf "$RET_DEPLOY_ROOT"; mkdir -p "$RET_DEPLOY_ROOT"
+for t in v0.2.70-alpha v0.2.71-alpha v0.2.72-alpha v0.2.75-alpha; do
+  mkdir -p "$RET_DEPLOY_ROOT/torii-continuum-${t}"; sleep 0.01
+done
+# Make the PINNED clone the OLDEST by mtime to prove the pin is kept regardless of age.
+touch -d '2000-01-01' "$RET_DEPLOY_ROOT/torii-continuum-v0.2.71-alpha"
+reset_accum
+ret_prune_source_clones "$RET_DEPLOY_ROOT" "v0.2.71-alpha" 2 >/dev/null
+[[ -d "$RET_DEPLOY_ROOT/torii-continuum-v0.2.71-alpha" ]] && ok "source keep=2 always retains the pinned clone (even when oldest)" || bad "pruned the pinned clone!"
+[[ -d "$RET_DEPLOY_ROOT/torii-continuum-v0.2.75-alpha" ]] && ok "source keep=2 retains the newest non-pin clone" || bad "pruned the newest non-pin clone under keep=2"
+kept_srcs="$(find "$RET_DEPLOY_ROOT" -maxdepth 1 -type d -name 'torii-continuum-*' | wc -l | tr -d ' ')"
+[[ "$kept_srcs" -eq 2 ]] && ok "source keep=2 leaves exactly pin + 1 newest (kept=${kept_srcs})" || bad "source keep=2 kept wrong count (${kept_srcs})"
+
+# 7c. Default keep (RET_SOURCE_KEEP=1) → pin ONLY.
+rm -rf "$RET_DEPLOY_ROOT"; mkdir -p "$RET_DEPLOY_ROOT"
+for t in v0.2.73-alpha v0.2.74-alpha v0.2.75-alpha; do mkdir -p "$RET_DEPLOY_ROOT/torii-continuum-${t}"; done
+reset_accum
+ret_prune_source_clones "$RET_DEPLOY_ROOT" "v0.2.75-alpha" >/dev/null   # keep defaults to RET_SOURCE_KEEP=1
+[[ "$(find "$RET_DEPLOY_ROOT" -maxdepth 1 -type d -name 'torii-continuum-*' | wc -l | tr -d ' ')" -eq 1 \
+   && -d "$RET_DEPLOY_ROOT/torii-continuum-v0.2.75-alpha" ]] \
+  && ok "default source keep prunes to the pinned clone only" || bad "default source keep did not reduce to pin-only"
+
+# ── 7d. Backup retention: keep the newest N by mtime, prune older ─────────────
+seed_backups() {
+  rm -rf "$RET_BACKUP_PARENT"; mkdir -p "$RET_BACKUP_PARENT"
+  # Create 5 backups oldest→newest; set explicit mtimes so ordering is deterministic.
+  local i
+  for i in 1 2 3 4 5; do
+    mkdir -p "$RET_BACKUP_PARENT/continuum-backup-2026010${i}T000000Z"
+    touch -d "2026-01-0${i} 00:00:00" "$RET_BACKUP_PARENT/continuum-backup-2026010${i}T000000Z"
+  done
+}
+seed_backups
+reset_accum
+ret_prune_backups "$RET_BACKUP_PARENT" 3 >/dev/null
+kept_bk="$(find "$RET_BACKUP_PARENT" -maxdepth 1 -type d -name 'continuum-backup-*' | wc -l | tr -d ' ')"
+[[ "$kept_bk" -eq 3 ]] && ok "backup prune keeps exactly the newest 3 (kept=${kept_bk})" || bad "backup prune kept wrong count (${kept_bk})"
+[[ -d "$RET_BACKUP_PARENT/continuum-backup-20260105T000000Z" && -d "$RET_BACKUP_PARENT/continuum-backup-20260103T000000Z" ]] \
+  && ok "backup prune keeps the newest backups by mtime" || bad "backup prune removed a newest backup"
+[[ ! -d "$RET_BACKUP_PARENT/continuum-backup-20260101T000000Z" && ! -d "$RET_BACKUP_PARENT/continuum-backup-20260102T000000Z" ]] \
+  && ok "backup prune removes the oldest backups" || bad "backup prune kept an oldest backup"
+[[ "$RET_PRUNED_COUNT" -eq 2 ]] && ok "backup prune reclaimed exactly the 2 oldest" || bad "backup prune count wrong (${RET_PRUNED_COUNT})"
+# Idempotent second pass reclaims nothing.
+reset_accum
+ret_prune_backups "$RET_BACKUP_PARENT" 3 >/dev/null
+[[ "$RET_PRUNED_COUNT" -eq 0 ]] && ok "backup prune is idempotent (2nd run reclaims 0)" || bad "backup prune not idempotent"
+# Fewer backups than the keep budget → keep all.
+seed_backups; rm -rf "$RET_BACKUP_PARENT/continuum-backup-20260101T000000Z" "$RET_BACKUP_PARENT/continuum-backup-20260102T000000Z"
+reset_accum
+ret_prune_backups "$RET_BACKUP_PARENT" 3 >/dev/null
+[[ "$RET_PRUNED_COUNT" -eq 0 && "$(find "$RET_BACKUP_PARENT" -maxdepth 1 -type d -name 'continuum-backup-*' | wc -l | tr -d ' ')" -eq 3 ]] \
+  && ok "backup prune keeps all when at/under the budget" || bad "backup prune deleted within the budget"
+# A backup with a hostile name must be pruned safely, not executed. The name is
+# slash-free (so it is a single depth-1 dir we can age via mtime) and embeds a
+# command substitution + backticks that must NEVER run.
+seed_backups
+evil_bk='continuum-backup-20251231T000000Z $(touch BK_PWNED) `id`'
+mkdir -p "$RET_BACKUP_PARENT/$evil_bk"; touch -d '2025-12-31 00:00:00' "$RET_BACKUP_PARENT/$evil_bk"
+reset_accum
+ret_prune_backups "$RET_BACKUP_PARENT" 3 >/dev/null
+[[ ! -e "$WORK/BK_PWNED" && ! -e "$RET_BACKUP_PARENT/BK_PWNED" && ! -e ./BK_PWNED ]] \
+  && ok "hostile backup name is NOT executed (no command substitution)" || bad "hostile backup name executed a command!"
+[[ ! -d "$RET_BACKUP_PARENT/$evil_bk" ]] && ok "hostile-named old backup pruned safely (quoted rm)" || bad "hostile-named backup not pruned"
+
+# ── 7e. app.staging residue removal (strict, never the live app tree) ─────────
+mkdir -p "$RET_APP_STAGING/junk"
+reset_accum
+ret_prune_app_staging "$RET_APP_STAGING" >/dev/null
+[[ ! -e "$RET_APP_STAGING" ]] && ok "app.staging residue is removed after success" || bad "app.staging residue not removed"
+[[ -d "$WORK/home/app" ]] && ok "app.staging removal never touches the sibling live app tree" || bad "removed the live app tree!"
+# Missing staging → clean no-op.
+reset_accum
+ret_prune_app_staging "$RET_APP_STAGING" >/dev/null
+[[ "$RET_PRUNED_COUNT" -eq 0 ]] && ok "app.staging removal is a no-op when absent" || bad "app.staging no-op deleted something"
+# Refuses a path whose basename is not exactly 'app.staging' (e.g. the live app).
+if out="$(ret_prune_app_staging "$WORK/home/app" 2>&1)"; then :; fi
+[[ -d "$WORK/home/app" ]] && printf '%s' "$out" | grep -qi 'refusing' \
+  && ok "app.staging removal refuses a non-'app.staging' path (protects live app)" || bad "did not refuse a non-app.staging path"
+# Refuses a symlinked staging entry (never follows it out).
+ln -s "$WORK/protected" "$WORK/home/app.staging"
+out="$(ret_prune_app_staging "$WORK/home/app.staging" 2>&1 || true)"
+[[ -d "$WORK/protected" ]] && printf '%s' "$out" | grep -qi 'refusing' \
+  && ok "app.staging removal refuses a symlink (no follow into protected)" || bad "followed a symlinked staging path"
+rm -f "$WORK/home/app.staging"
+
 # ── 8. Deploy-log rotation (never touches system/audit logs) ─────────────────
 rm -rf "$RET_LOG_DIR"; mkdir -p "$RET_LOG_DIR"
 # oversized live log gets truncated in place (inode preserved)
@@ -228,6 +319,12 @@ for prot in '/home/continuum/app' '/srv/continuum-projects' 'letsencrypt' 'ollam
 done
 # Never sources the conf (would execute hostile values).
 if grep -qE '^[[:space:]]*(source|\.)[[:space:]]+.*RET_CONF' "$TOOL"; then bad "tool sources the conf (unsafe)"; else ok "tool never sources the conf"; fi
+# v0.2.75-alpha additions are present and anchored to their exact globs.
+grep -qF 'continuum-backup-*' "$TOOL" && ok "tool anchors backup prune to continuum-backup-*" || bad "backup glob not anchored"
+grep -qF 'ret_prune_backups' "$TOOL" && ok "tool defines ret_prune_backups (backup retention)" || bad "missing ret_prune_backups"
+grep -qF 'ret_prune_app_staging' "$TOOL" && ok "tool defines ret_prune_app_staging (residue removal)" || bad "missing ret_prune_app_staging"
+# app.staging removal is name-anchored so it can never hit the live 'app' tree.
+grep -qF "!= \"app.staging\"" "$TOOL" && ok "app.staging removal is strictly name-anchored" || bad "app.staging removal not name-anchored"
 
 printf '\n[torii-disk-retention.test] pass=%d fail=%d\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || exit 1

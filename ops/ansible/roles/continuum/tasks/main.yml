@@ -530,6 +530,92 @@
         - agent_health.json is defined
         - (agent_health.json.version | default('')) == (continuum_version | regex_replace('^v', ''))
 
+    # ── 6. POST-SUCCESS DISK RETENTION (v0.2.75-alpha) ───────────────────────
+    # Only reachable AFTER the version-asserting health gate above passed, so it
+    # runs solely on a verified-good deploy — never on a failed one (a failure
+    # jumps to the rescue below, skipping this entirely). This is deliberately
+    # NOT an `always` block or an early handler: obsolete checkouts + backups
+    # must remain intact for recovery whenever a deploy does not fully converge.
+    #
+    # It reclaims regenerable deploy artefacts that fill the small VPS disk:
+    #   - /opt/deploy/torii-continuum-*  → keep the pinned clone (+ keep_sources-1
+    #     newest others); a non-current tag can be re-cloned on rollback.
+    #   - /root/continuum-backup-*       → keep the newest keep_backups by mtime.
+    #   - {{ continuum_release_dir }}    → clear any failed-clone staging residue.
+    #
+    # The whole step is wrapped in its own block/rescue so a cleanup error can
+    # NEVER trip the outer cutover rescue and roll back an already-good deploy —
+    # cleanup is best-effort and must not break deploys.
+    - name: Reclaim obsolete deploy artefacts after the verified-good cutover
+      when: continuum_retention_enabled | bool
+      block:
+        # SAFETY GATE (assert): prove the pin resolves to the release we just
+        # verified live, and that the prune targets are the exact anchored globs,
+        # BEFORE any deletion. If this fails, the inner rescue swallows it and the
+        # deploy stays successful with NOTHING pruned (fail-safe: keep artefacts).
+        - name: Read the pinned target tag from the deploy conf (line-wise, never sourced)
+          ansible.builtin.shell:
+            cmd: >-
+              set -eo pipefail;
+              sed -n 's/^[[:space:]]*CONTINUUM_TARGET_TAG=//p' {{ continuum_deploy_conf | quote }}
+              | tail -1 | tr -d '\042\047'
+          register: continuum_pin_tag
+          changed_when: false
+          failed_when: false
+
+        - name: Assert the pin resolves + prune targets are strictly anchored (safety guard)
+          ansible.builtin.assert:
+            quiet: true
+            that:
+              # The pin must resolve to a valid release tag equal to the version
+              # the health gate just confirmed the live agent is serving.
+              - (continuum_pin_tag.stdout | default('') | trim) is match('^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$')
+              - (continuum_pin_tag.stdout | trim | regex_replace('^v', '')) == (continuum_version | regex_replace('^v', ''))
+              - (agent_health.json.version | default('')) == (continuum_version | regex_replace('^v', ''))
+              # Prune targets must be the exact anchored roots — never the live
+              # app tree, the pin file, or an unexpected path.
+              - continuum_deploy_root == '/opt/deploy'
+              - continuum_backup_root | length > 0
+              - continuum_release_dir == '/home/' ~ continuum_user ~ '/app.staging'
+              - continuum_release_dir != continuum_app_dir
+            fail_msg: >-
+              Retention safety gate failed (pin '{{ continuum_pin_tag.stdout | default('') | trim }}'
+              vs deployed '{{ continuum_version }}', or an unanchored target) —
+              refusing to prune. The deploy remains successful; nothing was deleted.
+
+        # Delegate to the hardened, unit-tested sweep. It re-verifies the live
+        # version itself (fail-closed), canonicalises every candidate, refuses
+        # symlinks/traversal/protected paths, and uses NUL-safe `find` + a
+        # single quoted `rm` per safety-checked path (never a broad glob rm).
+        - name: Run the anchored disk-retention sweep (keep pin + newest N backups)
+          ansible.builtin.script: >-
+            {{ playbook_dir }}/../torii-disk-retention.sh
+          environment:
+            RET_CONF: "{{ continuum_deploy_conf }}"
+            RET_HEALTH_URL: "http://127.0.0.1:{{ continuum_agent_port }}/api/health"
+            RET_DEPLOY_ROOT: "{{ continuum_deploy_root }}"
+            RET_BACKUP_PARENT: "{{ continuum_backup_root }}"
+            RET_APP_STAGING: "{{ continuum_release_dir }}"
+            RET_SOURCE_KEEP: "{{ continuum_retention_keep_sources }}"
+            RET_BACKUP_KEEP: "{{ continuum_retention_keep_backups }}"
+          register: continuum_retention_sweep
+          # The per-deletion log line is "reclaimed <label>: <path>"; the always-
+          # printed summary "reclaimed N item(s)" has no colon, so this reports
+          # changed ONLY when something was actually pruned.
+          changed_when: continuum_retention_sweep.stdout is search('reclaimed [^:]+:')
+
+        - name: Report reclaimed disk space (no secret values)
+          ansible.builtin.debug:
+            msg: "{{ continuum_retention_sweep.stdout_lines | select('search', 'reclaimed|filesystem') | list }}"
+      rescue:
+        - name: Note that post-success cleanup did not complete (deploy is unaffected)
+          ansible.builtin.debug:
+            msg: >-
+              Post-success disk-retention cleanup did not complete cleanly. The
+              deploy itself SUCCEEDED and is serving {{ continuum_version }};
+              obsolete artefacts were left in place and can be reclaimed on the
+              next deploy or by running ops/torii-disk-retention.sh manually.
+
   rescue:
     # Stop the half-started new unit so it never fights the restored one.
     - name: Stop the new continuum-agent after a failed cutover
