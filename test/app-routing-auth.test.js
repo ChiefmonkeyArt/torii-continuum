@@ -29,6 +29,7 @@ import {
   isProtectedPattern,
   rootTarget,
   guardRedirect,
+  sessionChangeTarget,
 } from '../src/nav-guard.js';
 import { getStoredToken, setStoredToken, isLoggedIn, logout } from '../src/data/agent.js';
 
@@ -160,6 +161,62 @@ describe('expired/invalid session → login', () => {
     expect(isLoggedIn()).toBe(true);
     expect(rootTarget(isLoggedIn())).toBe(DASHBOARD_PATH);
     expect(guardRedirect('/dashboard', isLoggedIn())).toBeNull();
+  });
+});
+
+describe('mid-session auth change → forced route transition (v0.2.71-alpha)', () => {
+  it('sign-in (authed) forces the dashboard, from any surface', () => {
+    expect(sessionChangeTarget(true)).toBe(DASHBOARD_PATH);
+    expect(DASHBOARD_PATH).toBe('/dashboard');
+  });
+
+  it('sign-out (not authed) forces root, which renders login in place', () => {
+    expect(sessionChangeTarget(false)).toBe(ROOT_PATH);
+    expect(sessionChangeTarget(false)).toBe(LOGIN_PATH);
+  });
+
+  it('always returns a concrete path (never null) so the router re-resolves', () => {
+    expect(sessionChangeTarget(true)).toBeTruthy();
+    expect(sessionChangeTarget(false)).toBeTruthy();
+  });
+});
+
+describe('end-to-end auth-state transition through the real session helpers', () => {
+  let stub;
+  beforeEach(() => { stub = makeStorageStub(); globalThis.localStorage = stub; });
+  afterEach(() => { delete globalThis.localStorage; });
+
+  it('successful verify → session persisted → transition target is the dashboard', () => {
+    // verifyChallenge() persists the agent-issued token; simulate that write.
+    setStoredToken(liveToken);
+    expect(isLoggedIn()).toBe(true);
+    // The continuum:session-changed handler routes off the live auth state.
+    expect(sessionChangeTarget(isLoggedIn())).toBe(DASHBOARD_PATH);
+  });
+
+  it('sign-out clears every auth key → transition target is the login modal', () => {
+    setStoredToken(liveToken);
+    stub.setItem('torii.session', JSON.stringify({ token: liveToken, pubkey, method: 'nip07' }));
+    logout();
+    expect(getStoredToken()).toBeNull();
+    expect(stub.getItem('torii.session')).toBeNull();
+    expect(isLoggedIn()).toBe(false);
+    expect(sessionChangeTarget(isLoggedIn())).toBe(LOGIN_PATH);
+  });
+});
+
+describe('wiring: main.js session-changed handler forces a transition (source lock)', () => {
+  const main = stripComments(read('main.js'));
+  const handler = main.slice(main.indexOf("addEventListener('continuum:session-changed'"));
+
+  it('routes off sessionChangeTarget(isSessionLive()) on every session change', () => {
+    expect(handler).toMatch(/navigate\(\s*sessionChangeTarget\(\s*isSessionLive\(\)\s*\)\s*\)/);
+  });
+
+  it('does not gate the transition on the current route being the root', () => {
+    // The old handler only acted when cr.pattern === '/', stranding sign-in/out
+    // performed from the demo routes. The transition must be unconditional now.
+    expect(handler).not.toMatch(/pattern\s*===\s*'\/'/);
   });
 });
 
