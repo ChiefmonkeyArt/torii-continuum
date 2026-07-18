@@ -9,7 +9,7 @@ It:
 - verifies the exact annotated release tags + version markers **before** mutating
   live state:
   - `torii-base` **v0.1.4**
-  - `torii-continuum` **v0.2.65-alpha** (this script's own release tag)
+  - `torii-continuum` **v0.2.67-alpha** (this script's own release tag)
   - onboarding preview **v0.1.21-preview**
 - backs up the current Torii base state to a root-only timestamped directory
 - redeploys `torii-base` v0.1.4 via its sanctioned bootstrap
@@ -64,6 +64,25 @@ run. Two structural defenses fix that:
    ```bash
    sudo bash ops/torii-final-cutover.sh
    ```
+
+## v0.2.67-alpha disk-retention sweep + 80% capacity warning (OPS-RETENTION-1)
+
+The preflight free-space gate now also emits a **non-fatal 80% capacity warning**
+(`PREFLIGHT_WARN_PCT=80`) for any mount it checks, while keeping the existing
+`PREFLIGHT_MIN_FREE_MB=2048` (2 GiB) **fail-before-mutation** die-gate unchanged —
+a mount that is comfortably above the 2 GiB floor but running hot still surfaces a
+warning up front.
+
+Separately, a new standalone tool **`ops/torii-disk-retention.sh`** reclaims the
+regenerable artefacts the cutover + unattended deploy leave behind (obsolete
+source clones under `/opt/deploy` and **superseded** cutover staging trees under
+`/root/torii-final-cutover-*`), keeping the live release plus exactly the newest
+verified rollback set and any un-superseded failed run's diagnostics. It runs
+**after a verified-good deploy** and is fail-closed, symlink/traversal-safe, and
+idempotent — see the "Automatic disk-retention sweep" section in `ops/README.md`.
+It does not run inside this cutover; the unattended wrapper invokes it. This
+cutover release only bumps its own pin to **v0.2.67-alpha** and adds the 80%
+preflight warning.
 
 ## v0.2.65-alpha robust onboarding CTA detection (OPS-CUTOVER-6)
 
@@ -196,9 +215,9 @@ the base redeploy and proceeds through the Continuum and preview phases.
 ```bash
 cd /tmp
 rm -rf torii-continuum
-git clone --depth 1 --branch v0.2.65-alpha https://github.com/ChiefmonkeyArt/torii-continuum.git
+git clone --depth 1 --branch v0.2.67-alpha https://github.com/ChiefmonkeyArt/torii-continuum.git
 cd torii-continuum
-[ "$(git cat-file -t v0.2.65-alpha)" = tag ] || { echo "not an annotated tag"; exit 1; }
+[ "$(git cat-file -t v0.2.67-alpha)" = tag ] || { echo "not an annotated tag"; exit 1; }
 sudo bash ops/torii-final-cutover.sh
 ```
 

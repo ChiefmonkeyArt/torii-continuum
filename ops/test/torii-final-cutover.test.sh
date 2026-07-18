@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Hermetic tests for the in-repo cutover operator script (OPS-CUTOVER-6, v0.2.65-alpha).
+# Hermetic tests for the in-repo cutover operator script (OPS-RETENTION-1, v0.2.67-alpha).
 #
 # No real deploy, no network, no root. Concerns:
 #   1. Anti-partial-delivery — the whole body is a single brace group, so a
@@ -111,8 +111,8 @@ printf '%s' "$src_out" | grep -qiF 'do not source' \
 # ── 3. Pinned annotated tags + version markers ───────────────────────────────
 grep -qF 'BASE_TAG="v0.1.4"' "$CUTOVER"                 && ok "pins torii-base v0.1.4"             || bad "torii-base tag not pinned"
 grep -qF 'BASE_VERSION="0.1.4"' "$CUTOVER"              && ok "pins torii-base VERSION 0.1.4"      || bad "torii-base version not pinned"
-grep -qF 'CONTINUUM_TAG="v0.2.65-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.65-alpha" || bad "continuum tag not pinned to v0.2.65-alpha"
-grep -qF 'CONTINUUM_VERSION="0.2.65-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.65-alpha" || bad "continuum version not pinned"
+grep -qF 'CONTINUUM_TAG="v0.2.67-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.67-alpha" || bad "continuum tag not pinned to v0.2.67-alpha"
+grep -qF 'CONTINUUM_VERSION="0.2.67-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.67-alpha" || bad "continuum version not pinned"
 grep -qF 'PREVIEW_VERSION="0.1.21-preview"' "$CUTOVER"  && ok "pins onboarding preview 0.1.21-preview" || bad "preview version not pinned"
 grep -qF 'PREVIEW_CTA="Sign in with browser extension"' "$CUTOVER" && ok "keeps the canonical CTA label" || bad "canonical CTA label missing"
 
@@ -458,6 +458,16 @@ grep -qF 'readonly PREFLIGHT_PATHS=' "$CUTOVER" && ok "pins the filesystems to c
 # 13b. The gate must die (fail closed) when space is insufficient.
 awk '/^preflight_free_space\(\) \{/,/^\}/' "$CUTOVER" | grep -qF 'insufficient free space' \
   && ok "preflight dies on insufficient free space" || bad "preflight does not fail closed on low space"
+# 13b2. OPS-RETENTION-1: the 2 GiB hard floor is RETAINED and an 80%-used
+#       non-fatal capacity warning is ADDED (nudging the retention sweep).
+grep -qE 'readonly PREFLIGHT_MIN_FREE_MB=2048' "$CUTOVER" \
+  && ok "preflight retains the 2 GiB (2048 MiB) hard floor" || bad "2 GiB preflight floor changed/removed"
+grep -qE 'readonly PREFLIGHT_WARN_PCT=80' "$CUTOVER" \
+  && ok "preflight pins an 80% capacity warning threshold" || bad "no PREFLIGHT_WARN_PCT=80"
+preflight_body="$(awk '/^preflight_free_space\(\) \{/,/^\}/' "$CUTOVER")"
+printf '%s\n' "$preflight_body" | grep -qF 'PREFLIGHT_WARN_PCT' \
+  && printf '%s\n' "$preflight_body" | grep -qiF 'full' \
+  && ok "preflight warns (non-fatal) at/above the 80% threshold" || bad "preflight has no 80% capacity warning"
 # 13c. Ordering: preflight runs FIRST in main — before verify_release_sources
 #      (which clones) and before any mutation — so a starved host never mutates.
 ds_main_body="$(awk '/^main\(\) \{/,/^\}/' "$CUTOVER")"

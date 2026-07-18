@@ -150,6 +150,7 @@ Adds a **sealed, local-first character stack** so the agent has a stable identit
 - If a provider (model, relay, mint) is being pinned, document the fallback in the same commit even if the fallback ships later.
 - If a feature can start read-only or mockup-only, it starts that way. Live actions require an explicit slice.
 - If Continuum work and Quest work start bleeding into each other, stop and route the task to the correct repo. The two apps stay separate on purpose.
+- If an ops tool deletes anything on the VPS, it fails closed: it acts only inside explicitly approved roots, canonicalises + re-checks every candidate (no symlink, exact-parent, protected-path denylist), refuses when deploy service state is unsafe, and treats "cannot prove it's safe" as "do not delete". Disk hygiene (OPS-RETENTION-1) reclaims only regenerable deploy/cutover artefacts after a verified-good deploy — live state, encrypted state, projects, certificates, model weights and audit logs are untouchable.
 
 ## Open Questions
 

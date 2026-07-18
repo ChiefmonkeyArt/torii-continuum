@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Torii final VPS cutover — in-repo operator script (OPS-CUTOVER-6, v0.2.65-alpha).
+# Torii final VPS cutover — in-repo operator script (OPS-RETENTION-1, v0.2.67-alpha).
 #
 # Root-owned, fail-closed cutover for chiefmonkey.art. Fetched from ONE immutable
 # annotated release tag and invoked with a short command from a verified clone:
@@ -10,7 +10,7 @@
 # It:
 #   - verifies exact annotated release tags + version markers before mutating live state
 #       torii-base            v0.1.4
-#       torii-continuum       v0.2.65-alpha  (this script's own release tag)
+#       torii-continuum       v0.2.67-alpha  (this script's own release tag)
 #       onboarding preview    v0.1.21-preview
 #   - backs up the current Torii base state to a root-only timestamped directory
 #   - redeploys torii-base via its sanctioned bootstrap (TORII_DOMAIN + SKIP_CERTBOT=1)
@@ -116,8 +116,8 @@ readonly BASE_REPO="https://github.com/ChiefmonkeyArt/torii-base.git"
 readonly BASE_TAG="v0.1.4"
 readonly BASE_VERSION="0.1.4"
 readonly CONTINUUM_REPO="https://github.com/ChiefmonkeyArt/torii-continuum.git"
-readonly CONTINUUM_TAG="v0.2.65-alpha"
-readonly CONTINUUM_VERSION="0.2.65-alpha"
+readonly CONTINUUM_TAG="v0.2.67-alpha"
+readonly CONTINUUM_VERSION="0.2.67-alpha"
 readonly PREVIEW_DIR_NAME="onboarding-v0.1.21"
 readonly PREVIEW_VERSION="0.1.21-preview"
 # Canonical CTA label — kept for logs/reports only, NOT for matching.
@@ -164,6 +164,10 @@ readonly KEEP_STAGING_DIRS=1
 # and then die mid-install. Each staging run needs ~629M (clone + node_modules)
 # plus the base backup tar and preview stage; 2048 MiB is a conservative floor.
 readonly PREFLIGHT_MIN_FREE_MB=2048
+# Non-fatal capacity warning threshold (percent used). A host that still clears
+# the 2 GiB floor but is >= this full gets a WARN nudging the operator to run the
+# disk-retention sweep (ops/torii-disk-retention.sh). Never blocks the cutover.
+readonly PREFLIGHT_WARN_PCT=80
 # Filesystems that must have headroom before we touch anything: the staging root
 # (/root), the app/npm target (/home), the base install (/opt), and the webroot
 # (/var/www). Deduped by mountpoint at check time so multiple paths on one FS are
@@ -257,7 +261,15 @@ preflight_free_space() {
     if (( avail_mb < PREFLIGHT_MIN_FREE_MB )); then
       die "insufficient free space on ${mount} (${avail_mb} MiB free, need ${PREFLIGHT_MIN_FREE_MB} MiB) — free space before cutover"
     fi
-    log "Preflight free space OK on ${mount}: ${avail_mb} MiB (>= ${PREFLIGHT_MIN_FREE_MB} MiB)"
+    # Non-fatal capacity warning: at/above PREFLIGHT_WARN_PCT the host is getting
+    # tight even though it still clears the hard 2 GiB floor above. This is an
+    # early signal to run the disk-retention sweep; it never blocks the cutover.
+    local used_pct
+    used_pct="$(df -P -- "$probe" | awk 'NR==2 {gsub("%","",$5); print $5}')"
+    if [[ "$used_pct" =~ ^[0-9]+$ ]] && (( used_pct >= PREFLIGHT_WARN_PCT )); then
+      log "WARN filesystem ${mount} is ${used_pct}% full (>= ${PREFLIGHT_WARN_PCT}%); free space soon (see ops/torii-disk-retention.sh)"
+    fi
+    log "Preflight free space OK on ${mount}: ${avail_mb} MiB (>= ${PREFLIGHT_MIN_FREE_MB} MiB, ${used_pct:-?}% used)"
   done
 }
 
