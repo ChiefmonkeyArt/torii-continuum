@@ -525,6 +525,56 @@ gates, log-rotation scoping, and the static safety guards).
 
 ---
 
+### Admin-triggered self-update (AUTH-DIRECT-1 + VERSION-UPDATE-1, v0.2.69-alpha)
+
+The operator can trigger a version update **from the UI** without SSH, and
+without granting the agent any privilege to run arbitrary commands. The design
+is privilege-separated so the unprivileged agent never touches root state:
+
+1. **Discovery (public, safe).** `GET /api/version` returns a non-secret
+   summary `{ current, latest, update_available, channel, checked_at, source,
+   stale }`. The latest tag comes from `agent/core/release-check.mjs`, which
+   queries the GitHub releases API **cached + rate-limited**, pinned to
+   `api.github.com` with `redirect: 'error'` (SSRF-safe), tolerates GitHub /
+   network failure by serving cache or `source:'unreachable'` (never blocking
+   login), and picks the newest release with prerelease-aware semver
+   (`agent/core/semver.mjs`, semver.org §11.4) **on the same channel**
+   (alpha→alpha). The login card shows this non-interactively (`Up to date` or
+   `Latest vX`); no update can be triggered while logged out.
+
+2. **Request (admin only).** `POST /api/update { tag, confirm: true }` is
+   `requireAdmin`-gated and rate-limited. It rejects unless `confirm===true`,
+   independently re-authorizes the tag (`agent/core/updater.mjs`
+   `authorizeUpdate`: valid grammar, strictly newer than current, equal to the
+   server-known `latest` or on an optional allowlist), and — on success —
+   writes a vetted request to `<AGENT_ROOT>/memory/update-request.json`
+   (atomic tmp+rename, mode `0600`). The agent **never execs** and **never
+   writes root-owned files**. `GET /api/update/status` and
+   `POST /api/update/cancel` (both admin) expose / clear the queued request.
+
+3. **Apply (root, independent).** `ops/apply-update-request.sh` runs as a
+   **fail-safe `ExecStartPre`** on `torii-continuum-deploy.service` (installed
+   by `deploy-bootstrap.sh` to `/usr/local/sbin/torii-continuum-update-apply`).
+   It re-reads the request, **re-validates the tag grammar (byte-for-byte the
+   same regex as the deploy wrapper) and the allowlist**, and only then rewrites
+   `CONTINUUM_TARGET_TAG` in the root deploy pin (`mktemp` + `sed` + `chmod
+   0600` + `chown root:root` + atomic `mv`). Anything missing, empty, invalid,
+   unlisted, or already-current is discarded and the applier exits **0** so it
+   can never block the baseline pin deploy. The existing deploy service then
+   converges to the new tag exactly as a manual pin edit would; the UI polls
+   `/api/version` and reloads once the live version matches.
+
+Security properties: no unauthenticated trigger, no token/secret ever exposed,
+no arbitrary command execution, defence-in-depth tag validation on **both**
+sides of the privilege boundary, `0600` request/pin files, and a fail-safe
+applier that degrades to the existing pinned deploy. Tests:
+`ops/test/apply-update-request.test.sh` (**49**, grammar mirror + atomic pin
+rewrite + fail-safe state machine + service/bootstrap wiring), plus the agent
+`updater` / `update-routes` suites and the frontend `release` / `auth` /
+`version-update-ui` suites.
+
+---
+
 ## Standalone agent install (`install-agent.sh`)
 
 The Ansible playbook above provisions a whole box. If you already have a

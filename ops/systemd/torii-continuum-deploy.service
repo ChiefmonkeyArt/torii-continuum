@@ -21,6 +21,15 @@ StartLimitBurst=5
 
 [Service]
 Type=oneshot
+# PRE step (VERSION-UPDATE-1): translate an admin-queued, agent-spooled update
+# request into a pin change BEFORE the deploy runs. The agent (unprivileged)
+# cannot write the root pin, so it writes a vetted request into its memory/ dir;
+# this root applier independently re-validates it (grammar + allowlist) and, only
+# if it passes, rewrites CONTINUUM_TARGET_TAG. It is fail-safe: a missing/corrupt/
+# unauthorized request is discarded and the baseline pin deploy proceeds. The `-`
+# prefix means even an unexpected non-zero exit never blocks the deploy.
+ExecStartPre=-/usr/local/sbin/torii-continuum-update-apply
+
 # Runs as root: it installs code under /opt/deploy and runs the Ansible role
 # (which manages systemd + nginx). The wrapper itself is the ONLY privileged
 # surface — see ops/sudoers/torii-continuum-deploy.example for the scoped,

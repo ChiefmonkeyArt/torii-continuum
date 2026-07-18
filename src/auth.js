@@ -1,28 +1,48 @@
 /**
- * NIP-07 login flow — signs a challenge event with Plebeian Signer
- * (or any NIP-07 extension) and hands it to the agent for verification.
+ * NIP-07 login flow (AUTH-DIRECT-1) — signs a challenge event with Plebeian
+ * Signer (or any NIP-07 extension) and hands it to the agent for verification.
+ *
+ * DIRECT INVOCATION: clicking Login invokes the browser NIP-07 extension
+ * immediately — there is NO intermediate modal. Status and errors are surfaced
+ * INLINE on the calling surface (the login card or the sidebar) via an injected
+ * `onStatus` sink, so the original homescreen stays put on any failure and the
+ * user sees a concise message where they clicked.
  *
  * Flow:
- *   1. Check window.nostr exists (Plebeian Signer or equivalent).
- *   2. POST /api/auth/challenge → get { challenge, expires_in }.
- *   3. Ask window.nostr.signEvent({ kind: 22242, content: challenge, tags: [...] }).
- *   4. POST /api/auth/verify { event } → get { token, expires_at }.
- *   5. Token stored in localStorage; UI switches to logged-in state.
+ *   1. window.nostr must exist (missing → inline "install a signer" message).
+ *   2. POST /api/auth/challenge → { challenge, expires_in }.
+ *   3. window.nostr.signEvent({ kind: 22242, content: challenge, tags: [...] }),
+ *      guarded by a timeout so a hung/never-answered extension fails cleanly.
+ *   4. POST /api/auth/verify { event } → { token, expires_at }; token stored.
+ *   5. On success, dispatch continuum:session-changed (router navigates to the
+ *      dashboard). On ANY failure (cancel, missing extension, denial, timeout,
+ *      bad signature) we stay put and report inline.
  *
- * This module is UI-agnostic — the header renders a Login button that calls
- * startLogin(), and the modal dialog inside surfaces status / errors.
+ * A module-level in-flight guard prevents double invocation / races from rapid
+ * clicks or a second surface triggering login while one is running.
  */
 
-import { h, openModal } from './views/util.js';
-import { requestChallenge, verifyChallenge, isLoggedIn, logout as clearSession, isAgentConfigured } from './data/agent.js';
+import {
+  requestChallenge,
+  verifyChallenge,
+  isLoggedIn,
+  logout as clearSession,
+  isAgentConfigured,
+} from './data/agent.js';
 
 const NIP42_KIND = 22242;
+// Give the extension a bounded window to answer. A user who never approves (or a
+// wedged extension) resolves as a clean timeout instead of hanging the button.
+const SIGNER_TIMEOUT_MS = 90_000;
 
-let loginModalHandle = null;
+// Race guard: at most one login attempt in flight across ALL surfaces.
+let loginInFlight = false;
 
-function hasSigner() {
+export function hasSigner() {
   return typeof window !== 'undefined' && window.nostr && typeof window.nostr.signEvent === 'function';
 }
+
+export function isLoginInFlight() { return loginInFlight; }
 
 export function isSessionLive() { return isLoggedIn(); }
 
@@ -32,109 +52,115 @@ export function endSession() {
 }
 
 /**
- * Open the login modal. Wraps the whole flow so the user sees a single
- * dialog with status transitions.
+ * Build the NIP-07 login event params. Pure + exported so the challenge/relay
+ * wiring is unit-tested without a signer.
+ * @param {string} challenge
+ * @param {string} origin
+ * @param {number} [nowMs]
  */
-export async function startLogin() {
-  if (loginModalHandle) return; // already open
-
-  // If we're on the demo build with no agent, explain up front.
-  if (!isAgentConfigured()) {
-    openModal({
-      title: 'Login unavailable in demo',
-      subtitle: 'This build of Continuum runs without an agent backend. Live login (chat, wallet, Routstr) is available when you self-host the agent.',
-      body: h('div', {}, [
-        h('p', { class: 'muted', text: 'See agent/README.md in the repo for bringing up your Torii. Once your agent is reachable, this button will connect via NIP-07 (Plebeian Signer).' }),
-        h('div', { style: 'display:flex; gap: 8px; justify-content: flex-end; margin-top: 12px;' }, [
-          h('button', { class: 'primary', onClick: () => loginModalHandle?.close() }, ['OK']),
-        ]),
-      ]),
-      onClose: () => { loginModalHandle = null; },
-    });
-    loginModalHandle = { close: () => document.querySelector('.modal-backdrop')?.remove() };
-    return;
-  }
-
-  if (!hasSigner()) {
-    openModal({
-      title: 'NIP-07 signer not found',
-      subtitle: 'Continuum uses Plebeian Signer (or another NIP-07 browser extension) to sign the login challenge. No key material touches the agent — you sign in your browser, the agent verifies the signature.',
-      body: h('div', {}, [
-        h('p', { class: 'muted' }, [
-          'Install Plebeian Signer: ',
-          h('a', { href: 'https://chromewebstore.google.com/detail/plebeian-signer-nostr-ide/ijbiankmnehjephbkfdgphckcdgbgoho', target: '_blank', rel: 'noopener' }, ['Chrome']),
-          ' · ',
-          h('a', { href: 'https://addons.mozilla.org/en-US/firefox/addon/plebeian-signer/', target: '_blank', rel: 'noopener' }, ['Firefox']),
-        ]),
-        h('div', { style: 'display:flex; gap: 8px; justify-content: flex-end; margin-top: 12px;' }, [
-          h('button', { class: 'primary', onClick: () => loginModalHandle?.close() }, ['OK']),
-        ]),
-      ]),
-      onClose: () => { loginModalHandle = null; },
-    });
-    loginModalHandle = { close: () => document.querySelector('.modal-backdrop')?.remove() };
-    return;
-  }
-
-  const status = h('div', { class: 'muted', text: 'Requesting challenge from your agent…' });
-  const spinner = h('div', { class: 'login-spinner' });
-  const actions = h('div', { style: 'display:flex; gap: 8px; justify-content: flex-end; margin-top: 12px;' }, [
-    h('button', { onClick: () => loginModalHandle?.close() }, ['Cancel']),
-  ]);
-  const body = h('div', {}, [spinner, status, actions]);
-
-  loginModalHandle = openModal({
-    title: 'Login with Nostr',
-    subtitle: 'Your agent will send a challenge; Plebeian Signer will sign it in your browser. Your nsec never leaves the extension.',
-    body,
-    onClose: () => { loginModalHandle = null; },
-  });
-
-  const setStatus = (msg, isError = false) => {
-    status.textContent = msg;
-    status.className = isError ? 'muted' : 'muted';
-    status.style.color = isError ? 'hsl(var(--destructive))' : '';
+export function buildLoginEvent(challenge, origin, nowMs = Date.now()) {
+  return {
+    kind: NIP42_KIND,
+    created_at: Math.floor(nowMs / 1000),
+    content: challenge,
+    tags: [
+      ['challenge', challenge],
+      ['relay', origin],
+    ],
   };
+}
 
-  // 1. Challenge
-  const chal = await requestChallenge();
-  if (!chal.ok) {
-    spinner.remove();
-    setStatus(`Could not reach agent: ${chal.reason}`, true);
+/**
+ * Resolve/reject a promise with a timeout. Pure + exported for tests.
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} ms
+ * @param {() => any} [makeTimer] injectable setTimeout for tests
+ * @returns {Promise<T>}
+ */
+export function withTimeout(promise, ms, makeTimer = setTimeout) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const t = makeTimer(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('timeout'));
+    }, ms);
+    Promise.resolve(promise).then(
+      (v) => { if (!settled) { settled = true; clearTimeout(t); resolve(v); } },
+      (e) => { if (!settled) { settled = true; clearTimeout(t); reject(e); } },
+    );
+  });
+}
+
+/**
+ * Begin the login flow. Invokes the NIP-07 extension directly (no modal).
+ * @param {object} [opts]
+ * @param {(s:{phase:string, message:string, error?:boolean, done?:boolean, signerMissing?:boolean}) => void} [opts.onStatus]
+ *        inline status sink on the calling surface.
+ */
+export async function startLogin(opts = {}) {
+  const onStatus = typeof opts.onStatus === 'function' ? opts.onStatus : () => {};
+  const say = (phase, message, extra = {}) => onStatus({ phase, message, ...extra });
+
+  // Double-invocation / race guard.
+  if (loginInFlight) return;
+
+  // Demo build with no agent: explain inline, do not invoke a signer.
+  if (!isAgentConfigured()) {
+    say('unavailable', 'Login requires a self-hosted agent. See agent/README.md to bring up your Torii.', { error: true });
     return;
   }
-  const { challenge } = chal.data;
 
-  // 2. Sign in browser
-  setStatus('Waiting for Plebeian Signer to sign the challenge…');
-  let signed;
+  // No NIP-07 extension: keep the useful "install a signer" guidance, inline.
+  if (!hasSigner()) {
+    say('no-signer', 'No NIP-07 signer found. Install Plebeian Signer, then try again.', { error: true, signerMissing: true });
+    return;
+  }
+
+  loginInFlight = true;
   try {
-    signed = await window.nostr.signEvent({
-      kind: NIP42_KIND,
-      created_at: Math.floor(Date.now() / 1000),
-      content: challenge,
-      tags: [
-        ['challenge', challenge],
-        ['relay', window.location.origin],
-      ],
-    });
-  } catch (e) {
-    spinner.remove();
-    setStatus(`Signer refused: ${e.message || e}`, true);
-    return;
-  }
+    // 1. Challenge
+    say('challenge', 'Requesting challenge from your agent…');
+    const chal = await requestChallenge();
+    if (!chal.ok) {
+      say('error', `Could not reach agent: ${chal.reason}`, { error: true });
+      return;
+    }
+    const { challenge } = chal.data;
 
-  // 3. Verify
-  setStatus('Verifying signature…');
-  const verified = await verifyChallenge(signed);
-  if (!verified.ok) {
-    spinner.remove();
-    setStatus(`Agent rejected signature: ${verified.reason}`, true);
-    return;
-  }
+    // 2. Sign directly in the extension (bounded by a timeout).
+    say('signing', 'Waiting for your signer to approve the login…');
+    let signed;
+    try {
+      signed = await withTimeout(
+        window.nostr.signEvent(buildLoginEvent(challenge, window.location.origin)),
+        SIGNER_TIMEOUT_MS,
+      );
+    } catch (e) {
+      const reason = e && e.message === 'timeout'
+        ? 'Signer timed out. Approve the request in your extension, then try again.'
+        : `Signer declined: ${e?.message || e}`;
+      say('error', reason, { error: true });
+      return;
+    }
+    if (!signed || typeof signed !== 'object') {
+      say('error', 'Signer returned no signature. Try again.', { error: true });
+      return;
+    }
 
-  spinner.remove();
-  setStatus('Logged in. Reloading…');
-  document.dispatchEvent(new CustomEvent('continuum:session-changed'));
-  setTimeout(() => { loginModalHandle?.close(); loginModalHandle = null; }, 400);
+    // 3. Verify
+    say('verifying', 'Verifying signature…');
+    const verified = await verifyChallenge(signed);
+    if (!verified.ok) {
+      say('error', `Agent rejected the signature: ${verified.reason}`, { error: true });
+      return;
+    }
+
+    // 4. Success → let the router navigate to the dashboard.
+    say('done', 'Signed in.', { done: true });
+    document.dispatchEvent(new CustomEvent('continuum:session-changed'));
+  } finally {
+    loginInFlight = false;
+  }
 }

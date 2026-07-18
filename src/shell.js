@@ -6,7 +6,8 @@
 import { navigate, currentRoute } from './router.js';
 import { listProjects } from './data/store.js';
 import { isSessionLive, startLogin, endSession } from './auth.js';
-import { isAgentConfigured } from './data/agent.js';
+import { isAgentConfigured, versionInfo, requestUpdate } from './data/agent.js';
+import { describeVersionState, updateTargetTag } from './data/release.js';
 
 const NAV_ITEMS = [
   { id: 'projects',    label: 'Projects',    icon: iconProjects,    path: '/projects' },
@@ -80,6 +81,8 @@ export function renderSidebar() {
         <b>Local-first.</b> Continuum stores your projects as nostr-shaped events — portable, signable, yours.
       </div>
       <div class="sidebar-version" data-app-version></div>
+      <div class="sidebar-update" data-sidebar-update hidden></div>
+      <div class="sidebar-login-status" data-login-status role="status" aria-live="polite"></div>
       <div class="sidebar-footer-row">
         <button class="session-btn ${isSessionLive() ? 'logged-in' : ''}" data-session-toggle title="${isSessionLive() ? 'Sign out' : 'Sign in with Nostr'}">
           <span class="session-icon">${isSessionLive() ? iconLogout() : iconKey()}</span>
@@ -98,10 +101,11 @@ export function renderSidebar() {
   const toggle = sidebarEl.querySelector('[data-theme-toggle]');
   if (toggle) toggle.addEventListener('click', (e) => { e.stopPropagation(); toggleTheme(); renderSidebar(); });
   const sessionBtn = sidebarEl.querySelector('[data-session-toggle]');
+  const loginStatusEl = sidebarEl.querySelector('[data-login-status]');
   if (sessionBtn) sessionBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (isSessionLive()) { endSession(); renderSidebar(); }
-    else { startLogin(); }
+    else { startLogin({ onStatus: (s) => renderLoginStatus(loginStatusEl, s) }); }
   });
   sidebarEl.querySelectorAll('.nav-item').forEach((el) => {
     el.addEventListener('click', () => navigate(el.dataset.path.replace(/\?.*/, '')));
@@ -110,6 +114,108 @@ export function renderSidebar() {
     });
   });
   sidebarEl.querySelector('.brand').addEventListener('click', () => navigate('/'));
+
+  // VERSION-UPDATE-1: after login, if a newer release exists, reveal the latest
+  // version + an Update button in the footer. Non-blocking; failures are silent
+  // (the version stamp always shows). Only meaningful with a configured agent.
+  refreshSidebarVersion();
+}
+
+// Fetch the version summary and, when logged in AND a newer release is known,
+// render the latest version + an Update button into [data-sidebar-update].
+async function refreshSidebarVersion() {
+  const box = sidebarEl?.querySelector('[data-sidebar-update]');
+  if (!box) return;
+  if (!isAgentConfigured() || !isSessionLive()) { box.hidden = true; return; }
+
+  let r;
+  try { r = await versionInfo(); } catch { return; }
+  if (!r || !r.ok) return;
+
+  const state = describeVersionState(r.data);
+  const tag = updateTargetTag(r.data);
+  if (state.state !== 'newer' || !tag) { box.hidden = true; box.innerHTML = ''; return; }
+
+  box.hidden = false;
+  renderUpdateAffordance(box, tag, state);
+}
+
+// Render a two-step confirm Update button + status. Two-step (arm → confirm)
+// keeps the confirmation IN the UI without a modal, and prevents an accidental
+// single click from queuing a deploy.
+function renderUpdateAffordance(box, tag, state) {
+  box.innerHTML = '';
+  const label = document.createElement('div');
+  label.className = 'sidebar-update-label';
+  label.textContent = `Update available · ${state.latest}`;
+
+  const status = document.createElement('div');
+  status.className = 'sidebar-update-status';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+
+  const btn = document.createElement('button');
+  btn.className = 'sidebar-update-btn';
+  btn.type = 'button';
+  btn.textContent = `Update to ${state.latest}`;
+  btn.setAttribute('data-update-btn', '');
+
+  let armed = false;
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!armed) {
+      armed = true;
+      btn.textContent = `Confirm update to ${state.latest}`;
+      btn.classList.add('armed');
+      status.textContent = 'Click again to confirm. The agent will update and restart.';
+      return;
+    }
+    btn.disabled = true;
+    btn.classList.remove('armed');
+    status.textContent = 'Queuing update…';
+    let res;
+    try { res = await requestUpdate(tag); } catch (err) { res = { ok: false, reason: String(err) }; }
+    if (!res || !res.ok) {
+      btn.disabled = false;
+      armed = false;
+      btn.textContent = `Update to ${state.latest}`;
+      status.textContent = `Update failed: ${res?.reason || 'unknown error'}`;
+      status.classList.add('error');
+      return;
+    }
+    status.classList.remove('error');
+    status.textContent = 'Update queued. The agent will update and restart shortly; this page will reload when it is back.';
+    pollForUpgrade(tag);
+  });
+
+  box.appendChild(label);
+  box.appendChild(btn);
+  box.appendChild(status);
+}
+
+// Poll /api/version until the live version reaches the target, then reload so
+// the freshly-deployed assets load. Bounded so a stalled deploy stops polling.
+function pollForUpgrade(tag, attempts = 0) {
+  const want = String(tag).replace(/^v/, '');
+  if (attempts > 40) return; // ~10 min at 15s
+  setTimeout(async () => {
+    let r;
+    try { r = await versionInfo(); } catch { return pollForUpgrade(tag, attempts + 1); }
+    const live = r?.ok ? String(r.data?.current || '').replace(/^v/, '') : '';
+    if (live && live === want) {
+      if (typeof window !== 'undefined' && window.location?.reload) window.location.reload();
+      return;
+    }
+    pollForUpgrade(tag, attempts + 1);
+  }, 15000);
+}
+
+// Inline login status sink for the sidebar login button (no modal).
+function renderLoginStatus(el, s) {
+  if (!el) return;
+  if (!s || !s.message) { el.textContent = ''; el.className = 'sidebar-login-status'; return; }
+  el.className = `sidebar-login-status${s.error ? ' error' : ''}`;
+  el.textContent = s.message;
 }
 
 // -- Theme --

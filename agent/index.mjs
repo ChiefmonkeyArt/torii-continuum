@@ -37,6 +37,8 @@ import { createNwcClient, createLiveNwcTransport } from './core/nwc.mjs';
 import { createRoutstrProvider } from './core/routstr-provider.mjs';
 import { createOnboarding } from './core/onboarding.mjs';
 import { createProjectSources } from './core/project-sources.mjs';
+import { createReleaseChecker } from './core/release-check.mjs';
+import { createUpdater } from './core/updater.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENT_ROOT = __dirname;
@@ -145,6 +147,23 @@ const routstr = createRoutstr(cfg, wallet, app.log);
 // local Markdown to-do files + public GitHub issues into per-project Kanban
 // boards under strict allowlists. Disabled unless cfg.project_sources.enabled.
 const projectSources = createProjectSources(cfg, { log: app.log });
+
+// Version/update stack (v0.2.69-alpha, VERSION-UPDATE-1). The release checker
+// answers "is a newer same-channel release available?" for the public
+// /api/version endpoint (cached, rate-limited, fail-soft — never blocks login).
+// The updater spools an admin-vetted update request into the agent's ONLY
+// writable path (memory/); a separate root-side ops applier re-validates it and
+// rewrites the deploy pin. The agent itself never execs or touches root files.
+const releaseChecker = createReleaseChecker({
+  currentVersion: VERSION,
+  owner: cfg.update?.repo_owner,
+  repo: cfg.update?.repo_name,
+});
+const updateAllowlist = Array.isArray(cfg.update?.allowlist) ? cfg.update.allowlist : [];
+const updater = createUpdater({
+  requestPath: join(AGENT_ROOT, 'memory', 'update-request.json'),
+  allowlist: updateAllowlist,
+});
 
 // Ollama fallback (CONT-AGENT-1b) — optional local-model provider.
 // Disabled by default; enable via config.ollama.enabled: true when Ollama
@@ -256,6 +275,21 @@ app.get('/api/health', async () => ({
   admin_claimed: auth.isClaimed(),
 }));
 
+// Public /api/version is polled by every open login page, so cap it per-IP.
+const versionMax =
+  Number.isFinite(cfg.rate_limit?.version_per_min) && cfg.rate_limit.version_per_min > 0
+    ? cfg.rate_limit.version_per_min
+    : 30;
+
+// GET /api/version — PUBLIC, non-secret version summary (VERSION-UPDATE-1).
+// Lets the logged-out login screen show current + latest-available release.
+// The checker caches/rate-limits/fails-soft, so a GitHub outage never blocks
+// login: it returns { source:'unreachable' } with the current version intact.
+// Only version strings are exposed — no tokens, no repo internals.
+app.get('/api/version', { config: rateLimitConfig(versionMax, '/api/version') }, async () => {
+  return releaseChecker.get();
+});
+
 // GET /api/health/models — provider reachability probe.
 // Returns Routstr + Ollama status so the Console can show which providers
 // are live and which are enabled. Admin-gated to avoid leaking endpoints.
@@ -315,6 +349,11 @@ const walletHealthMax =
   Number.isFinite(cfg.rate_limit?.wallet_health_per_min) && cfg.rate_limit.wallet_health_per_min > 0
     ? cfg.rate_limit.wallet_health_per_min
     : 6;
+// Admin-gated update queue/cancel. Low ceiling — an update is a rare, human act.
+const updateMax =
+  Number.isFinite(cfg.rate_limit?.update_per_min) && cfg.rate_limit.update_per_min > 0
+    ? cfg.rate_limit.update_per_min
+    : 6;
 
 // Continuum project slugs are lowercase kebab (see src/data/store.js slugify).
 const PROJECT_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
@@ -367,6 +406,53 @@ app.post('/api/auth/verify', { config: rateLimitConfig(authVerifyMax, '/api/auth
 // ─────────────────────────────────────────────────────────────
 // Admin routes
 // ─────────────────────────────────────────────────────────────
+
+// POST /api/update — queue an admin-vetted self-update (VERSION-UPDATE-1).
+// Admin-gated + rate-limited. The server independently re-validates the tag
+// (strict grammar, strictly-newer, must be the vetted latest or allowlisted)
+// and spools a request into the agent-writable memory/ dir. It NEVER execs and
+// NEVER touches root-owned files — a separate root ops applier converges the
+// deploy. `confirm:true` is required so a stray POST can't queue a deploy.
+app.post(
+  '/api/update',
+  { preHandler: requireAdmin, config: rateLimitConfig(updateMax, '/api/update') },
+  async (req, reply) => {
+    const tag = typeof req.body?.tag === 'string' ? req.body.tag.trim() : '';
+    if (req.body?.confirm !== true) {
+      return reply.code(400).send({ ok: false, code: 'not_confirmed', reason: 'confirm:true required' });
+    }
+    const result = await updater.request({
+      tag,
+      currentVersion: VERSION,
+      latestKnown: releaseChecker.latestKnown(),
+      requestedBy: req.session?.npub || null,
+    });
+    if (!result.ok) {
+      const status = result.code === 'pending' ? 409 : 400;
+      app.log.warn({ evt: 'update.request.reject', code: result.code, tag });
+      return reply.code(status).send(result);
+    }
+    app.log.info({ evt: 'update.request.queued', tag: result.tag, by: req.session?.npub || null });
+    return result;
+  },
+);
+
+// GET /api/update/status — admin view of the queued request (if any).
+app.get('/api/update/status', { preHandler: requireAdmin }, async () => {
+  const s = await updater.status();
+  return { ok: true, ...s, current: VERSION, latest: releaseChecker.latestKnown() };
+});
+
+// POST /api/update/cancel — admin cancels a queued request.
+app.post(
+  '/api/update/cancel',
+  { preHandler: requireAdmin, config: rateLimitConfig(updateMax, '/api/update/cancel') },
+  async () => {
+    const r = await updater.cancel();
+    app.log.info({ evt: 'update.request.cancel', cancelled: r.cancelled });
+    return r;
+  },
+);
 
 app.get('/api/wallet/balance', { preHandler: requireAdmin }, async () => {
   const b = await wallet.balance();

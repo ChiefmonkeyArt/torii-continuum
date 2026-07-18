@@ -32,11 +32,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 
 WRAPPER_SRC="${SCRIPT_DIR}/deploy-unattended.sh"
+APPLIER_SRC="${SCRIPT_DIR}/apply-update-request.sh"
 SERVICE_SRC="${SCRIPT_DIR}/systemd/torii-continuum-deploy.service"
 TIMER_SRC="${SCRIPT_DIR}/systemd/torii-continuum-deploy.timer"
 SUDOERS_SRC="${SCRIPT_DIR}/sudoers/torii-continuum-deploy.example"
 
 WRAPPER_DST="/usr/local/sbin/torii-continuum-deploy"
+APPLIER_DST="/usr/local/sbin/torii-continuum-update-apply"
 UNIT_DIR="/etc/systemd/system"
 CONF_DIR="/etc/torii"
 CONF_FILE="${CONF_DIR}/continuum-deploy.conf"
@@ -60,16 +62,19 @@ for arg in "$@"; do
 done
 
 [[ "$(id -u)" -eq 0 ]] || die "run as root (installs to /usr/local/sbin, /etc/systemd, /etc/torii)."
-for f in "$WRAPPER_SRC" "$SERVICE_SRC" "$TIMER_SRC" "$SUDOERS_SRC"; do
+for f in "$WRAPPER_SRC" "$APPLIER_SRC" "$SERVICE_SRC" "$TIMER_SRC" "$SUDOERS_SRC"; do
   [[ -f "$f" ]] || die "missing source file: ${f} (run from a torii-continuum checkout)."
 done
 
-# Validate the wrapper parses before installing it — never install a broken one.
+# Validate the scripts parse before installing them — never install a broken one.
 bash -n "$WRAPPER_SRC" || die "wrapper failed syntax check."
+bash -n "$APPLIER_SRC" || die "update-request applier failed syntax check."
 
-# ── 1. Wrapper (root-owned, world-readable, root-writable only) ───────────────
+# ── 1. Wrapper + applier (root-owned, world-readable, root-writable only) ─────
 install -m 0755 -o root -g root "$WRAPPER_SRC" "$WRAPPER_DST"
 log "installed wrapper → ${WRAPPER_DST}"
+install -m 0755 -o root -g root "$APPLIER_SRC" "$APPLIER_DST"
+log "installed update-request applier → ${APPLIER_DST}"
 
 # ── 2. systemd units ─────────────────────────────────────────────────────────
 install -m 0644 -o root -g root "$SERVICE_SRC" "${UNIT_DIR}/torii-continuum-deploy.service"
