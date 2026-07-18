@@ -24,7 +24,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { Mint, Wallet, getEncodedToken, getDecodedToken } from '@cashu/cashu-ts';
+import { Mint, Wallet, getEncodedToken, getDecodedToken, CheckStateEnum } from '@cashu/cashu-ts';
 import { agentRoot } from './config.mjs';
 
 // Non-reversible short id for a mint URL — lets health output/logs reference a
@@ -79,6 +79,55 @@ async function writeProofs(dir, mintUrl, proofs) {
   const path = fileFor(dir, mintUrl);
   const payload = JSON.stringify({ mint: mintUrl, proofs, updated_at: Date.now() }, null, 2);
   await writeFile(path, payload, { mode: 0o600 });
+}
+
+// Exact proof identity. `secret` is unique per proof; `C` (the unblinded
+// signature point) pins it further. Used to quarantine proofs by identity
+// rather than by amount, so we never drop the wrong proof.
+function proofKey(p) {
+  return `${p?.secret || ''}|${p?.C || ''}`;
+}
+
+/**
+ * Recovery sweep. Ask the mint (NUT-07) which of our stored proofs are already
+ * spent and quarantine them by EXACT identity. This is what un-pollutes a
+ * wallet that still holds proofs a prior lost-refund left behind (a 520 where
+ * Routstr melted the token but no X-Cashu-Refund came back, and an old
+ * post-dispatch rollback re-added the now-spent proofs).
+ *
+ * Returns { spendable, pending } where:
+ *   • spendable — UNSPENT proofs, the only ones safe to hand to a new send.
+ *   • pending   — PENDING proofs, kept in storage (an in-flight melt may still
+ *                 resolve) but excluded from selection.
+ * SPENT proofs are dropped from storage. On any check failure (mint down,
+ * NUT-07 unsupported) this is a best-effort no-op: the stored set is returned
+ * unchanged so a transient mint issue never bricks send().
+ */
+async function sweepSpent(wallet, dir, mintUrl, proofs) {
+  if (!Array.isArray(proofs) || proofs.length === 0) return { spendable: [], pending: [] };
+  let states;
+  try {
+    states = await wallet.checkProofsStates(proofs);
+  } catch {
+    return { spendable: proofs, pending: [] };
+  }
+  if (!Array.isArray(states) || states.length !== proofs.length) {
+    return { spendable: proofs, pending: [] };
+  }
+  const spendable = [];
+  const pending = [];
+  let spentCount = 0;
+  for (let i = 0; i < proofs.length; i++) {
+    const st = states[i]?.state;
+    if (st === CheckStateEnum.SPENT) { spentCount++; continue; }
+    if (st === CheckStateEnum.PENDING) { pending.push(proofs[i]); continue; }
+    spendable.push(proofs[i]);
+  }
+  if (spentCount > 0) {
+    // Persist the cleaned set (drop spent, keep pending) before we spend.
+    await writeProofs(dir, mintUrl, [...spendable, ...pending]);
+  }
+  return { spendable, pending };
 }
 
 /**
@@ -181,53 +230,91 @@ export async function createWallet(cfg, log, deps = {}) {
   }
 
   /**
-   * Cut a token of `sats` value for a Routstr request. Uses the first mint
-   * that has enough balance. Returns the encoded token AND a rollback function
-   * that puts the proofs back if the request fails.
+   * Cut a FRESH payment token of `sats` value for a Routstr request. Uses the
+   * first mint that has enough spendable balance.
+   *
+   * Wallet-state contract (v0.2.76-alpha):
+   *   1. Sweep: before selecting, drop any stored proofs the mint already marked
+   *      SPENT (recovery for a wallet polluted by a prior lost-refund rollback).
+   *   2. Swap/select: wallet.send(sats, spendable) consumes the inputs and yields
+   *      { keep (change), send (the fresh payment proofs) }.
+   *   3. Atomic persist: the change (keep) — plus any PENDING proofs we set aside
+   *      — is written as the new state BEFORE returning, so the outgoing payment
+   *      proofs are never left in spendable balance after dispatch.
+   *
+   * The returned object carries two seams used ONLY before the HTTP request is
+   * dispatched OR to quarantine a spent token — never to restore spent inputs:
+   *   • rollback()  — re-adds the FRESH payment proofs (send). SAFE ONLY as a
+   *     pre-dispatch undo (the swap succeeded but we chose not to fetch). Once
+   *     the token is handed to fetch() it must NEVER be rolled back.
+   *   • markSpent() — remove the exact payment proofs from storage by identity.
+   *     Used on a Routstr `token_already_spent` (400) so a retry can't reuse them.
    *
    * If no mint has enough balance, returns { ok: false, reason }.
    */
   async function send(sats) {
     if (sats < 1) return { ok: false, reason: 'sats must be >= 1' };
-    if (sats < (cfg.cashu?.hard_floor_sats || 0)) {
-      // hard_floor guards against draining below floor; separate from send size
-    }
+    const floor = cfg.cashu?.hard_floor_sats || 0;
 
     for (const [mintUrl, wallet] of mints) {
-      const proofs = await readProofs(walletDir, mintUrl);
-      const total = proofs.reduce((s, p) => s + (p.amount || 0), 0);
-      if (total < sats + (cfg.cashu?.hard_floor_sats || 0)) continue;
+      const stored = await readProofs(walletDir, mintUrl);
+      if (stored.length === 0) continue;
+
+      // Load keysets/keys (idempotent) then sweep spent proofs before selecting.
+      try {
+        await ensureLoaded(wallet);
+      } catch (e) {
+        return { ok: false, reason: `send failed on ${mintUrl}: ${e.message}` };
+      }
+      const { spendable, pending } = await sweepSpent(wallet, walletDir, mintUrl, stored);
+
+      const total = spendable.reduce((s, p) => s + (p.amount || 0), 0);
+      if (total < sats + floor) continue;
 
       let sendResult;
       try {
-        await ensureLoaded(wallet);
-        // cashu-ts v3: wallet.send(amount, proofs) → { keep, send } (unchanged).
-        sendResult = await wallet.send(sats, proofs);
+        // cashu-ts v3: wallet.send(amount, proofs) → { keep, send }. Consumes the
+        // input proofs at the mint (swap) and returns fresh payment proofs.
+        sendResult = await wallet.send(sats, spendable);
       } catch (e) {
         return { ok: false, reason: `send failed on ${mintUrl}: ${e.message}` };
       }
 
-      // Persist "keep" as new state immediately. If the request fails, caller
-      // must call rollback(token) which re-receives the send-proofs.
-      await writeProofs(walletDir, mintUrl, sendResult.keep);
+      // Persist change (keep) + preserved pending atomically as the new state.
+      // The payment proofs (send) are intentionally NOT stored — once created
+      // they belong to the request, not to spendable balance.
+      await writeProofs(walletDir, mintUrl, [...sendResult.keep, ...pending]);
       const token = getEncodedToken({ mint: mintUrl, proofs: sendResult.send });
+      const sentKeys = new Set(sendResult.send.map(proofKey));
 
       return {
         ok: true,
         mint: mintUrl,
         sats,
         token,
+        // PRE-DISPATCH ONLY. Re-adds the fresh payment proofs. Never call after
+        // the token has been handed to fetch() — those proofs are then spent.
         rollback: async () => {
           const cur = await readProofs(walletDir, mintUrl);
           await writeProofs(walletDir, mintUrl, [...cur, ...sendResult.send]);
           log.info(`[wallet] rolled back ${sats} sats to ${mintUrl}`);
+        },
+        // Drop the exact payment proofs from storage by identity, if a
+        // pre-dispatch rollback ever put them back. Idempotent no-op otherwise.
+        markSpent: async () => {
+          const cur = await readProofs(walletDir, mintUrl);
+          const cleaned = cur.filter((p) => !sentKeys.has(proofKey(p)));
+          if (cleaned.length !== cur.length) {
+            await writeProofs(walletDir, mintUrl, cleaned);
+            log.info(`[wallet] quarantined ${cur.length - cleaned.length} spent proof(s) on ${mintUrl}`);
+          }
         },
       };
     }
 
     return {
       ok: false,
-      reason: `insufficient balance across all mints for ${sats} sats (need +${cfg.cashu?.hard_floor_sats || 0} floor)`,
+      reason: `insufficient balance across all mints for ${sats} sats (need +${floor} floor)`,
     };
   }
 

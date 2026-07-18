@@ -55,6 +55,32 @@ function readRefundHeader(res) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+/**
+ * Detect Routstr's `token_already_spent` rejection (HTTP 400). Routstr returns
+ * { error: { message, type: "token_already_spent", code: "cashu_token_already_spent" } }.
+ * We match on the structured code/type first, then fall back to a text probe.
+ */
+function isTokenAlreadySpent(status, body) {
+  if (status !== 400) return false;
+  try {
+    const j = JSON.parse(body);
+    const code = j?.error?.code || j?.code;
+    const type = j?.error?.type || j?.type;
+    if (code === 'cashu_token_already_spent' || type === 'token_already_spent') return true;
+  } catch { /* fall through to text probe */ }
+  return /token[_ ]already[_ ]spent/i.test(body || '');
+}
+
+/**
+ * fetch() with a hard wall-clock timeout via AbortController. Used for the
+ * best-effort refund reclaim so a hung Routstr can't stall the caller.
+ */
+function fetchWithTimeout(url, opts, ms) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  return fetch(url, { ...opts, signal: ac.signal }).finally(() => clearTimeout(timer));
+}
+
 function modelForSkill(cfg, skill) {
   const explicit = cfg.routstr.models?.[skill];
   if (explicit) return explicit;
@@ -77,12 +103,62 @@ export function createRoutstr(cfg, wallet, log) {
   const endpoint = cfg.routstr.endpoint.replace(/\/$/, '');
   const maxTokens = cfg.routstr.limits?.max_tokens_out || 2048;
 
-  async function callOnce(model, messages, sats) {
+  /**
+   * Best-effort refund reclaim for a payment token whose change we may have
+   * lost. Called when the request was dispatched but no X-Cashu-Refund came
+   * back (network drop, 5xx/520, non-JSON body). Asks Routstr to refund the
+   * original payment token; if it hands back a Cashu token, we claim it through
+   * wallet.receive (a real mint swap). Any failure is swallowed — and crucially
+   * we NEVER re-add the original payment token to spendable balance, since after
+   * dispatch it is spent/unknown.
+   */
+  async function tryRefundReclaim(paymentToken) {
+    if (!paymentToken) return;
+    let res, body;
+    try {
+      res = await fetchWithTimeout(`${endpoint}/v1/wallet/refund`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Cashu': paymentToken },
+      }, 10000);
+      body = await res.text();
+    } catch (e) {
+      log.warn(`[routstr] refund reclaim request failed: ${e.message}`);
+      return;
+    }
+    if (!res.ok) {
+      log.warn(`[routstr] refund reclaim http ${res.status}`);
+      return;
+    }
+    // The refunded token may ride in the X-Cashu-Refund header or a JSON body.
+    let refundToken = readRefundHeader(res);
+    if (!refundToken) {
+      try {
+        const j = JSON.parse(body);
+        const t = j?.token || j?.cashu || j?.refund;
+        refundToken = typeof t === 'string' && t.trim() ? t.trim() : null;
+      } catch { /* no token in body */ }
+    }
+    if (!refundToken) {
+      log.info('[routstr] refund reclaim: nothing to reclaim');
+      return;
+    }
+    try {
+      const claim = await wallet.receive(refundToken);
+      if (claim.ok) log.info(`[routstr] refund reclaim recovered ${claim.added_sats || 0} sats`);
+      else log.warn(`[routstr] refund reclaim rejected: ${claim.reason}`);
+    } catch (e) {
+      log.warn(`[routstr] refund reclaim claim failed: ${e.message}`);
+    }
+  }
+
+  async function callOnce(model, messages, sats, allowRetry = true) {
     const send = await wallet.send(sats);
     if (!send.ok) {
-      return { ok: false, reason: `wallet: ${send.reason}` };
+      return { ok: false, reason: `wallet: ${send.reason}`, code: send.code || null };
     }
 
+    // Retained for refund reclaim. NOT used to roll back into spendable balance.
+    const paymentToken = send.token;
     const url = `${endpoint}/v1/chat/completions`;
     const started = Date.now();
     let res, body;
@@ -105,12 +181,26 @@ export function createRoutstr(cfg, wallet, log) {
       });
       body = await res.text();
     } catch (e) {
-      await send.rollback();
+      // AFTER dispatch: the token is spent/unknown — NEVER roll it back into
+      // spendable balance. Try to reclaim a lost refund instead.
+      await tryRefundReclaim(paymentToken);
       return { ok: false, reason: `network: ${e.message}` };
     }
 
     if (!res.ok) {
-      await send.rollback();
+      // AFTER dispatch: NEVER roll back.
+      if (isTokenAlreadySpent(res.status, body)) {
+        // The proofs we paid with were already spent (stale wallet state).
+        // Quarantine them by exact identity and retry ONCE with fresh proofs.
+        if (typeof send.markSpent === 'function') await send.markSpent();
+        if (allowRetry) {
+          log.warn('[routstr] token_already_spent — quarantined stale proofs, retrying once with fresh');
+          return callOnce(model, messages, sats, false);
+        }
+        return { ok: false, reason: `http ${res.status}: token_already_spent`, code: 'token_already_spent' };
+      }
+      // A 5xx/520 likely dropped the X-Cashu-Refund — attempt refund reclaim.
+      if (res.status >= 500) await tryRefundReclaim(paymentToken);
       return { ok: false, reason: `http ${res.status}: ${body.slice(0, 200)}` };
     }
 
@@ -118,16 +208,15 @@ export function createRoutstr(cfg, wallet, log) {
     try {
       parsed = JSON.parse(body);
     } catch (e) {
-      // Rollback because we can't confirm the provider consumed the token.
-      // In reality Cashu tokens are consumed atomically by the mint, but if
-      // the response is malformed we're conservative.
-      await send.rollback();
+      // 200 but non-JSON (e.g. a Cloudflare HTML 520 that still set status 200).
+      // The token is already handed off — do NOT roll back; reclaim instead.
+      await tryRefundReclaim(paymentToken);
       return { ok: false, reason: `bad response json: ${e.message}` };
     }
 
     const content = parsed.choices?.[0]?.message?.content;
     if (!content) {
-      await send.rollback();
+      // AFTER dispatch: NEVER roll back. Payment is consumed.
       return { ok: false, reason: 'no content in response' };
     }
 

@@ -98,8 +98,8 @@ routstr:
   # Per-skill model pins. Skill name → model id (Routstr provider decides which
   # underlying provider serves it). "auto" defers to Routstr default routing.
   models:
-    chat:      "deepseek-chat-v3"
-    coding:    "deepseek-coder-v2"
+    chat:      "deepseek-chat"
+    coding:    "deepseek-v3.2"
     summarise: "llama-3.1-8b-instruct"
     routing:   "llama-3.1-8b-instruct"        # tiny "which skill?" classifier
     embed:     "auto"                         # v2 — not used in v1
@@ -110,11 +110,11 @@ routstr:
   fallback:
     enabled: false
     coding:
-      - "deepseek-coder-v2"
+      - "deepseek-v3.2"
       - "qwen-2.5-coder-32b"
       - "qwen-2.5-coder-7b"
     chat:
-      - "deepseek-chat-v3"
+      - "deepseek-chat"
       - "llama-3.1-70b-instruct"
       - "llama-3.1-8b-instruct"
 
