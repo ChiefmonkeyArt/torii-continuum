@@ -26,6 +26,7 @@ import { renderMarketplace } from './views/marketplace.js';
 import { renderRoutstr } from './views/routstr.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderTeam } from './views/team.js';
+import { renderGenesis } from './views/genesis.js';
 
 function setLandingMode(on) {
   const app = document.getElementById('app');
@@ -97,6 +98,7 @@ function boot() {
   route('/marketplace', guarded('/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent()); renderSidebar(); }));
   route('/routstr', guarded('/routstr', () => { setLandingMode(false); renderRoutstr(mainContent()); renderSidebar(); }));
   route('/team', guarded('/team', () => { setLandingMode(false); renderTeam(mainContent()); renderSidebar(); }));
+  route('/genesis', guarded('/genesis', () => { setLandingMode(false); renderGenesis(mainContent()); renderSidebar(); }));
   route('/dashboard', guarded('/dashboard', () => { setLandingMode(false); renderDashboard(mainContent()); renderSidebar(); }));
 
   startRouter();

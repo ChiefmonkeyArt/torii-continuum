@@ -28,5 +28,10 @@ memory/reflect-watermark.json
 memory/panic-key-nudge.json
 skills/*.enc
 
+# Genesis manifests (GENESIS-1) — one per owner pubkey, bound to a verified
+# npub. Provenance data, not secret, but still per-owner runtime state — not
+# committed. Restore from the owner's own backup.
+memory/genesis/
+
 # Systemd override if generated locally
 *.service.local
