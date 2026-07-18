@@ -472,6 +472,57 @@ verification. The `deploy-unattended` test suite adds **55** hermetic assertions
 (tag grammar incl. injection strings, version gate, allowlist fail-closed,
 prune-keeps-live, scoped-sudo/no-general-sudo, 0600 pin file, root-only wrapper).
 
+### Automatic disk-retention sweep (OPS-RETENTION-1, v0.2.67-alpha)
+
+The deploy/cutover pipeline leaves regenerable artefacts behind that nothing
+prunes centrally — the unattended wrapper's source clones under
+`/opt/deploy/torii-continuum-<tag>/` and the cutover staging trees under
+`/root/torii-final-cutover-<UTC>/` (each a full clone + `node_modules` + backup +
+logs; a **failed** cutover leaves its whole tree behind for inspection and it is
+never reaped). On a small VPS these accumulate until `npm ci` dies with `ENOSPC`.
+**`ops/torii-disk-retention.sh`** is the single, auditable, fail-closed place that
+reclaims that space **after a verified-good deploy**, while treating live state,
+encrypted state, projects, certificates, model weights and system/audit logs as
+untouchable. The unattended wrapper runs it automatically (as an isolated
+process) after each verified deploy; a sweep failure never fails a deploy that
+already succeeded.
+
+Retention policy (idempotent, concurrency-safe via `flock`):
+
+- **Gate:** runs only when the live `/api/health` version equals the tag pinned
+  in `/etc/torii/continuum-deploy.conf`. If the pin is unresolved, the agent is
+  unreachable, or the versions differ, the sweep **refuses to delete anything**
+  (deploy service state unsafe).
+- **Source clones** (`/opt/deploy/torii-continuum-*`): keep the LIVE release's
+  clone; delete every other.
+- **Cutover staging** (`/root/torii-final-cutover-*`): keep the single NEWEST
+  VERIFIED run (the one with a completed `cutover-summary.txt` — the rollback
+  set) **plus every run newer than it** (an un-superseded failed run's
+  diagnostics + rollback material stay until a LATER verified run supersedes
+  them). Delete every run older than the newest verified run. If NO verified run
+  exists, delete nothing.
+- **Deploy logs** (`/var/log/torii-continuum`): truncate an oversized live log in
+  place (inode preserved — the audit trail is never rotated away) and keep only
+  the newest N rotated artefacts. System/audit logs (journal, audit) are refused
+  outright.
+
+Safety model: deletion may only happen strictly inside the approved roots
+(`/opt/deploy`, the `/root` staging namespace, `/var/log/torii-continuum`). Every
+candidate is canonicalised (`realpath`) and re-checked: it must not be a symlink,
+its parent must be **exactly** the approved root (depth 1, no `../` escape, no
+symlinked re-parenting), and it must not fall on/under any PROTECTED path
+(`/home/continuum/app`, `/srv/continuum-projects`, `/etc/torii`, certificates,
+Ollama models, CUDA, journal/audit, `/opt/torii-suite/work`, …). A candidate that
+fails any check is **skipped and warned about**, never deleted. Enumeration is
+NUL-safe `find -print0` (never a glob or `eval`), so hostile directory names
+cannot break out; the deploy conf is parsed line-wise (never sourced). It reports
+reclaimed bytes and, per approved mount, current used-percent + free MiB, warns
+at **80%** capacity, and echoes the retained **2 GiB** deploy floor. No secret is
+read, written, or logged. The `torii-disk-retention` test suite adds **60**
+hermetic assertions (path-traversal / symlink-escape / protected refusal, hostile
+directory names, the failed-deploy retention rule, fail-closed service-state
+gates, log-rotation scoping, and the static safety guards).
+
 ---
 
 ## Standalone agent install (`install-agent.sh`)

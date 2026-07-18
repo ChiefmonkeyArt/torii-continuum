@@ -181,6 +181,10 @@ grep -qF 'CONTINUUM_REQUIRE_SIGNED_TAGS' "$WRAPPER" && grep -qF 'verify_signed_t
 grep -qF 'version_matches "$tag" "$now"' "$WRAPPER" && ok "wrapper independently re-verifies the deployed version" || bad "no post-deploy version re-verify"
 grep -qF 'flock' "$WRAPPER" && ok "wrapper serializes concurrent runs with flock" || bad "no flock guard"
 grep -qF -- '--tags continuum' "$WRAPPER" && ok "wrapper delegates to the existing role (--tags continuum)" || bad "wrapper does not delegate to the role"
+# OPS-RETENTION-1: after a verified-good deploy the wrapper runs the disk-retention
+# sweep as an ISOLATED process, and a sweep failure must never fail the deploy.
+grep -qF 'torii-disk-retention.sh' "$WRAPPER" && ok "wrapper invokes the disk-retention sweep post-deploy" || bad "wrapper does not run the retention sweep"
+grep -qF 'retention sweep exited non-zero' "$WRAPPER" && ok "wrapper treats a retention-sweep failure as non-fatal (cleanup must not break deploys)" || bad "retention sweep failure could fail a completed deploy"
 # Must NOT reimplement backup/rollback — those belong to the hardened role.
 if grep -qiE '\brm -rf .*(memory|ciphertexts|wallet)\b' "$WRAPPER"; then bad "wrapper deletes state dirs (must never)"; else ok "wrapper never touches state dirs"; fi
 # No secret surface. Strip comments first (the wrapper legitimately DESCRIBES

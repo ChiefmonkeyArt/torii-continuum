@@ -299,6 +299,20 @@ run_deploy() {
   dep_log "post-deploy health OK: live=${now}."
 
   prune_releases "$CONTINUUM_DEPLOY_ROOT" "$CONTINUUM_KEEP_RELEASES" "$tag"
+
+  # Best-effort disk-retention sweep (OPS-RETENTION-1): AFTER this verified-good
+  # deploy, reclaim obsolete deployment source clones and superseded cutover
+  # staging trees, cap deploy logs, and report FS usage. Run as an ISOLATED
+  # process (from the just-checked-out tag's copy) so a fail-closed refusal or
+  # any retention error can never fail a deploy that already succeeded — cleanup
+  # must not break deploys.
+  local retention="${src}/ops/torii-disk-retention.sh"
+  if [[ -f "$retention" ]]; then
+    dep_log "running disk-retention sweep (${retention})"
+    bash "$retention" || dep_log "WARN retention sweep exited non-zero (deploy already succeeded; ignoring)."
+  else
+    dep_log "no disk-retention script in checkout; skipping sweep."
+  fi
   dep_log "deploy of ${tag} complete."
 }
 
