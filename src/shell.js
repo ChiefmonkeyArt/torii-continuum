@@ -8,6 +8,7 @@ import { listProjects } from './data/store.js';
 import { isSessionLive, startLogin, endSession } from './auth.js';
 import { isAgentConfigured, versionInfo, requestUpdate } from './data/agent.js';
 import { describeVersionState, updateTargetTag } from './data/release.js';
+import { h, openModal } from './views/util.js';
 
 const NAV_ITEMS = [
   { id: 'projects',    label: 'Projects',    icon: iconProjects,    path: '/projects' },
@@ -104,7 +105,12 @@ export function renderSidebar() {
   const loginStatusEl = sidebarEl.querySelector('[data-login-status]');
   if (sessionBtn) sessionBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (isSessionLive()) { endSession(); renderSidebar(); }
+    // Sign-out and sign-in are DIFFERENT actions on DIFFERENT code paths. Only
+    // the sign-in branch may reach startLogin / window.nostr. Sign-out opens a
+    // purely-local confirmation (confirmSignOut) that never touches a NIP-07
+    // signer — so even if the token expires between render and click, the
+    // "Sign out" button can never fall through to the signer.
+    if (isSessionLive()) { confirmSignOut(); }
     else { startLogin({ onStatus: (s) => renderLoginStatus(loginStatusEl, s) }); }
   });
   sidebarEl.querySelectorAll('.nav-item').forEach((el) => {
@@ -216,6 +222,41 @@ function renderLoginStatus(el, s) {
   if (!s || !s.message) { el.textContent = ''; el.className = 'sidebar-login-status'; return; }
   el.className = `sidebar-login-status${s.error ? ' error' : ''}`;
   el.textContent = s.message;
+}
+
+// The two outcomes of the sign-out confirmation, as plain callbacks so the
+// decision logic is unit-testable without a DOM. Signing out is PURELY LOCAL:
+//   • onConfirm → endSession(): clears the SPA session (continuum.session.v1)
+//     AND the onboarding handoff (torii.session), then dispatches
+//     continuum:session-changed. The app-level handler (main.js, PR #82) turns
+//     that into a route back to the login modal. It NEVER calls startLogin /
+//     window.nostr / signEvent — no signer prompt on sign-out.
+//   • onCancel → no-op: the session is left intact and nothing navigates.
+export function signOutOutcomes(deps = {}) {
+  const end = typeof deps.endSession === 'function' ? deps.endSession : endSession;
+  return {
+    onConfirm() { end(); },
+    onCancel() {},
+  };
+}
+
+// Sign-out confirmation modal ("Signing out?" · Yes / Cancel). Reuses the shared
+// openModal helper so it works from every route and matches Continuum's modal
+// styling. Yes runs the local endSession(); Cancel closes and leaves the user
+// exactly where they are. This path contains NO NIP-07/sign-in call.
+export function confirmSignOut(deps = {}) {
+  const open = typeof deps.openModal === 'function' ? deps.openModal : openModal;
+  const { onConfirm, onCancel } = signOutOutcomes(deps);
+
+  const cancel = h('button', {}, ['Cancel']);
+  const yes = h('button', { class: 'primary' }, ['Yes']);
+  const actions = h('div', { class: 'form-actions' }, [cancel, yes]);
+  const body = h('div', {}, [actions]);
+
+  const handle = open({ title: 'Signing out?', body });
+  cancel.addEventListener('click', () => { handle.close(); onCancel(); });
+  yes.addEventListener('click', () => { handle.close(); onConfirm(); });
+  return handle;
 }
 
 // -- Theme --
