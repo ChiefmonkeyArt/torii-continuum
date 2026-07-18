@@ -22,6 +22,19 @@ location {{ continuum_mount_path }}/ {
     try_files $uri $uri/ {{ continuum_mount_path }}/index.html;
 }
 
+# The SPA entry document gates authentication client-side, so it must never be
+# cached or restored stale (a cached index could re-hydrate a signed-out session
+# into a usable dashboard after Back/bfcache). Exact-match so ONLY the entry is
+# no-store; the content-addressed hashed bundle under /assets/* keeps normal
+# static caching (there is deliberately NO `location .../assets/` block — a
+# nested alias there returned 404 for hashed assets in production). Both the
+# `index` directive and the SPA try_files fallback internally resolve to this
+# path, so every way of serving the entry gets the header.
+location = {{ continuum_mount_path }}/index.html {
+    alias {{ continuum_webroot }}/index.html;
+    add_header Cache-Control "no-store, must-revalidate" always;
+}
+
 # Agent API — mount-prefix stripped before proxy_pass.
 # Trailing slashes on both {{ continuum_mount_path }}/api/ AND proxy_pass are load-bearing:
 # they strip the prefix so the agent still sees `/api/*` internally.
@@ -33,6 +46,11 @@ location {{ continuum_mount_path }}/api/ {
     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Prefix {{ continuum_mount_path }};
+
+    # API responses are per-session and authorization-gated — never let a browser
+    # or intermediary cache/replay them (a cached protected response could survive
+    # sign-out). `always` so it is set on error/401 responses too.
+    add_header Cache-Control "no-store" always;
 
     # Chat + memory endpoints can be slow (Routstr round-trip, decrypt)
     proxy_read_timeout 120s;

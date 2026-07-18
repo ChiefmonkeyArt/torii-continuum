@@ -31,6 +31,7 @@ import {
   rootTarget,
   guardRedirect,
   sessionChangeTarget,
+  restoreTarget,
 } from '../src/nav-guard.js';
 import { getStoredToken, setStoredToken, isLoggedIn, logout } from '../src/data/agent.js';
 
@@ -189,6 +190,27 @@ describe('mid-session auth change → forced route transition (v0.2.71-alpha)', 
   });
 });
 
+describe('restoreTarget: history/bfcache revalidation makes sign-out a hard boundary (v0.2.75-alpha)', () => {
+  it('bounces a protected pattern to login when logged out (Back onto a stale dashboard)', () => {
+    expect(restoreTarget('/dashboard', false)).toBe(LOGIN_PATH);
+    for (const p of ['/dashboard', '/projects', '/marketplace', '/routstr', '/team', '/about']) {
+      expect(restoreTarget(p, false)).toBe(LOGIN_PATH);
+    }
+  });
+
+  it('leaves a protected pattern as-is when still authenticated', () => {
+    expect(restoreTarget('/dashboard', true)).toBeNull();
+  });
+
+  it('never leaves an authenticated visitor sitting on the login/root surface', () => {
+    expect(restoreTarget('/', true)).toBe(DASHBOARD_PATH);
+  });
+
+  it('leaves the login/root surface as-is when logged out (no loop)', () => {
+    expect(restoreTarget('/', false)).toBeNull();
+  });
+});
+
 describe('end-to-end auth-state transition through the real session helpers', () => {
   let stub;
   beforeEach(() => { stub = makeStorageStub(); globalThis.localStorage = stub; });
@@ -218,7 +240,14 @@ describe('wiring: main.js session-changed handler forces a transition (source lo
   const handler = main.slice(main.indexOf("addEventListener('continuum:session-changed'"));
 
   it('routes off sessionChangeTarget(isSessionLive()) on every session change', () => {
-    expect(handler).toMatch(/navigate\(\s*sessionChangeTarget\(\s*isSessionLive\(\)\s*\)\s*\)/);
+    expect(handler).toMatch(/const\s+authed\s*=\s*isSessionLive\(\)/);
+    expect(handler).toMatch(/navigate\(\s*sessionChangeTarget\(\s*authed\s*\)/);
+  });
+
+  it('replaces (not pushes) history on sign-out so Back cannot restore the dashboard', () => {
+    // v0.2.75-alpha: on sign-out (authed === false) the current authenticated
+    // entry is replaced, so the Back button has no dashboard entry to return to.
+    expect(handler).toMatch(/\{\s*replace:\s*!authed\s*\}/);
   });
 
   it('does not gate the transition on the current route being the root', () => {

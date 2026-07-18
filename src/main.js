@@ -12,10 +12,10 @@
  */
 import { initStore } from './data/store.js';
 import { mountShell, mainContent, renderSidebar, applyStoredTheme } from './shell.js';
-import { route, startRouter, navigate } from './router.js';
+import { route, startRouter, navigate, currentRoute, resolveCurrent } from './router.js';
 import { mountChat } from './chat.js';
 import { isSessionLive } from './auth.js';
-import { rootTarget, guardRedirect, sessionChangeTarget } from './nav-guard.js';
+import { rootTarget, guardRedirect, sessionChangeTarget, restoreTarget } from './nav-guard.js';
 
 import { renderAbout } from './views/landing.js';
 import { renderLogin } from './views/login.js';
@@ -42,9 +42,29 @@ function setLandingMode(on) {
 function guarded(pattern, handler) {
   return (params) => {
     const redirect = guardRedirect(pattern, isSessionLive());
-    if (redirect) { navigate(redirect); return; }
+    // Replace, not push: a logged-out visitor who reached a protected hash (a
+    // deep link, or Back onto a stale authenticated entry) is bounced to login
+    // WITHOUT leaving that protected hash sitting in history to return to.
+    if (redirect) { navigate(redirect, { replace: true }); return; }
     handler(params);
   };
+}
+
+// Revalidate auth for whatever route is currently displayed and force a
+// correction when it no longer matches the (freshly re-checked) session. This
+// runs on history navigations (popstate) and back-forward-cache restores
+// (pageshow.persisted) — the paths where hashchange→resolve may not fire, so
+// without this a logged-out Back or a restored cached DOM could reveal the
+// dashboard. isSessionLive() is re-read here (not captured) so a session that
+// ended while the page was cached is honoured. When the view already matches
+// (restoreTarget → null) we still re-resolve so a bfcache-restored DOM is
+// re-rendered from the live auth state rather than shown stale.
+function enforceRouteAuth() {
+  const cr = currentRoute();
+  const pattern = cr ? cr.pattern : '/';
+  const target = restoreTarget(pattern, isSessionLive());
+  if (target) { navigate(target, { replace: true }); return; }
+  resolveCurrent();
 }
 
 function boot() {
@@ -93,8 +113,22 @@ function boot() {
   // the view always transitions to match the new auth state.
   document.addEventListener('continuum:session-changed', () => {
     renderSidebar();
-    navigate(sessionChangeTarget(isSessionLive()));
+    const authed = isSessionLive();
+    // On sign-out (authed === false) REPLACE the current entry rather than push,
+    // so the authenticated surface we are leaving (e.g. the dashboard) is not
+    // retained in history for the Back button to restore. Sign-in pushes as
+    // normal. Earlier authenticated entries deeper in history are still caught
+    // by the per-route guard and enforceRouteAuth() on Back/restore.
+    navigate(sessionChangeTarget(authed), { replace: !authed });
   });
+
+  // Sign-out must remain a hard boundary across BROWSER history + bfcache, not
+  // just in-app navigation. popstate covers Back/Forward; pageshow with
+  // event.persisted covers a back-forward-cache restore that re-shows the
+  // in-memory DOM without re-running boot or the router guard. Both revalidate
+  // the live session and bounce a logged-out visitor off any protected view.
+  window.addEventListener('popstate', enforceRouteAuth);
+  window.addEventListener('pageshow', (e) => { if (e && e.persisted) enforceRouteAuth(); });
 
   // Prevent double-tap zoom on the chat button on iOS
   document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
