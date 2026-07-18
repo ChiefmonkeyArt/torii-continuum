@@ -6,7 +6,8 @@ Source-of-truth split (per the `Torii` Space instructions, one set per project):
 
 Continuum is a **separate app** from Torii Quest. Quest is the game; Continuum is the sovereign dashboard, project engine, and personal AI layer. They share a Space Brain (Perplexity Space `Torii`) and a namespace (`torii-*`), but they are two repos, two versioning cadences, two live surfaces:
 
-- Continuum live: `https://continuum-torii.pplx.app`
+- Continuum production (sovereign self-hosted): `https://chiefmonkey.art` — **v0.2.63-alpha shipped live** via the one-time `ops/torii-final-cutover.sh` cutover (launcher HTTP 200; nginx + torii-base sidecar + continuum-agent active; unattended `torii-continuum-deploy.timer` enabled and active). This is the sovereign target the whole cutover series was building toward.
+- Continuum preview: `https://continuum-torii.pplx.app`
 - Quest live: `https://torii-quest.pplx.app`
 
 ## What We Are Building

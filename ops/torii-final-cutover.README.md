@@ -9,7 +9,7 @@ It:
 - verifies the exact annotated release tags + version markers **before** mutating
   live state:
   - `torii-base` **v0.1.4**
-  - `torii-continuum` **v0.2.63-alpha** (this script's own release tag)
+  - `torii-continuum` **v0.2.65-alpha** (this script's own release tag)
   - onboarding preview **v0.1.21-preview**
 - backs up the current Torii base state to a root-only timestamped directory
 - redeploys `torii-base` v0.1.4 via its sanctioned bootstrap
@@ -19,8 +19,31 @@ It:
   the live agent on `http://127.0.0.1:8787/api/health`
 - resolves the onboarding-preview live layout **fail-closed**, deploys the
   preview atomically, keeps exactly one `.prev` rollback, and verifies the public
-  URL returns HTTP 200 with the exact CTA `Sign in with browser extension`
+  URL returns HTTP 200 and serves the onboarding **sign-in CTA** (matched by
+  intent, robust to markup/wording — see OPS-CUTOVER-6 below)
 - prints a summary of service/timer/version/probe/disk state
+
+## Live cutover status — v0.2.63-alpha shipped to production ✅
+
+The one-time final cutover has been **completed on `chiefmonkey.art`** with
+`torii-continuum` **v0.2.63-alpha** (torii-base v0.1.4, onboarding preview
+v0.1.21-preview). Live acceptance passed:
+
+- Root launcher returns **HTTP 200**; `nginx`, the torii-base **sidecar**, and the
+  **continuum-agent** services are **active**.
+- Kanban acceptance passed with the v0.2.63 read-only todo overlay: **Torii Quest**
+  6 cards (**3 Todo / 0 Doing / 3 Done**), **Continuum** 7 cards
+  (**6 Todo / 0 Doing / 1 Done**).
+- Onboarding preview passed.
+- The unattended **`torii-continuum-deploy.timer` is enabled and active** (turned
+  on only after the successful converge, per OPS-CUTOVER-3).
+- The OPS-CUTOVER-5 **free-space preflight** and rollback protections were verified
+  in the live run.
+
+The one post-deploy false-failure — the onboarding **CTA probe** rejecting a valid
+live page — is fixed in **v0.2.65-alpha (OPS-CUTOVER-6, below)**. Do **not** re-run
+the cutover or alter the now-enabled timer for that fix; it ships in the repo and
+tests only.
 
 ## Why this replaces the pasted-heredoc delivery
 
@@ -41,6 +64,25 @@ run. Two structural defenses fix that:
    ```bash
    sudo bash ops/torii-final-cutover.sh
    ```
+
+## v0.2.65-alpha robust onboarding CTA detection (OPS-CUTOVER-6)
+
+The preview probes used to require an **exact substring**
+(`Sign in with browser extension`) in the fetched HTML. On the live host the
+button label is wrapped in an icon `<svg>`/`<span>`, and the CTA wording can drift
+across preview revisions, so the exact match **false-failed a valid, live
+onboarding page** after deployment.
+
+Detection is now **intent-based and markup-tolerant**. `normalize_cta_text()`
+strips HTML tags to spaces, collapses whitespace, and lowercases the body; then
+`text_has_cta()` matches `PREVIEW_CTA_REGEX`
+(`sign[ -]?in (with|using)( [a-z0-9]+)* extension`). The public probes
+(`url_has_cta` / `wait_url_has_cta`) and the pre-mutation asset check all use this
+matcher, so a reworded-but-valid CTA (`Sign in with a browser extension`,
+`Sign in using a Nostr extension`) or a label split across `<span>`/`<svg>` still
+passes, while a blank/error page (missing the tokens) still **fails closed**. The
+canonical `PREVIEW_CTA` string is retained only as a human-readable label for logs
+and the acceptance summary — never for matching.
 
 ## v0.2.63-alpha disk-safety hardening (OPS-CUTOVER-5)
 
@@ -154,9 +196,9 @@ the base redeploy and proceeds through the Continuum and preview phases.
 ```bash
 cd /tmp
 rm -rf torii-continuum
-git clone --depth 1 --branch v0.2.61-alpha https://github.com/ChiefmonkeyArt/torii-continuum.git
+git clone --depth 1 --branch v0.2.65-alpha https://github.com/ChiefmonkeyArt/torii-continuum.git
 cd torii-continuum
-[ "$(git cat-file -t v0.2.61-alpha)" = tag ] || { echo "not an annotated tag"; exit 1; }
+[ "$(git cat-file -t v0.2.65-alpha)" = tag ] || { echo "not an annotated tag"; exit 1; }
 sudo bash ops/torii-final-cutover.sh
 ```
 
@@ -237,6 +279,11 @@ never reaches `/opt/torii/env`, `registry.json` or `root_app.conf`. The
 v0.2.61-alpha hotfix adds asserts that the cutover bootstraps with
 `--no-enable-timer` and enables the deploy timer **only after** the converge +
 `write_report` (exactly one timer-enable call, never before the first converge).
+The v0.2.65-alpha hotfix (OPS-CUTOVER-6) adds asserts that the CTA probes use the
+robust matcher (no exact-substring CTA check remains) plus functional replays that
+`source` the actual `normalize_cta_text`/`text_has_cta` + `PREVIEW_CTA_REGEX` from
+the script and prove markup-wrapped/reworded-but-valid CTAs (including the shipped
+`v0.1.21` asset) pass while blank/error pages fail closed.
 
 `ops/test/deploy-unattended.test.sh` additionally proves the wrapper passes
 per-host vars via a validated `-e` extra-vars JSON, writes **no**

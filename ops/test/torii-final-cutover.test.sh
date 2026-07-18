@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Hermetic tests for the in-repo cutover operator script (OPS-CUTOVER-5, v0.2.63-alpha).
+# Hermetic tests for the in-repo cutover operator script (OPS-CUTOVER-6, v0.2.65-alpha).
 #
 # No real deploy, no network, no root. Concerns:
 #   1. Anti-partial-delivery — the whole body is a single brace group, so a
@@ -111,10 +111,10 @@ printf '%s' "$src_out" | grep -qiF 'do not source' \
 # ── 3. Pinned annotated tags + version markers ───────────────────────────────
 grep -qF 'BASE_TAG="v0.1.4"' "$CUTOVER"                 && ok "pins torii-base v0.1.4"             || bad "torii-base tag not pinned"
 grep -qF 'BASE_VERSION="0.1.4"' "$CUTOVER"              && ok "pins torii-base VERSION 0.1.4"      || bad "torii-base version not pinned"
-grep -qF 'CONTINUUM_TAG="v0.2.63-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.63-alpha" || bad "continuum tag not pinned to v0.2.63-alpha"
-grep -qF 'CONTINUUM_VERSION="0.2.63-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.63-alpha" || bad "continuum version not pinned"
+grep -qF 'CONTINUUM_TAG="v0.2.65-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.65-alpha" || bad "continuum tag not pinned to v0.2.65-alpha"
+grep -qF 'CONTINUUM_VERSION="0.2.65-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.65-alpha" || bad "continuum version not pinned"
 grep -qF 'PREVIEW_VERSION="0.1.21-preview"' "$CUTOVER"  && ok "pins onboarding preview 0.1.21-preview" || bad "preview version not pinned"
-grep -qF 'PREVIEW_CTA="Sign in with browser extension"' "$CUTOVER" && ok "pins exact preview CTA text" || bad "preview CTA text not pinned"
+grep -qF 'PREVIEW_CTA="Sign in with browser extension"' "$CUTOVER" && ok "keeps the canonical CTA label" || bad "canonical CTA label missing"
 
 # Annotated-tag verification: only an annotated tag object (cat-file -t == tag)
 # is accepted — a lightweight tag or a moved branch is rejected.
@@ -508,6 +508,51 @@ else
   ok "backup replay excludes node_modules"
 fi
 rm -rf "$ex_sandbox"
+
+# ── 14. OPS-CUTOVER-6: robust onboarding CTA detection ────────────────────────
+# 14a. Static: a robust regex-based matcher exists and the CTA probes use it
+#      instead of the old exact-substring url_contains/grep -Fq path.
+grep -qE "readonly PREVIEW_CTA_REGEX=" "$CUTOVER" && ok "defines a robust PREVIEW_CTA_REGEX" || bad "no PREVIEW_CTA_REGEX"
+grep -qF 'text_has_cta() {' "$CUTOVER"  && ok "defines pure text_has_cta matcher"  || bad "no text_has_cta"
+grep -qF 'url_has_cta() {' "$CUTOVER"   && ok "defines url_has_cta probe"          || bad "no url_has_cta"
+grep -qF 'normalize_cta_text() {' "$CUTOVER" && ok "defines HTML normaliser"       || bad "no normalize_cta_text"
+# The layout resolver + post-deploy check must use the robust probes, not the old
+# exact-substring path.
+awk '/^resolve_preview_layout\(\) \{/,/^\}/' "$CUTOVER" | grep -qF 'url_has_cta' \
+  && ok "layout resolver uses robust url_has_cta" || bad "layout resolver still uses exact substring"
+grep -qF 'wait_url_has_cta "$PREVIEW_PUBLIC_URL"' "$CUTOVER" \
+  && ok "post-deploy check uses robust wait_url_has_cta" || bad "post-deploy check not robust"
+if grep -qF 'url_contains "$PREVIEW_ROOT_URL" "$PREVIEW_CTA"' "$CUTOVER" \
+   || grep -qF 'wait_url_contains "$PREVIEW_PUBLIC_URL" "$PREVIEW_CTA"' "$CUTOVER"; then
+  bad "an old exact-substring CTA check remains"
+else
+  ok "no exact-substring CTA checks remain"
+fi
+
+# 14b. Functional: extract the actual matcher functions + regex from the script
+#      and exercise them, proving markup-wrapped/reworded-but-valid CTAs pass and
+#      blank/error pages fail closed (the live false-fail this release fixes).
+cta_probe="$(mktemp)"
+{
+  grep -E '^readonly PREVIEW_CTA_REGEX=' "$CUTOVER"
+  awk '/^normalize_cta_text\(\) \{/,/^\}/' "$CUTOVER"
+  awk '/^text_has_cta\(\) \{/,/^\}/' "$CUTOVER"
+} > "$cta_probe"
+# shellcheck disable=SC1090
+source "$cta_probe"
+
+cta_pass() { text_has_cta "$1" && ok "CTA matches: $2" || bad "CTA should match ($2)"; }
+cta_fail() { text_has_cta "$1" && bad "CTA should NOT match ($2)" || ok "CTA rejects: $2"; }
+
+cta_pass '<button><svg></svg><span>Sign in with browser extension</span></button>' 'canonical, markup-wrapped'
+cta_pass 'Sign in with a browser extension' 'reworded: "a browser"'
+cta_pass 'Sign in using a Nostr extension' 'reworded: "using a Nostr"'
+cta_pass '<span>Sign in with</span><svg/><span>browser extension</span>' 'label split across spans'
+cta_pass "$(cat "${REPO_ROOT}/preview-assets/onboarding-v0.1.21/index.html")" 'the shipped v0.1.21 asset'
+cta_fail '<html><body><h1>Console</h1></body></html>' 'valid HTML without the CTA'
+cta_fail '404 Not Found' 'error page'
+cta_fail '' 'empty body'
+rm -f "$cta_probe"
 
 printf '\n[torii-final-cutover.test] pass=%d fail=%d\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || exit 1

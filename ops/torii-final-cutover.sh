@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Torii final VPS cutover — in-repo operator script (OPS-CUTOVER-5, v0.2.63-alpha).
+# Torii final VPS cutover — in-repo operator script (OPS-CUTOVER-6, v0.2.65-alpha).
 #
 # Root-owned, fail-closed cutover for chiefmonkey.art. Fetched from ONE immutable
 # annotated release tag and invoked with a short command from a verified clone:
@@ -10,15 +10,26 @@
 # It:
 #   - verifies exact annotated release tags + version markers before mutating live state
 #       torii-base            v0.1.4
-#       torii-continuum       v0.2.63-alpha  (this script's own release tag)
+#       torii-continuum       v0.2.65-alpha  (this script's own release tag)
 #       onboarding preview    v0.1.21-preview
 #   - backs up the current Torii base state to a root-only timestamped directory
 #   - redeploys torii-base via its sanctioned bootstrap (TORII_DOMAIN + SKIP_CERTBOT=1)
 #   - bootstraps + triggers the Continuum OPS-DEPLOY-2 unattended pull, pins the tag,
 #     and health/version-gates the live agent
 #   - resolves the onboarding-preview live layout FAIL-CLOSED, deploys the preview
-#     atomically, keeps exactly one rollback path, and verifies HTTP 200 + exact CTA
+#     atomically, keeps exactly one rollback path, and verifies HTTP 200 + the
+#     onboarding sign-in CTA (robust intent match, not a frozen phrase)
 #   - reports service/timer/disk state and describes rollback
+#
+# ── v0.2.65-alpha CTA-detection hardening (OPS-CUTOVER-6) ──────────────────────
+#   ROBUST ONBOARDING CTA MATCH. The preview probes previously required an exact
+#   substring ("Sign in with browser extension"). The live button label is wrapped
+#   in an icon <svg>/<span>, and the CTA wording can drift across preview
+#   revisions, so the exact match false-failed a valid, live onboarding page after
+#   deployment. Detection now normalises the fetched HTML (tags -> spaces,
+#   whitespace collapsed, lowercased) and matches the sign-in *intent* via
+#   PREVIEW_CTA_REGEX (text_has_cta/url_has_cta/wait_url_has_cta), so a reworded or
+#   markup-wrapped-but-valid CTA passes while a blank/error page still fails closed.
 #
 # ── Why this file replaces the pasted-heredoc delivery ────────────────────────
 # The previous delivery pasted a script body straight into an interactive VPS
@@ -105,11 +116,20 @@ readonly BASE_REPO="https://github.com/ChiefmonkeyArt/torii-base.git"
 readonly BASE_TAG="v0.1.4"
 readonly BASE_VERSION="0.1.4"
 readonly CONTINUUM_REPO="https://github.com/ChiefmonkeyArt/torii-continuum.git"
-readonly CONTINUUM_TAG="v0.2.63-alpha"
-readonly CONTINUUM_VERSION="0.2.63-alpha"
+readonly CONTINUUM_TAG="v0.2.65-alpha"
+readonly CONTINUUM_VERSION="0.2.65-alpha"
 readonly PREVIEW_DIR_NAME="onboarding-v0.1.21"
 readonly PREVIEW_VERSION="0.1.21-preview"
+# Canonical CTA label — kept for logs/reports only, NOT for matching.
 readonly PREVIEW_CTA="Sign in with browser extension"
+# Robust CTA matcher. Detection matches the sign-in *intent* ("sign in … with|using
+# … extension") after the HTML is normalised (tags stripped, whitespace collapsed,
+# lowercased), so a valid-but-reworded CTA ("Sign in with a browser extension",
+# "Sign in using a Nostr extension") or a label split across an icon <svg>/<span>
+# still passes, while a blank/error page (missing the tokens) still fails closed.
+# This replaces the old frozen exact-substring check, which false-failed a live,
+# valid onboarding page whose button markup wraps the label.
+readonly PREVIEW_CTA_REGEX='sign[ -]?in (with|using)( [a-z0-9]+)* extension'
 readonly ROOT_URL="https://${DOMAIN}/"
 readonly LAUNCHER_ASSET_URL="https://${DOMAIN}/assets/launcher.css"
 readonly CONTINUUM_PUBLIC_URL="https://${DOMAIN}/continuum/"
@@ -320,6 +340,42 @@ wait_url_contains() {
   local i
   for ((i=1; i<=tries; i++)); do
     if url_contains "$url" "$needle"; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+  return 1
+}
+
+# Normalise HTML/text for CTA detection: tags -> spaces, collapse whitespace,
+# lowercase. Makes CTA matching tolerant of the icon <svg>/<span> markup the
+# button label is wrapped in, plus incidental whitespace/case differences.
+normalize_cta_text() {
+  sed -e 's/<[^>]*>/ /g' | tr '\n\r\t' '   ' | tr -s ' ' | tr '[:upper:]' '[:lower:]'
+}
+
+# Pure, network-free CTA test over a blob of HTML/text. Robustly matches the
+# onboarding sign-in CTA intent via PREVIEW_CTA_REGEX after normalisation, so
+# reworded-but-valid CTAs pass and blank/error pages fail closed.
+text_has_cta() {
+  local text="$1" norm
+  norm="$(printf '%s' "$text" | normalize_cta_text)"
+  grep -Eq "$PREVIEW_CTA_REGEX" <<<"$norm"
+}
+
+# Fetch a URL and robustly test it for the onboarding CTA (fail-closed on any
+# curl error). Replaces the old exact-substring url_contains for CTA checks.
+url_has_cta() {
+  local url="$1" body
+  body="$(curl -L -fsS --max-time 20 "$url")" || return 1
+  text_has_cta "$body"
+}
+
+wait_url_has_cta() {
+  local url="$1" tries="$2" delay="$3"
+  local i
+  for ((i=1; i<=tries; i++)); do
+    if url_has_cta "$url"; then
       return 0
     fi
     sleep "$delay"
@@ -636,8 +692,8 @@ resolve_preview_layout() {
   PREVIEW_ROOT_FS_OK=0
   PREVIEW_CONT_FS_OK=0
 
-  if url_contains "$PREVIEW_ROOT_URL" "$PREVIEW_CTA"; then PREVIEW_ROOT_PUBLIC_OK=1; fi
-  if url_contains "$PREVIEW_CONTINUUM_URL" "$PREVIEW_CTA"; then PREVIEW_CONT_PUBLIC_OK=1; fi
+  if url_has_cta "$PREVIEW_ROOT_URL"; then PREVIEW_ROOT_PUBLIC_OK=1; fi
+  if url_has_cta "$PREVIEW_CONTINUUM_URL"; then PREVIEW_CONT_PUBLIC_OK=1; fi
   if preview_config_hit '(^|[^A-Za-z0-9_./-])/onboarding-preview/?([[:space:];{]|$)|/var/www/torii/onboarding-preview'; then PREVIEW_ROOT_CFG_HIT=1; fi
   if preview_config_hit '/continuum/onboarding-preview|/var/www/torii/continuum/onboarding-preview'; then PREVIEW_CONT_CFG_HIT=1; fi
   if [[ -L "$PREVIEW_ROOT_PATH" ]]; then PREVIEW_ROOT_FS_OK=1; fi
@@ -764,7 +820,7 @@ verify_release_sources() {
   [[ -f "$CONTINUUM_SRC/ops/deploy-bootstrap.sh" ]] || die "continuum deploy bootstrap missing"
 
   assert_eq "$PREVIEW_VERSION" "$(tr -d '\n' < "$CONTINUUM_SRC/preview-assets/${PREVIEW_DIR_NAME}/VERSION")" "onboarding preview VERSION"
-  grep -Fq "$PREVIEW_CTA" "$CONTINUUM_SRC/preview-assets/${PREVIEW_DIR_NAME}/index.html" || die "onboarding preview CTA marker missing"
+  text_has_cta "$(cat "$CONTINUUM_SRC/preview-assets/${PREVIEW_DIR_NAME}/index.html")" || die "onboarding preview CTA marker missing"
 }
 
 deploy_torii_base() {
@@ -852,7 +908,7 @@ deploy_preview() {
       die "unknown preview layout: ${PREVIEW_LAYOUT}"
       ;;
   esac
-  wait_url_contains "$PREVIEW_PUBLIC_URL" "$PREVIEW_CTA" 20 2 || die "public preview URL failed post-deploy CTA check"
+  wait_url_has_cta "$PREVIEW_PUBLIC_URL" 20 2 || die "public preview URL failed post-deploy CTA check"
 }
 
 write_report() {
