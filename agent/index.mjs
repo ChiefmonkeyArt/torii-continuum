@@ -39,6 +39,9 @@ import { createOnboarding } from './core/onboarding.mjs';
 import { createProjectSources } from './core/project-sources.mjs';
 import { createReleaseChecker } from './core/release-check.mjs';
 import { createUpdater } from './core/updater.mjs';
+import { createGenesis } from './core/genesis.mjs';
+import { createAudit } from './lib/audit.mjs';
+import { getConstitution } from './lib/constitution.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENT_ROOT = __dirname;
@@ -179,6 +182,14 @@ await memory.loadCharacter();
 
 const chatSkill = createChatSkill(router, app.log, { memory, reflector });
 
+// Genesis stack (GENESIS-1) — sovereign bot birth certificate bound to the
+// verified Nostr owner, under the humanitarian starter constitution. The audit
+// ledger is the hash-chained append-only log the agent already reserves at
+// memory/audit.jsonl; genesis creation appends one line to it. No LoRA/RAG here
+// — those are labelled subsequent stages in the manifest provenance + the UI.
+const audit = createAudit(join(AGENT_ROOT, 'memory', 'audit.jsonl'), { log: app.log });
+const genesis = createGenesis({ agentRoot: AGENT_ROOT, audit, log: app.log });
+
 // Onboarding stack (v0.2.35-alpha) — encrypted-at-rest secret store for the
 // operator secrets the agent must USE (NWC URI, Routstr sk- key), plus the
 // pinned Routstr provider adapter. The live NIP-47 transport is built per-call
@@ -290,6 +301,16 @@ app.get('/api/version', { config: rateLimitConfig(versionMax, '/api/version') },
   return releaseChecker.get();
 });
 
+// GET /api/constitution — PUBLIC canonical humanitarian starter constitution
+// (GENESIS-1). Exposes only the immutable covenant body + its version and
+// stable digest — no user data, no secrets. Public by design: visible
+// provenance is a founding principle, and a manifest's pinned digest is only
+// meaningful if anyone can fetch the canonical artifact to compare against.
+app.get('/api/constitution', async () => {
+  const c = getConstitution();
+  return { ok: true, version: c.version, digest: c.digest, constitution: c.body };
+});
+
 // GET /api/health/models — provider reachability probe.
 // Returns Routstr + Ollama status so the Console can show which providers
 // are live and which are enabled. Admin-gated to avoid leaking endpoints.
@@ -353,6 +374,13 @@ const walletHealthMax =
 const updateMax =
   Number.isFinite(cfg.rate_limit?.update_per_min) && cfg.rate_limit.update_per_min > 0
     ? cfg.rate_limit.update_per_min
+    : 6;
+// Admin-gated genesis create. Genesis is a one-time act; keep the ceiling low so
+// a stolen session cannot hammer the create path (idempotency already bounds the
+// disk effect to a single manifest, but the ceiling bounds the request volume).
+const genesisMax =
+  Number.isFinite(cfg.rate_limit?.genesis_per_min) && cfg.rate_limit.genesis_per_min > 0
+    ? cfg.rate_limit.genesis_per_min
     : 6;
 
 // Continuum project slugs are lowercase kebab (see src/data/store.js slugify).
@@ -554,6 +582,48 @@ app.post(
       return reply.code(400).send({ error: 'bad project slug' });
     }
     return projectSources.refresh(slug);
+  },
+);
+
+// ─────────────────────────────────────────────────────────────
+// Genesis routes (GENESIS-1) — admin-gated.
+//
+// GET  /api/genesis  — read the authenticated owner's manifest (if any) plus a
+//                      live tamper-evidence check of its pinned constitution
+//                      digest against the running constitution.
+// POST /api/genesis  — one-time create. The owner pubkey is taken from the
+//                      VERIFIED session (req.session.npub), NEVER from the body,
+//                      so a caller cannot mint a manifest for another key.
+//                      Idempotent: a retry returns the existing manifest.
+//
+// Reads/writes are namespaced by the owner's pubkey inside core/genesis.mjs, so
+// cross-owner access is structurally impossible (default-deny).
+// ─────────────────────────────────────────────────────────────
+app.get('/api/genesis', { preHandler: requireAdmin }, async (req, reply) => {
+  const r = await genesis.read(req.session.npub);
+  if (!r.ok) return reply.code(400).send({ ok: false, error: r.reason || 'bad request' });
+  return r;
+});
+
+app.post(
+  '/api/genesis',
+  { preHandler: requireAdmin, config: rateLimitConfig(genesisMax, '/api/genesis') },
+  async (req, reply) => {
+    const body = req.body || {};
+    const result = await genesis.create({
+      // Authority comes from the verified session, not the request body.
+      ownerNpub: req.session.npub,
+      displayName: body.display_name,
+      archetype: body.archetype,
+      creativeIntent: body.creative_intent,
+      agentVersion: VERSION,
+    });
+    if (!result.ok) {
+      const status = result.code === 'validation' ? 400 : 400;
+      app.log.warn({ evt: 'genesis.create.reject', code: result.code });
+      return reply.code(status).send(result);
+    }
+    return reply.code(result.created ? 201 : 200).send(result);
   },
 );
 

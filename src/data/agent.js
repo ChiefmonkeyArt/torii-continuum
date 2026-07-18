@@ -258,6 +258,44 @@ export async function chat({ message, context }) {
   return req('POST', '/api/chat', { message, context });
 }
 
+// ─── Genesis (GENESIS-1) ────────────────────────────────────
+//
+// The sovereign-bot birth certificate. The owner pubkey is bound server-side
+// from the verified session — the client NEVER sends a pubkey. LoRA training and
+// RAG retrieval are labelled subsequent stages; nothing here fakes them.
+
+/**
+ * GET /api/constitution — PUBLIC canonical humanitarian starter constitution.
+ * Returns { ok, data:{ version, digest, constitution } } or offline. Works
+ * logged out so the covenant + its digest are always inspectable (visible
+ * provenance).
+ */
+export async function constitution() {
+  return req('GET', '/api/constitution');
+}
+
+/**
+ * GET /api/genesis — read the authenticated owner's manifest (if any) plus a
+ * live tamper-evidence check. Returns { ok, data:{ exists, manifest?,
+ * constitution_ok?, manifest_digest_ok? } } or offline/401 via req().
+ */
+export async function genesisRead() {
+  return req('GET', '/api/genesis');
+}
+
+/**
+ * POST /api/genesis — one-time create. Only non-authority fields are sent; the
+ * agent binds the owner pubkey from the verified session. Idempotent server-side.
+ * @param {{ display_name: string, archetype?: string, creative_intent?: string }} fields
+ */
+export async function genesisCreate(fields) {
+  return req('POST', '/api/genesis', {
+    display_name: fields?.display_name,
+    archetype: fields?.archetype,
+    creative_intent: fields?.creative_intent,
+  });
+}
+
 // ─── Health ─────────────────────────────────────────────────
 
 export async function health() {

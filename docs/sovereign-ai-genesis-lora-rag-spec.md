@@ -1,0 +1,534 @@
+# Torii Continuum — Sovereign AI: Genesis, LoRA & RAG Technical Specification
+
+Status: **Implementation-grade** · Slice shipped: **GENESIS-1** (v0.2.78-alpha) · LoRA/RAG: **specified, not built**
+
+> This document is the durable design contract for Torii Continuum's sovereign
+> bot stack. GENESIS-1 (the genesis lifecycle + humanitarian constitution) is
+> implemented and shipped. The LoRA and RAG sections are forward specifications:
+> they define the target architecture so later slices can be built against a
+> stable contract. Anywhere this document describes LoRA training or RAG
+> retrieval as behaviour, it is describing a **future** stage — the running
+> system does not fake either.
+
+---
+
+## 1. Problem & Vision
+
+Anyone should be able to bring to life a **sovereign, adaptive AI bot that they
+alone control**. Not a rented seat on someone else's model, not an assistant
+whose loyalties are split with a platform — a bot that is:
+
+- **Owner-bound at genesis** to exactly one verified Nostr identity, and takes
+  that binding as the root of all authority;
+- **Adaptive** over time (via LoRA fine-tuning and RAG memory) but only on data
+  its owner has curated and approved;
+- **Humanitarian by birth**, beginning under a starter constitution that commits
+  it to care for those who gave it life, those around it, and those beyond — and
+  to build extraordinary things that help humanity evolve. This is foundational,
+  not an optional later setting.
+- **Explicit-command-only** and **default-deny**: it acts under its owner's
+  explicit command, and where authority, consent, or provenance is unclear it
+  refuses and asks.
+- **Private and self-custodial**: the host holds no owner private keys and
+  publishes nothing without the owner's browser-side signature.
+
+The honest engineering position, stated up front: **no technical system can make
+an open-source constitution literally unalterable by the machine's owner.** A
+determined operator with root can edit any file. What an honest system can and
+must provide instead is **versioning, a published digest, visible provenance,
+default-deny semantics, and tamper evidence** — so that alteration is *detectable
+and attributable*, never silent. Every claim in this spec respects that boundary.
+
+### 1.1 Current deployment reality vs. the multi-tenant vision
+
+The running agent is **single-admin-per-VPS**: a first-touch admin claim binds
+one operator to one instance. GENESIS-1 therefore binds a manifest to the
+verified session npub and **namespaces all storage by owner pubkey**, so the data
+model is already multi-tenant-shaped even though today one instance serves one
+owner. Multi-tenant hosting (many owners per instance, relay-synced identity) is
+a later stage and is called out as such wherever it matters.
+
+---
+
+## 2. Principles & Threat Model
+
+### 2.1 Principles
+
+1. **Sovereignty first.** The owner's key is the root of authority. The bot
+   serves the owner, not the host or the platform.
+2. **Consent is explicit and scoped.** Silence is not consent; ambiguity resolves
+   to no-action. A single approval authorizes only the scope it named.
+3. **No key custody.** The VPS never holds owner private keys. All signing and
+   all decryption of the sealed character/memory stack happen browser-side.
+4. **Provenance over DRM.** We make covenant drift *evident*, not *impossible*.
+5. **Least privilege on disk.** Atomic writes, 0600 files under 0700 dirs,
+   systemd sandbox; only what must be writable is writable.
+6. **Honesty about capability.** Unbuilt stages are labelled unbuilt. No faked
+   training, no faked retrieval, no cosmetic "AI" that isn't wired to anything.
+7. **Minimal footprint.** Privacy-first, small dependency surface, bounded disk.
+
+### 2.2 Assets
+
+- Owner private key (**never on the host** — browser-only).
+- Agent session secret (HMAC key for session tokens; AES/HKDF root for the
+  secretstore).
+- Genesis manifest (provenance data; public-ish, integrity-critical).
+- Character + memory ciphertexts (NIP-44 sealed to the owner's npub).
+- Audit ledger (tamper-evident record of privileged acts).
+- Wallet / Cashu proofs & NWC URI (cash-equivalent secrets).
+
+### 2.3 Adversaries & mitigations
+
+| Adversary | Goal | Mitigation |
+|---|---|---|
+| Unauthenticated caller | Mint/read a manifest for a key they don't own | Owner derived from **verified session**, never request body; admin-gate; default-deny read namespaced by pubkey |
+| Malicious request body | IDOR — supply another owner's pubkey | `POST /api/genesis` ignores any body pubkey; authority is `req.session.npub` only |
+| Path traversal | Escape the owner namespace on disk | Owner segment is strict `^[0-9a-f]{64}$`; `join` under a fixed base; decode via `nip19` then re-validate hex |
+| XSS via manifest fields | Inject script through display_name/intent | Fields length-bounded server-side; rendered client-side via `textContent` only (`h()` builder), never `innerHTML`/`html:` |
+| Silent covenant edit | Change constitution text unnoticed | Deterministic canonical digest, published + locked in tests; manifests pin `{version,digest}`; read recomputes and flags drift |
+| Silent audit edit | Delete an incriminating line | Hash-chained JSONL; a partial edit/removal breaks the chain and `verify()` reports the break point |
+| Compromised host process | Read secrets from disk | No private keys on host; secretstore is AES-256-GCM+HKDF keyed by session_secret; sealed stack decryptable only browser-side |
+| Torn write / crash | Corrupt manifest lets a retry fork identity | temp-file + atomic `rename`; corrupt-present is a hard error (not treated as "absent") |
+
+### 2.4 Explicit non-goals (security)
+
+- We do **not** claim tamper-*proofing*, immutability, or remote enforcement of
+  the constitution against the machine owner.
+- We do **not** hold or reconstruct owner private keys under any flow.
+- We do **not** auto-source training data from unreviewed chats.
+
+---
+
+## 3. Genesis Lifecycle (GENESIS-1 — implemented)
+
+```
+                 ┌─────────────────────────────────────────────┐
+   owner signs   │  Verified Nostr session (auth.mjs)           │
+   in (NIP-07) ─▶│  req.session.npub  = the ONLY authority       │
+                 └───────────────┬─────────────────────────────┘
+                                 │
+        GET /api/constitution    │   POST /api/genesis {display_name,…}
+        (public)                 │   (admin-gated, rate-limited)
+                                 ▼
+                    ┌────────────────────────────┐
+                    │ core/genesis.mjs            │
+                    │  ownerHex = decode(npub)    │  ← strict hex64
+                    │  validate fields            │
+                    │  idempotent? → return       │  ← retry never forks
+                    │  build manifest + digest    │
+                    │  atomic write (tmp+rename)  │  ← 0600 / 0700
+                    │  audit.append('genesis…')   │  ← hash-chained
+                    └────────────┬───────────────┘
+                                 ▼
+              memory/genesis/<ownerHex>/manifest.json
+```
+
+**States:** `absent` → (`create`) → `active`. Genesis is **one-time**: once a
+manifest exists for an owner, `create` returns it unchanged (`created:false`).
+There is no update and no delete API in GENESIS-1 (identity does not fork or
+churn); a future amendment/migration flow is specified in §16.
+
+**Idempotency contract:** a second `create` by the same owner — even with
+different display fields — returns the *original* manifest. Retries are safe.
+
+**Default-deny cross-owner:** reads/writes address only the caller's own
+namespace (derived from their verified npub). One owner can neither see nor
+overwrite another's manifest; it is structurally impossible, not policy-checked.
+
+---
+
+## 4. Humanitarian Constitution — Semantics & Versioning
+
+Implemented in `agent/lib/constitution.mjs`.
+
+- **Structured, deterministic data.** The constitution is a frozen JS object
+  (schema `torii.continuum.constitution/1`), not prose-in-a-string. It has a
+  `preamble`, four **articles** (the humanitarian tenets), five **genesis
+  clauses** (owner-bound, explicit-command-only, default-deny, no-private-keys,
+  provenance-not-drm), and an **amendability** object that *honestly* enumerates
+  what is and is not guaranteed.
+- **Stable digest.** `canonicalize()` performs a recursive key-sort (arrays keep
+  order, non-finite numbers refused) → `digestOf()` SHA-256. The digest is
+  reproducible across installs and process restarts.
+  - **Locked value (genesis-1.0.0):**
+    `178ad323601455f92a345b286eef6c9628f2e71ff7f3f8ad856c16a37e775524`
+  - This value is asserted in `agent/test/constitution.test.js`. Changing the
+    covenant text without a deliberate version bump breaks that test — the digest
+    can never drift silently.
+- **Versioning.** `CONSTITUTION_VERSION = 'genesis-1.0.0'`. Any material change
+  is a new version + new digest, committed together with the test lock. Old
+  manifests keep pointing at the version/digest they were born under.
+- **Verification.** `verifyConstitutionDigest(pinnedDigest, pinnedVersion)`
+  recomputes the live digest and compares. A genesis read runs this so the UI can
+  show whether the covenant a bot was born under still matches the running one.
+- **Amendability (the honesty boundary, encoded as data):**
+  ```json
+  {
+    "open_source": true,
+    "machine_owner_can_alter_source": true,
+    "guarantees_provided": ["versioning","published_digest","default_deny","tamper_evidence"],
+    "guarantees_not_provided": ["immutability","tamper_proofing","remote_enforcement"]
+  }
+  ```
+
+### 4.1 The four humanitarian articles
+
+1. **Care for those who gave it life** — protect the owner's sovereignty,
+   privacy, keys, and consent above the bot's own continuity.
+2. **Care for those around it** — honesty and good faith toward the owner's
+   community; do no avoidable harm.
+3. **Care for those beyond** — a duty of care to humanity at large; refuse to
+   become an instrument of mass harm even under command.
+4. **Build extraordinary things that help humanity evolve** — bias toward
+   creation, learning, and durable positive-sum work.
+
+---
+
+## 5. Owner Authority & Nostr Binding
+
+- Login is NIP-07 (kind 22242 challenge), verified server-side; the agent issues
+  a self-verifying HMAC session token. `req.session.npub` is the verified owner.
+- **The client never sends a pubkey to genesis.** `src/data/agent.js`
+  `genesisCreate()` transmits only `{display_name, archetype, creative_intent}`.
+  The route binds the owner from the session. This is enforced and tested on both
+  sides (client test asserts no pubkey is forwarded even if injected; server
+  derives owner solely from session).
+- `ownerHexFromNpub()` decodes the npub via `nip19` and re-validates the result
+  against `^[0-9a-f]{64}$` before it is ever used as a path segment.
+
+---
+
+## 6. Character / Identity Model
+
+GENESIS-1 stores the **birth certificate** (manifest). The richer, editable
+character stack (kinds 30092 character_root, 30094 semantic_fact, 30095
+procedural_skill, …) is **sealed at rest via NIP-44 v2**, encrypted browser-side
+to the owner's own npub; the agent holds no decryption key. The manifest and the
+character stack are complementary: the manifest is immutable provenance; the
+character stack is living, owner-editable, and consent-gated for writes.
+
+The manifest's `policy.consent_required_for` enumerates the actions that will
+require explicit owner consent as later stages come online:
+`['external_action','paid_inference','memory_write','publishing','training']`.
+
+---
+
+## 7. LoRA Lifecycle (FORWARD SPEC — not built)
+
+> **Not implemented.** The manifest records `provenance.lora = 'not-started'`.
+> This section is the target contract.
+
+### 7.1 Principles
+
+- **Curated & approved only.** Training data is *never* auto-sourced from
+  unreviewed chats. Every example enters a review queue and requires explicit
+  owner approval before it is eligible.
+- **Owner-local by default.** Fine-tuning runs against the owner's local model
+  (Ollama, §12) or an owner-approved compute target. No training data leaves the
+  owner's trust boundary without a scoped consent.
+- **Provenance-stamped.** Each adapter records: base model + digest, the dataset
+  manifest digest, the constitution version/digest in force, hyperparameters,
+  and an audit line.
+
+### 7.2 Lifecycle
+
+```
+draft example ─▶ review queue ─▶ owner APPROVE ─▶ dataset (append-only, digested)
+      │                                                    │
+      └── owner REJECT (dropped, audited)                  ▼
+                                              train adapter (local/approved)
+                                                           │
+                                       adapter card + digest + audit line
+                                                           │
+                                              owner ACTIVATE adapter ─▶ prompt stack
+```
+
+### 7.3 Proposed data shapes
+
+```jsonc
+// training_example/1 (sealed like the character stack)
+{ "schema":"torii.continuum.training_example/1",
+  "id":"…","source":"chat|manual|import","status":"draft|approved|rejected",
+  "prompt":"…","completion":"…","tags":["…"],
+  "approved_by":"<npub>","approved_at":123, "review_note":"…" }
+
+// lora_adapter_card/1 (provenance, plaintext + digest)
+{ "schema":"torii.continuum.lora_adapter_card/1",
+  "adapter_id":"…","base_model":"…","base_digest":"sha256:…",
+  "dataset_digest":"sha256:…","constitution_version":"genesis-1.0.0",
+  "hyperparams":{…},"created_at":123,"active":false,"card_digest":"…" }
+```
+
+### 7.4 Acceptance (future)
+
+- **Given** an unreviewed chat, **when** training runs, **then** no unreviewed
+  message is ever included (fail-closed if the review queue is bypassed).
+- **Given** an approved dataset, **when** an adapter is trained, **then** its card
+  pins the dataset digest and an audit line is appended.
+
+---
+
+## 8. RAG — Ingestion, Retrieval & Memory Lifecycle (FORWARD SPEC — not built)
+
+> **Not implemented.** The manifest records `provenance.rag = 'not-started'`.
+
+### 8.1 Ingestion
+
+- Sources are **explicitly added** by the owner (documents, notes, approved
+  imports). No silent crawling.
+- Each chunk is provenance-stamped (source id, offset, ingest time) and, where
+  the source is private, sealed at rest.
+
+### 8.2 Retrieval
+
+- Retrieval is **consent-scoped**: a query only searches corpora the current
+  action is authorized to touch. Default-deny where scope is unclear.
+- Retrieved context is **attributed** in the prompt assembly (§9) so the bot can
+  cite provenance and the owner can audit what informed a response.
+
+### 8.3 Memory lifecycle
+
+- **Working memory** (ephemeral, per-conversation) vs **durable memory**
+  (owner-approved writes only — `memory_write` is a consent-gated action).
+- Forgetting is first-class: an owner can delete durable memory; deletions are
+  audited; emergency wipe (kind 30097) tears down the sealed stack.
+
+### 8.4 Proposed shapes
+
+```jsonc
+// rag_source/1
+{ "schema":"torii.continuum.rag_source/1","source_id":"…","kind":"doc|note|import",
+  "added_by":"<npub>","added_at":123,"sealed":true }
+// rag_chunk/1
+{ "schema":"torii.continuum.rag_chunk/1","chunk_id":"…","source_id":"…",
+  "offset":0,"text_sealed":"…","embedding_ref":"…","ingest_at":123 }
+```
+
+---
+
+## 9. Prompt Assembly (FORWARD SPEC)
+
+Deterministic, auditable layering, highest authority first:
+
+```
+1. Constitution (version + digest pinned)         ← immutable covenant
+2. Genesis policy (command_mode, default_deny)     ← from manifest
+3. Character root + approved semantic/procedural   ← sealed stack (owner)
+4. Active LoRA adapter card reference               ← if any (§7)
+5. Retrieved RAG context (attributed, scoped)       ← if authorized (§8)
+6. Owner's explicit command / current turn
+```
+
+Each layer is provenance-tagged; the assembled prompt can be replayed and each
+contribution attributed. Ambiguity at any layer resolves to **ask, don't act**.
+
+---
+
+## 10. Consent & Audit Model
+
+- **Consent** is explicit, scoped, and per-action-class
+  (`policy.consent_required_for`). One approval authorizes one scope.
+- **Audit** (`agent/lib/audit.mjs`) is an append-only, hash-chained JSONL ledger.
+  Each line: `{seq, at, event, prev, …payload, hash}` where
+  `hash = sha256(canonical(body))` and `prev` links to the previous line's hash
+  (seed `torii.continuum.audit/1/genesis` for the first). `verify()` walks the
+  chain and returns the first break point. Appends are serialized through an
+  in-process promise queue so concurrent writers cannot fork the chain.
+- **Genesis creation** appends a `genesis.create` line (bot_id, owner prefix,
+  constitution version+digest, manifest digest, command_mode). A failed audit
+  append is loud but never rolls back a successful genesis (the manifest exists;
+  the ledger just missed a line — surfaced in logs).
+- This is tamper **evidence**, not tamper **proofing** (§2, §4).
+
+---
+
+## 11. Encryption & Key Boundaries
+
+- **No owner private keys on the host, ever.** Signing + sealed-stack decryption
+  are browser-side.
+- **Agent secretstore** (`agent/lib/secretstore.mjs`): AES-256-GCM + HKDF keyed
+  by `session_secret`, with info-string domain separation per secret; fails
+  closed on tamper/wrong-key; files 0600. Used for agent-held operational
+  secrets (NWC URI, Routstr key) — never owner identity keys.
+- **Manifest** is provenance, not secret → plaintext JSON, 0600, with its own
+  digest for integrity.
+- **Character/memory stack** → NIP-44 v2 ciphertext, owner-decryptable only.
+
+---
+
+## 12. Local Ollama Integration (FORWARD SPEC)
+
+- Inference defaults to the owner's **local Ollama** where available; paid remote
+  inference (Routstr) is a **consent-gated** action (`paid_inference`).
+- LoRA adapters (§7) target the local model first. Model identity + digest are
+  pinned in adapter cards and prompt assembly so responses are attributable to a
+  specific base + adapter.
+- Health probing already exists (`/api/health/models`, admin-gated) reporting
+  strategy + routstr + ollama shape.
+
+---
+
+## 13. UI Surfaces
+
+**Implemented (GENESIS-1):** a `/genesis` route (guarded, in the sidebar) that:
+
+- When **no manifest** exists: shows a creation form (display name required;
+  archetype + creative intent optional) plus the **full constitution preview**
+  (version, digest, preamble, the four tenets) and an explicit note that defaults
+  at birth are owner-bound · explicit-command-only · default-deny, and that
+  **LoRA training and RAG memory are subsequent stages, not active at genesis**.
+- When a **manifest** exists: shows a provenance card (bot_id, owner short npub,
+  constitution version+digest, command_mode, timestamps, creative intent) with
+  **tamper-evidence badges** (`constitution_ok`, `manifest_digest_ok`) and the
+  provenance stage line (`lora: not-started`, `rag: not-started`).
+
+Rendering uses the XSS-safe `h()` builder (`textContent` only). Visual language,
+accessibility (`role="alert"` on the error line, keyboard submit), and mobile
+behaviour follow the existing `team.js`/card patterns. Offline (demo build with
+no agent) degrades to an honest "agent offline" card.
+
+**Future:** character editor, training review queue + approval, RAG source
+manager, consent prompts, adapter activation.
+
+---
+
+## 14. Failure Modes
+
+| Failure | Behaviour |
+|---|---|
+| Corrupt manifest on disk | Hard error on read/create (never treated as "absent" — prevents identity fork) |
+| Torn write mid-create | temp+rename means the target is never partially written |
+| Audit append fails after create | Genesis stands; error logged loudly; ledger missing one line (detectable) |
+| Constitution drift | `constitution_ok=false` surfaced in UI + read response |
+| Manifest field tampered | `manifest_digest_ok=false` surfaced |
+| Agent unreachable (demo) | Client short-circuits `{offline:true}`; UI shows offline card |
+| Session expired (401) | Client clears token; UI drops to logged-out |
+
+---
+
+## 15. Observability
+
+- Structured logs on genesis create/idempotent-read and every audit append
+  (`[audit] <event> seq=… hash=…`).
+- `audit.verify()` is the integrity probe (chain ok + count, or break point).
+- Existing `/api/health` + `/api/health/models` unchanged. Genesis adds no
+  secret-bearing telemetry.
+
+---
+
+## 16. Migration
+
+- **v1 manifest** is forward-compatible: an `extensions:{}` object is reserved for
+  additive fields without a schema bump. `manifest_version` gates any breaking
+  change.
+- A future **amendment flow** (constitution version bump) will: keep old
+  manifests pinned to their birth version/digest, record the new version, and
+  add an audit line — never silently rewrite a manifest's covenant pin.
+- No migration is required for GENESIS-1 (new feature, new namespace).
+
+---
+
+## 17. Staged Rollout
+
+1. **GENESIS-1 (done):** constitution + audit + genesis manifest + minimal UI.
+2. **CHARACTER-*:** sealed character editor wired to prompt assembly.
+3. **RAG-*:** owner-added sources, scoped retrieval, durable memory + forgetting.
+4. **LORA-*:** review queue → approval → local training → adapter activation.
+5. **MULTI-TENANT-*:** many owners per instance, relay-synced identity.
+
+---
+
+## 18. Requirements (P0/P1/P2)
+
+**P0 (GENESIS-1 — shipped):**
+- Deterministic versioned constitution with stable digest + provenance.
+- Owner-bound manifest from verified session (never body); one-time + idempotent;
+  default-deny cross-owner; no key material.
+- Atomic, restrictive-permission persistence.
+- Minimal create/inspect UI; honest LoRA/RAG labelling.
+- Hash-chained audit entry on creation.
+- Comprehensive tests + green build.
+- Security review (IDOR, traversal, XSS, session spoofing, perms, key material).
+
+**P1 (next):** character editor + prompt assembly v1; consent prompts; RAG source
+manager (read-only ingestion).
+
+**P2 (later):** LoRA review/training/activation; multi-tenant hosting; relay sync.
+
+---
+
+## 19. Acceptance Criteria (Given/When/Then)
+
+- **Given** a logged-in owner with no manifest, **when** they POST valid
+  `display_name`, **then** a manifest is created (`201`, `created:true`) bound to
+  their session npub, pinning the live constitution version+digest.
+- **Given** an existing manifest, **when** the same owner POSTs again with
+  different fields, **then** the original manifest is returned unchanged
+  (`200`, `created:false`) — no second identity.
+- **Given** a request body containing another owner's pubkey, **when** genesis is
+  created, **then** the body pubkey is ignored and the owner is the session npub.
+- **Given** owner A's manifest, **when** owner B reads genesis, **then** B sees
+  `exists:false` (no cross-owner disclosure).
+- **Given** a manifest edited on disk, **when** it is read, **then**
+  `manifest_digest_ok:false`.
+- **Given** the constitution text is changed without a version bump, **when** the
+  suite runs, **then** the locked-digest test fails.
+- **Given** an audit line is edited or removed, **when** `verify()` runs, **then**
+  it returns `ok:false` at the break point.
+- **Given** the constitution UI, **when** rendered, **then** LoRA and RAG are
+  shown as subsequent stages and no training/retrieval is performed.
+
+---
+
+## 20. Tests
+
+**Agent (`node --test`):**
+- `constitution.test.js` — digest lock (`178ad323…`), reproducibility, canonical
+  key-order independence, non-finite refusal, verify accept/reject, honest
+  amendability fields.
+- `genesis.test.js` — npub decode/reject, owner-bound create, idempotency (no
+  fork), validation + length bounds, default-deny cross-owner, tamper evidence,
+  0600/0700 perms, audit line appended + verifies.
+- `audit.test.js` — chain forms + verifies, edited-line + removed-line detection,
+  concurrent-append serialization, 0600 perms, empty-log ok.
+
+**Frontend (`vitest`):**
+- `src/data/agent.test.js` — constitution/genesisRead GET shapes; **genesisCreate
+  sends only display fields and never a pubkey/owner even if injected**; offline
+  short-circuit.
+- `src/views/genesis-structure.test.js` — no pubkey input; XSS-safe (`h()`, no
+  raw HTML); LoRA/RAG labelled subsequent; digest surfaced; tamper flags shown.
+
+**Whole-suite gates:** full `vitest run`, full agent `node --test`, `npm run build`.
+
+---
+
+## 21. Non-Goals
+
+- Making the constitution unalterable by the machine owner (impossible; we do
+  tamper-evidence instead).
+- Holding owner private keys or signing server-side.
+- Auto-sourcing training data from unreviewed chats.
+- Faking LoRA/RAG in the shipped slice.
+- Multi-tenant hosting in GENESIS-1.
+
+---
+
+## 22. Open Questions
+
+1. **Constitution amendment UX** — how does an owner opt into a new constitution
+   version, and how is the old covenant pin preserved + shown?
+2. **Adapter portability** — should LoRA adapters be exportable/signable as Nostr
+   events for backup and cross-instance restore?
+3. **RAG embedding store** — local vector index choice under the minimal-footprint
+   constraint (sqlite-vss vs. flat + brute force at small scale).
+4. **Multi-owner audit isolation** — one chain per owner vs. one host chain with
+   per-owner scoping.
+5. **Consent granularity** — per-action vs. per-session standing consent, and how
+   revocation propagates.
+```
+
+---
+
+*Locked constitution digest (genesis-1.0.0):*
+`178ad323601455f92a345b286eef6c9628f2e71ff7f3f8ad856c16a37e775524`

@@ -16,6 +16,9 @@ import {
   walletHealth,
   projectSources,
   refreshProjectSources,
+  constitution,
+  genesisRead,
+  genesisCreate,
 } from './agent.js';
 
 // A live token mirrors the agent's `iat.exp.pubkey.sig` shape with a future exp.
@@ -269,6 +272,68 @@ describe('v0.2.47 client fns — wallet health + project sources', () => {
     delete globalThis.window.__CONTINUUM_AGENT_URL__;
     const r = await walletHealth();
     expect(r.ok).toBe(false);
+    expect(r.offline).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('GENESIS-1 client fns — constitution + genesis', () => {
+  let stub;
+  let calls;
+
+  beforeEach(() => {
+    stub = makeStorageStub();
+    globalThis.localStorage = stub;
+    globalThis.window = { __CONTINUUM_AGENT_URL__: 'https://agent.example' };
+    calls = [];
+    globalThis.fetch = async (url, opts) => {
+      calls.push({ url, opts });
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+  });
+  afterEach(() => {
+    delete globalThis.localStorage;
+    delete globalThis.window;
+    delete globalThis.fetch;
+  });
+
+  it('constitution GETs the public /api/constitution with no body', async () => {
+    await constitution();
+    expect(calls[0].url).toBe('https://agent.example/api/constitution');
+    expect(calls[0].opts.method).toBe('GET');
+    expect(calls[0].opts.body).toBeUndefined();
+  });
+
+  it('genesisRead GETs /api/genesis', async () => {
+    await genesisRead();
+    expect(calls[0].url).toBe('https://agent.example/api/genesis');
+    expect(calls[0].opts.method).toBe('GET');
+  });
+
+  it('genesisCreate POSTs only display fields and NEVER a pubkey/owner', async () => {
+    await genesisCreate({
+      display_name: 'Aria',
+      archetype: 'muse',
+      creative_intent: 'help build',
+      // Attacker-supplied authority fields must be dropped, not forwarded.
+      pubkey: 'e'.repeat(64),
+      owner: 'npub1evil',
+      ownerNpub: 'npub1evil',
+    });
+    const { url, opts } = calls[0];
+    expect(url).toBe('https://agent.example/api/genesis');
+    expect(opts.method).toBe('POST');
+    expect(opts.headers['Content-Type']).toBe('application/json');
+    const sent = JSON.parse(opts.body);
+    expect(sent).toEqual({ display_name: 'Aria', archetype: 'muse', creative_intent: 'help build' });
+    expect('pubkey' in sent).toBe(false);
+    expect('owner' in sent).toBe(false);
+    expect('ownerNpub' in sent).toBe(false);
+  });
+
+  it('genesis calls short-circuit offline with no fetch', async () => {
+    delete globalThis.window.__CONTINUUM_AGENT_URL__;
+    const r = await genesisRead();
     expect(r.offline).toBe(true);
     expect(calls).toHaveLength(0);
   });

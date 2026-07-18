@@ -34,6 +34,16 @@ Long-term, Continuum is the piece that makes "self-sovereign AI + self-sovereign
 
 Where Quest is the playful spatial front end, Continuum is the quiet infrastructure that makes the whole stack usable long-term.
 
+## Sovereign Bot Stack (GENESIS-1 shipped v0.2.78-alpha; LoRA/RAG specified)
+
+Continuum now has a foundation for its most ambitious layer: **anyone can bring to life a sovereign, adaptive AI bot they alone control.** The bot is owner-bound at genesis to one verified Nostr identity, acts only under explicit owner command (default-deny where authority/consent/provenance is unclear), and is born under a **humanitarian starter constitution** — care for those who gave it life, those around it, those beyond, and build extraordinary things that help humanity evolve. This is foundational, not an optional setting.
+
+**The honesty boundary is a design principle, not a caveat.** No technical system can make an open-source constitution literally unalterable by the machine's owner — a root operator can edit any file. So instead of dishonest immutability/DRM claims, the stack provides **versioning, a published stable digest, visible provenance, default-deny semantics, and tamper evidence** (a hash-chained audit ledger; manifests that pin the constitution digest they were born under; digest-mismatch surfaced in the UI). Alteration is made *detectable and attributable*, never silent.
+
+**GENESIS-1 (shipped)** is the first secure vertical slice: the deterministic versioned constitution (`agent/lib/constitution.mjs`, digest `178ad323…`), the hash-chained audit ledger (`agent/lib/audit.mjs`), and the owner-bound genesis manifest (`agent/core/genesis.mjs`) — one-time, idempotent, default-deny cross-owner, atomic + restrictive-permission storage, no key material — plus routes, a client, and a minimal `/genesis` UI. It runs single-owner-per-VPS today but is namespaced by owner pubkey so the data model is already multi-tenant-shaped.
+
+**Forward stages (specified in `docs/sovereign-ai-genesis-lora-rag-spec.md`, not built, not faked):** CHARACTER-* (sealed character editor wired to a provenance-tagged prompt assembly), RAG-* (owner-added sources, consent-scoped retrieval, durable memory + first-class forgetting), LORA-* (curated + owner-approved training data only — never auto-sourced from unreviewed chats — local/approved fine-tuning with provenance-stamped adapters), MULTI-TENANT-*. The manifest stamps `lora`/`rag = 'not-started'` and the UI labels them subsequent stages so capability is never overstated.
+
 ## Core Principles
 
 - **Privacy first.** Nostr-native does not mean publish-everything. Anything that ever gets posted to Nostr must be gift-wrapped in cryptography (NIP-17 by default). Local-first, encrypted-first.

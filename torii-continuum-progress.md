@@ -9,6 +9,26 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.78-alpha — sovereign bot genesis + humanitarian constitution, first secure vertical slice (GENESIS-1)
+
+First slice of the sovereign-AI stack: an owner can bring a bot to life, owner-bound at genesis, under a humanitarian starter constitution — with honest provenance and tamper evidence rather than dishonest immutability claims.
+
+**Constitution (`agent/lib/constitution.mjs`).** Deterministic, versioned structured data (schema `torii.continuum.constitution/1`, version `genesis-1.0.0`). Four humanitarian articles (care for those who gave it life / those around it / those beyond; build extraordinary things that help humanity evolve) + five genesis clauses (owner-bound, explicit-command-only, default-deny, no-private-keys, provenance-not-drm) + an `amendability` object that is explicit about the honesty boundary: it guarantees `versioning`/`published_digest`/`default_deny`/`tamper_evidence` and explicitly does **not** guarantee `immutability`/`tamper_proofing`/`remote_enforcement`. Stable digest via recursive key-sort canonicalization → SHA-256, **locked** at `178ad323601455f92a345b286eef6c9628f2e71ff7f3f8ad856c16a37e775524` in tests so the covenant can never drift silently.
+
+**Audit ledger (`agent/lib/audit.mjs`).** `memory/audit.jsonl` is now a hash-chained append-only JSONL ledger — each line pins the previous line's hash; a partial edit or a removed line breaks the chain and `verify()` reports the break point. Appends serialized via an in-process promise queue. Tamper-EVIDENCE, not tamper-proofing.
+
+**Genesis manifest (`agent/core/genesis.mjs`).** The bot's birth certificate. Owner is derived from the **verified session npub**, never the request body (no IDOR / session-spoof write). One-time + idempotent — a retry (even with different display fields) returns the original manifest unchanged, never forking a second identity. Default-deny cross-owner: storage is namespaced by strict 64-hex owner pubkey under `memory/genesis/<ownerHex>/manifest.json` (traversal-safe). Atomic temp-file+rename write, 0600 file under 0700 dir. No key material — only the public npub/hex is stored. Pins the constitution version+digest and stamps `provenance.lora = 'not-started'`, `provenance.rag = 'not-started'`.
+
+**Routes (`agent/index.mjs`).** Public `GET /api/constitution`; admin-gated + rate-limited `GET /api/genesis` (live tamper-evidence check) and `POST /api/genesis` (owner from session; body carries only display_name/archetype/creative_intent; 201 create / 200 idempotent / 400 validation). Genesis creation appends a `genesis.create` audit line.
+
+**Frontend.** Client `src/data/agent.js` gains `constitution()`, `genesisRead()`, `genesisCreate()` (sends display fields ONLY — never a pubkey). New guarded `/genesis` route + sidebar nav (`src/views/genesis.js`): creation form + full constitution preview when no manifest exists; provenance card with tamper-evidence badges (`constitution_ok`, `manifest_digest_ok`), owner short-npub, version+digest, command mode, timestamps when it does. LoRA/RAG shown as subsequent stages, not faked. XSS-safe `h()` (textContent only); accessible error line + keyboard submit; offline degrades to an honest "agent offline" card.
+
+**Spec.** Implementation-grade `docs/sovereign-ai-genesis-lora-rag-spec.md` (shared copy `torii-continuum-sovereign-ai-genesis-spec.md`): vision, threat model, genesis lifecycle, constitution semantics/versioning, Nostr binding, character model, forward specs for LoRA + RAG + prompt assembly + Ollama, consent/audit, key boundaries, UI, failure modes, migration, staged rollout, P0/P1/P2, Given/When/Then, tests, non-goals, open questions.
+
+**Security review.** IDOR (owner from session only), path traversal (hex64-validated namespace segment), injection/XSS (bounded fields server-side + textContent client-side), session spoofing (no body-supplied authority), filesystem perms (0600/0700, atomic writes), key material (public keys only) — all covered by tests.
+
+**Validation.** Agent `node --test` **255/255** (+37: constitution/genesis/audit); frontend `vitest` **1278/1278** (+9: genesis client + view structure); `npm run build` clean (33 modules). Version -> 0.2.78-alpha (root+agent package.json + lockfiles); torii-base / preview unchanged. Annotated tag v0.2.78-alpha; **not deployed** — the enabled deploy timer and live production pin are **not** altered.
+
 ## v0.2.75-alpha — sign-out is a hard security boundary; Back/bfcache cannot restore the dashboard (AUTH-SIGNOUT-HARDEN-1)
 
 Security fix for a production report first seen on **v0.2.69-alpha**: after clicking **Sign out** the app correctly showed the login page, but pressing the browser **Back** button restored the previously authenticated dashboard. Sign-out must be a hard boundary — a logged-out visitor must never see, or be able to restore, protected content.
