@@ -80,3 +80,21 @@ test('cashu-ts token codec still round-trips the { mint, proofs } shape', () => 
   assert.ok(Array.isArray(decoded.proofs));
   assert.equal(decoded.proofs.length, 1);
 });
+
+// Regression: with a HEX keyset id (as Minibits/Coinos use) and NO version
+// option, cashu-ts 3.7.1 defaults to cashuB v4 — which crashes Routstr's melt
+// step (Cloudflare 520). wallet.send() must pin version:3 → cashuA. This pins
+// both the buggy default AND the fix so a future dependency bump can't silently
+// flip the wire format back to v4.
+test('getEncodedToken version:3 forces cashuA v3 for a hex-keyset mint', () => {
+  const C = '02' + 'ab'.repeat(32);
+  const token = {
+    mint: 'https://mint.minibits.cash/Bitcoin',
+    unit: 'sat',
+    proofs: [{ id: '009a1f293253e41e', amount: 1, secret: 'deadbeef', C }],
+  };
+  // Unversioned default is v4 (the bug) for a hex keyset id.
+  assert.ok(getEncodedToken(token).startsWith('cashuB'), 'default encoding is v4 cashuB for a hex keyset');
+  // version:3 is the fix wallet.send() applies.
+  assert.ok(getEncodedToken(token, { version: 3 }).startsWith('cashuA'), 'version:3 must produce cashuA v3');
+});

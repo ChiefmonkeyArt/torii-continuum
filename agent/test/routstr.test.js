@@ -339,6 +339,12 @@ test('wallet.send produces a decodable Cashu token of the requested amount and p
   assert.equal(r.ok, true);
   assert.equal(r.mint, MINT);
 
+  // The X-Cashu token MUST be cashuA (v3), NOT cashuB (v4). dummyProof uses a
+  // hex keyset id (009a1f293253e41e), for which cashu-ts would default to v4 —
+  // Routstr's melt step crashes on v4 (Cloudflare 520). Regression guard.
+  assert.equal(r.token.slice(0, 6), 'cashuA', 'token must be cashuA v3, not cashuB v4');
+  assert.ok(!r.token.startsWith('cashuB'), 'token must NOT be v4 cashuB');
+
   const decoded = getDecodedToken(r.token);
   assert.equal(decoded.mint, MINT);
   const tokenValue = decoded.proofs.reduce((s, p) => s + (p.amount || 0), 0);

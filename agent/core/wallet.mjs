@@ -284,7 +284,11 @@ export async function createWallet(cfg, log, deps = {}) {
       // The payment proofs (send) are intentionally NOT stored — once created
       // they belong to the request, not to spendable balance.
       await writeProofs(walletDir, mintUrl, [...sendResult.keep, ...pending]);
-      const token = getEncodedToken({ mint: mintUrl, proofs: sendResult.send });
+      // Force cashuA v3. Without an explicit version, cashu-ts 3.7.1 defaults to
+      // cashuB v4 (CBOR) for hex-keyset mints (Minibits, Coinos both use hex
+      // keyset ids) — Routstr accepts v3 but crashes its melt/forward step on v4
+      // (Cloudflare 520). `unit: 'sat'` keeps the v3 token self-describing.
+      const token = getEncodedToken({ mint: mintUrl, unit: 'sat', proofs: sendResult.send }, { version: 3 });
       const sentKeys = new Set(sendResult.send.map(proofKey));
 
       return {
