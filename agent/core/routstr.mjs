@@ -5,10 +5,14 @@
  *   1. Pick the model from cfg.routstr.models[skill]. Default "chat" if unknown.
  *   2. Ask wallet.send(estimated_sats) for a Cashu token.
  *   3. POST to `${endpoint}/v1/chat/completions` with:
- *        Authorization: Cashu <token>
+ *        X-Cashu: <cashuA token>   (Routstr's per-request stateless payment
+ *                                   header — see docs.routstr.com/api/overview)
  *      body: { model, messages, max_tokens, ... }
  *   4. Parse OpenAI-shaped response.
- *   5. Log to cost log. Return content + usage.
+ *   5. Reclaim change: Routstr returns the unused sats as a Cashu token in the
+ *      `X-Cashu-Refund` response header. We receive() it straight back into the
+ *      wallet so the balance only loses what the request actually cost.
+ *   6. Log to cost log. Return content + usage (sats_spent net of the refund).
  *
  * If the primary provider fails AND cfg.routstr.fallback.enabled === true,
  * walk the fallback ladder for the skill. Each ladder attempt gets its own
@@ -31,6 +35,24 @@ import { agentRoot } from './config.mjs';
  */
 function estimateSats(cfg, _skill) {
   return cfg.routstr.limits?.max_sats_per_request || 50;
+}
+
+/**
+ * Read the X-Cashu-Refund token off a fetch Response. Tolerates both a real
+ * Headers object (has .get) and a plain-object header bag (test doubles).
+ * Returns a trimmed non-empty string or null.
+ */
+function readRefundHeader(res) {
+  const headers = res?.headers;
+  let raw = null;
+  if (headers && typeof headers.get === 'function') {
+    raw = headers.get('x-cashu-refund') ?? headers.get('X-Cashu-Refund');
+  } else if (headers && typeof headers === 'object') {
+    raw = headers['x-cashu-refund'] ?? headers['X-Cashu-Refund'];
+  }
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function modelForSkill(cfg, skill) {
@@ -69,7 +91,10 @@ export function createRoutstr(cfg, wallet, log) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Cashu ${send.token}`,
+          // Routstr's stateless per-request payment: the Cashu eCash token
+          // rides in X-Cashu, NOT Authorization. Sending it as an Authorization
+          // scheme yields http 401 "API key or Cashu token required".
+          'X-Cashu': send.token,
         },
         body: JSON.stringify({
           model,
@@ -109,13 +134,35 @@ export function createRoutstr(cfg, wallet, log) {
     const usage = parsed.usage || {};
     const durationMs = Date.now() - started;
 
+    // Reclaim change. Routstr consumes only what the request cost and returns
+    // the unused sats as a Cashu token in X-Cashu-Refund. We receive() it back
+    // into the wallet so over-allocation isn't lost. A refund failure must NOT
+    // fail an otherwise-successful request — the completion already happened;
+    // we log and move on, treating the whole allocation as spent.
+    let refundedSats = 0;
+    const refundToken = readRefundHeader(res);
+    if (refundToken) {
+      try {
+        const claim = await wallet.receive(refundToken);
+        if (claim.ok) {
+          refundedSats = claim.added_sats || 0;
+          if (refundedSats > 0) log.info(`[routstr] reclaimed ${refundedSats} sats of change`);
+        } else {
+          log.warn(`[routstr] refund reclaim rejected: ${claim.reason}`);
+        }
+      } catch (e) {
+        log.warn(`[routstr] refund reclaim failed: ${e.message}`);
+      }
+    }
+
     return {
       ok: true,
       content,
       model,
       tokens_in: usage.prompt_tokens || 0,
       tokens_out: usage.completion_tokens || 0,
-      sats_spent: sats, // v1: whatever we allocated; refunds not tracked yet
+      sats_spent: Math.max(0, sats - refundedSats),
+      sats_refunded: refundedSats,
       duration_ms: durationMs,
     };
   }
