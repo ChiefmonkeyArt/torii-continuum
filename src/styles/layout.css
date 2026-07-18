@@ -5,10 +5,8 @@
   z-index: 1;
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
-  grid-template-rows: 1fr auto;
-  grid-template-areas:
-    "sidebar main"
-    "sidebar chat";
+  grid-template-rows: 1fr;
+  grid-template-areas: "sidebar main";
   height: 100vh;
   width: 100vw;
 }
@@ -157,7 +155,10 @@
   grid-area: main;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 22px 32px 24px 32px;
+  /* Bottom padding reserves room for the floating composer so its last line of
+     content is never obscured. chat.js keeps --chat-reserve in sync with the
+     dock's live height; the fallback covers first paint / no-JS. */
+  padding: 22px 32px calc(24px + var(--chat-reserve, 104px)) 32px;
   position: relative;
 }
 
@@ -246,8 +247,7 @@
   .sidebar { padding: 14px 8px; }
   .brand-name, .brand-sub, .nav-item span:not(.nav-badge), .nav-section,
   .sidebar-footer .footer-note { display: none; }
-  .main { padding: 16px; }
-  /* Keep the chat dock's edges aligned with the narrower mobile main padding. */
-  .chat-dock { padding-left: 16px; padding-right: 16px; }
+  /* Keep the reserved bottom space; the composer floats over the content. */
+  .main { padding: 16px 16px calc(16px + var(--chat-reserve, 104px)) 16px; }
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
 }

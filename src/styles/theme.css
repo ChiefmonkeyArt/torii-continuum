@@ -57,6 +57,10 @@
 
   --sidebar-w: 232px;
   --chat-h: 88px;
+  /* Bottom space the content scroller reserves for the floating composer.
+     chat.js overwrites this with the dock's live height; this is the first-paint
+     / no-JS fallback (collapsed composer height + float gap). */
+  --chat-reserve: 104px;
 
   --ease: cubic-bezier(0.4, 0.14, 0.2, 1);
   --dur:  160ms;

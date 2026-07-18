@@ -1,17 +1,44 @@
-/* Continuum — docked AI chat (bronze/amber palette) */
+/* Continuum — floating AI composer (bronze/amber palette, UI-COMPOSER-1).
+   A rounded box that hovers near the bottom of the content column rather than
+   docking edge-to-edge, echoing Perplexity's floating composer while keeping
+   Continuum's amber/bronze treatment. It is position:fixed so it no longer
+   occupies a grid row; chat.js reserves matching bottom space in the content
+   scroller via --chat-reserve so nothing is obscured. */
 
 .chat-dock {
-  grid-area: chat;
-  border-top: 1px solid hsl(var(--border));
-  background: hsl(var(--sidebar));
-  padding: 12px 32px;
+  position: fixed;
+  z-index: 40;
+  /* Center within the content column: bounded by the sidebar on the left and
+     the viewport edge on the right, then capped to a comfortable reading width
+     and horizontally centered. */
+  left: calc(var(--sidebar-w) + 24px);
+  right: 24px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  margin-inline: auto;
+  max-width: 820px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 16px;
+  background: hsl(var(--sidebar) / 0.92);
+  -webkit-backdrop-filter: blur(12px) saturate(1.1);
+  backdrop-filter: blur(12px) saturate(1.1);
+  box-shadow:
+    0 10px 34px hsl(0 0% 0% / 0.28),
+    0 2px 8px hsl(0 0% 0% / 0.18),
+    0 0 0 1px hsl(var(--primary) / 0.06) inset;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   max-height: 46vh;
-  transition: max-height var(--dur) var(--ease);
+  transition: max-height var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
-.chat-dock.expanded { max-height: 46vh; }
+.chat-dock.expanded {
+  max-height: 46vh;
+  box-shadow:
+    0 16px 44px hsl(0 0% 0% / 0.34),
+    0 2px 8px hsl(0 0% 0% / 0.2),
+    0 0 0 1px hsl(var(--primary) / 0.1) inset;
+}
 .chat-dock.collapsed { max-height: var(--chat-h); }
 
 .chat-log {
@@ -98,7 +125,8 @@
   font-size: 14px;
   resize: none;
   height: 40px;
-  max-height: 140px;
+  /* Matches CHAT_INPUT_MAX in chat-layout.js: grow to here, then scroll. */
+  max-height: 160px;
   outline: none;
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
@@ -175,4 +203,23 @@
 @keyframes pulse {
   0%, 100% { opacity: 0.3; }
   50% { opacity: 1; }
+}
+
+/* Mobile: the floating composer goes full-width with small side margins and
+   honours the home-indicator safe area, while keeping the rounded, separated
+   look. The narrow icon-only sidebar (68px) still bounds the left edge. */
+@media (max-width: 900px) {
+  .chat-dock {
+    left: 12px;
+    right: 12px;
+    max-width: none;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    border-radius: 14px;
+    padding: 10px 12px;
+  }
+}
+
+/* Respect reduced-motion: no height/shadow easing for users who opt out. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-dock { transition: none; }
 }
