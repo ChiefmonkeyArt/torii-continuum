@@ -59,13 +59,13 @@ function slug(mintUrl) {
   return mintUrl.replace(/^https?:\/\//, '').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
 }
 
-function fileFor(mintUrl) {
-  return join(WALLET_DIR, `${slug(mintUrl)}.json`);
+function fileFor(dir, mintUrl) {
+  return join(dir, `${slug(mintUrl)}.json`);
 }
 
-async function readProofs(mintUrl) {
+async function readProofs(dir, mintUrl) {
   try {
-    const raw = await readFile(fileFor(mintUrl), 'utf8');
+    const raw = await readFile(fileFor(dir, mintUrl), 'utf8');
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed.proofs) ? parsed.proofs : [];
   } catch (e) {
@@ -74,18 +74,27 @@ async function readProofs(mintUrl) {
   }
 }
 
-async function writeProofs(mintUrl, proofs) {
-  await mkdir(WALLET_DIR, { recursive: true, mode: 0o700 });
-  const path = fileFor(mintUrl);
+async function writeProofs(dir, mintUrl, proofs) {
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const path = fileFor(dir, mintUrl);
   const payload = JSON.stringify({ mint: mintUrl, proofs, updated_at: Date.now() }, null, 2);
   await writeFile(path, payload, { mode: 0o600 });
 }
 
 /**
  * @param {object} cfg  frozen loadConfig() result
+ * @param {object} log  logger
+ * @param {object} [deps] test seams — never set in production:
+ *   • walletDir:     override the proof-storage directory (default agent/memory/wallet)
+ *   • walletFactory: (mintUrl) => cashu-ts-shaped Wallet, so send()/receive()
+ *                    can be exercised offline against a fake mint.
  * @returns wallet API
  */
-export async function createWallet(cfg, log) {
+export async function createWallet(cfg, log, deps = {}) {
+  const walletDir = deps.walletDir || WALLET_DIR;
+  const makeWallet = typeof deps.walletFactory === 'function'
+    ? deps.walletFactory
+    : (url) => new Wallet(new Mint(url));
   const mints = new Map(); // mintUrl → Wallet
   const configuredMints = cfg.cashu?.mints || [];
 
@@ -95,7 +104,7 @@ export async function createWallet(cfg, log) {
 
   for (const url of configuredMints) {
     try {
-      const wallet = new Wallet(new Mint(url));
+      const wallet = makeWallet(url);
       // Warm mint info + keysets + keys so we fail fast on unreachable mints at
       // boot. cashu-ts v3 splits this from getMintInfo() (now a synchronous
       // cached getter) into loadMint(), which does the network fetch. A boot
@@ -125,7 +134,7 @@ export async function createWallet(cfg, log) {
     let total = 0;
     const perMint = {};
     for (const url of mints.keys()) {
-      const proofs = await readProofs(url);
+      const proofs = await readProofs(walletDir, url);
       const sats = proofs.reduce((sum, p) => sum + (p.amount || 0), 0);
       perMint[url] = sats;
       total += sats;
@@ -162,9 +171,9 @@ export async function createWallet(cfg, log) {
       return { ok: false, reason: `mint refused token: ${e.message}` };
     }
 
-    const existing = await readProofs(mintUrl);
+    const existing = await readProofs(walletDir, mintUrl);
     const combined = [...existing, ...received];
-    await writeProofs(mintUrl, combined);
+    await writeProofs(walletDir, mintUrl, combined);
 
     const added = received.reduce((s, p) => s + (p.amount || 0), 0);
     log.info(`[wallet] received ${added} sats from ${mintUrl}`);
@@ -185,7 +194,7 @@ export async function createWallet(cfg, log) {
     }
 
     for (const [mintUrl, wallet] of mints) {
-      const proofs = await readProofs(mintUrl);
+      const proofs = await readProofs(walletDir, mintUrl);
       const total = proofs.reduce((s, p) => s + (p.amount || 0), 0);
       if (total < sats + (cfg.cashu?.hard_floor_sats || 0)) continue;
 
@@ -200,7 +209,7 @@ export async function createWallet(cfg, log) {
 
       // Persist "keep" as new state immediately. If the request fails, caller
       // must call rollback(token) which re-receives the send-proofs.
-      await writeProofs(mintUrl, sendResult.keep);
+      await writeProofs(walletDir, mintUrl, sendResult.keep);
       const token = getEncodedToken({ mint: mintUrl, proofs: sendResult.send });
 
       return {
@@ -209,8 +218,8 @@ export async function createWallet(cfg, log) {
         sats,
         token,
         rollback: async () => {
-          const cur = await readProofs(mintUrl);
-          await writeProofs(mintUrl, [...cur, ...sendResult.send]);
+          const cur = await readProofs(walletDir, mintUrl);
+          await writeProofs(walletDir, mintUrl, [...cur, ...sendResult.send]);
           log.info(`[wallet] rolled back ${sats} sats to ${mintUrl}`);
         },
       };
@@ -256,7 +265,7 @@ export async function createWallet(cfg, log) {
 
     const out = [];
     for (const [url, wallet] of mints) {
-      const proofs = await readProofs(url); // read-only
+      const proofs = await readProofs(walletDir, url); // read-only
       out.push(await mintHealth({ url, wallet, proofs, timeoutMs }));
     }
     return { configured: true, overall: deriveOverall(out), checked_at: checkedAt, mints: out };
