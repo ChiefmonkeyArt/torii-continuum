@@ -62,3 +62,45 @@ describe('routstr.js — balance poll uses the correct field', () => {
     expect(routstrSrc).toMatch(/balanceNumEl/);
   });
 });
+
+describe('routstr.js — two matching wallet cards (v0.2.70-alpha)', () => {
+  it('renders a Cashu balance card and an NWC wallet card', () => {
+    expect(routstrSrc).toMatch(/renderCashuCard/);
+    expect(routstrSrc).toMatch(/renderNwcCard/);
+  });
+
+  it('lays the two wallet cards out in a matching grid-2 of .card elements', () => {
+    // Both cards are built and placed side by side in a grid-2 container.
+    expect(routstrSrc).toMatch(/grid-2[\s\S]*renderCashuCard\(c\)[\s\S]*renderNwcCard/);
+    expect(routstrSrc).toMatch(/renderCashuCard[\s\S]*class:\s*'card hot'/);
+    expect(routstrSrc).toMatch(/renderNwcCard[\s\S]*class:\s*'card'/);
+  });
+
+  it('labels card 2 as an NWC wallet, not NIP-60 (the agent has no NIP-60 support)', () => {
+    expect(routstrSrc).toContain('NWC wallet');
+    // NIP-60 may only appear in an explanatory negative sense, never as a card label.
+    expect(routstrSrc).not.toMatch(/text:\s*'NIP-?60/i);
+  });
+
+  it('Cashu card exposes a Top Up button that reveals the inline receive form', () => {
+    expect(routstrSrc).toContain('Top Up');
+    expect(routstrSrc).toMatch(/toggleTopUp\(true\)/);
+    expect(routstrSrc).toMatch(/topup-form/);
+  });
+
+  it('the inline receive form still POSTs the Cashu token via walletReceive', () => {
+    expect(routstrSrc).toMatch(/walletReceive\(tok\)/);
+  });
+
+  it('honours the chat dock focus-top-up flag on mount', () => {
+    expect(routstrSrc).toContain('continuum.routstr.focusTopUp');
+    expect(routstrSrc).toMatch(/maybeFocusTopUp/);
+  });
+
+  it('reuses the existing NWC endpoints for status/connect/test/disconnect', () => {
+    expect(routstrSrc).toMatch(/nwcStatus/);
+    expect(routstrSrc).toMatch(/nwcConnect/);
+    expect(routstrSrc).toMatch(/nwcTest/);
+    expect(routstrSrc).toMatch(/nwcDisconnect/);
+  });
+});

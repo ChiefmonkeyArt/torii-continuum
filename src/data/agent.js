@@ -206,6 +206,33 @@ export async function walletHealth() {
   return req('GET', '/api/wallet/health');
 }
 
+// ─── NWC wallet (NIP-47 Nostr Wallet Connect) ───────────────
+//
+// These wrap the agent's existing onboarding wallet routes so the Routstr page
+// can surface NWC status/connect/test/disconnect without duplicating logic.
+// NOTE: the agent implements NWC (NIP-47) only — there is NO NIP-60 protocol
+// support here, so UI must label this an "NWC wallet", not NIP-60.
+
+/** GET /api/onboarding/wallet/status — { connected, wallet, capabilities, can_fund_routstr, alias, network, connected_at }. */
+export async function nwcStatus() {
+  return req('GET', '/api/onboarding/wallet/status');
+}
+
+/** POST /api/onboarding/wallet/connect — store an NWC (nostr+walletconnect://…) URI. */
+export async function nwcConnect(nwcUri) {
+  return req('POST', '/api/onboarding/wallet/connect', { nwc_uri: nwcUri });
+}
+
+/** POST /api/onboarding/wallet/test — re-run get_info against the stored wallet. */
+export async function nwcTest() {
+  return req('POST', '/api/onboarding/wallet/test', {});
+}
+
+/** POST /api/onboarding/wallet/disconnect — forget the stored NWC wallet. */
+export async function nwcDisconnect() {
+  return req('POST', '/api/onboarding/wallet/disconnect', {});
+}
+
 // ─── Project sources (read-only Kanban import) ──────────────
 
 /**

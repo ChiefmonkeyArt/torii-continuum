@@ -4,14 +4,25 @@
 import { h, clear, formatSats, openModal } from './util.js';
 import { getRoutstr, updateRoutstr } from '../data/store.js';
 import { setChatContext } from '../chat.js';
-import { walletBalance, walletReceive, isAgentConfigured } from '../data/agent.js';
+import {
+  walletBalance, walletReceive, isAgentConfigured,
+  nwcStatus, nwcConnect, nwcTest, nwcDisconnect,
+} from '../data/agent.js';
 import { isSessionLive, startLogin } from '../auth.js';
+
+// The chat dock sets this sessionStorage flag before navigating here so the
+// operator lands straight on the Cashu receive form after tapping "Top Up".
+const FOCUS_TOPUP_KEY = 'continuum.routstr.focusTopUp';
 
 // Poll the agent for live wallet balance while the Routstr page is mounted.
 let balancePollHandle = null;
 // Live handle to the balance number node so the poll can refresh it in place
 // without re-rendering (and tearing) the whole page.
 let balanceNumEl = null;
+// Live handles to the inline Cashu receive/top-up form so the "Top Up" button
+// (here and from the chat dock) can reveal + focus it without a re-render.
+let topUpSectionEl = null;
+let topUpInputEl = null;
 
 /**
  * Read the spendable balance (sats) out of an agent balance payload.
@@ -57,34 +68,12 @@ export function renderRoutstr(mount) {
   ]);
   mount.appendChild(header);
 
-  // Hero: connection + balance
-  const hero = h('div', { class: 'card hot' }, [
-    h('div', { class: 'routstr-hero' }, [
-      h('div', { class: 'routstr-avatar', text: '⚡' }),
-      h('div', { style: 'flex: 1;' }, [
-        h('div', {}, [
-          h('span', { class: c.connected ? 'pill ok' : 'pill', text: c.connected ? 'connected' : 'not connected' }),
-          ' ',
-          h('span', { class: 'mono muted', text: c.endpoint }),
-        ]),
-        h('div', { style: 'margin-top: 8px;', class: 'muted', text: c.connected
-          ? 'Cashu tokens are loaded locally and burned per request. No account, no key custody.'
-          : 'Connect a Cashu wallet (mock) to enable pay-per-request. Nothing is sent to the network yet.' }),
-      ]),
-      (() => {
-        balanceNumEl = h('span', { class: 'bal-num', text: formatSats(c.cashuBalanceSats) });
-        return h('div', { class: 'stat' }, [
-          h('span', { class: 'label', text: 'Cashu balance' }),
-          h('span', { class: 'value' }, [
-            balanceNumEl,
-            ' ',
-            h('span', { class: 'unit', text: 'sats' }),
-          ]),
-        ]);
-      })(),
-    ]),
+  // Two matching horizontal wallet cards: Cashu (left) + NWC (right).
+  const walletCards = h('div', { class: 'grid-2' }, [
+    renderCashuCard(c),
+    renderNwcCard(live),
   ]);
-  mount.appendChild(hero);
+  mount.appendChild(walletCards);
 
   mount.appendChild(h('div', { style: 'height: 16px' }));
 
@@ -119,6 +108,242 @@ export function renderRoutstr(mount) {
     ]),
   ]);
   mount.appendChild(settings);
+
+  // If we arrived here from the chat dock's "Top Up" button, reveal + focus the
+  // Cashu receive form so funding is one paste away.
+  maybeFocusTopUp();
+}
+
+// ─── Card 1: Cashu / Routstr balance ────────────────────────────────────────
+
+function renderCashuCard(c) {
+  balanceNumEl = h('span', { class: 'bal-num', text: formatSats(c.cashuBalanceSats) });
+
+  const hero = h('div', { class: 'routstr-hero' }, [
+    h('div', { class: 'routstr-avatar', text: '⚡' }),
+    h('div', { style: 'flex: 1;' }, [
+      h('div', {}, [
+        h('span', { class: c.connected ? 'pill ok' : 'pill', text: c.connected ? 'connected' : 'not connected' }),
+        ' ',
+        h('span', { class: 'mono muted', text: c.endpoint }),
+      ]),
+      h('div', { style: 'margin-top: 8px;', class: 'muted', text: c.connected
+        ? 'Cashu tokens are loaded locally and burned per request. No account, no key custody.'
+        : 'Connect a Cashu wallet (mock) to enable pay-per-request. Nothing is sent to the network yet.' }),
+    ]),
+    h('div', { class: 'stat' }, [
+      h('span', { class: 'label', text: 'Cashu balance' }),
+      h('span', { class: 'value' }, [
+        balanceNumEl,
+        ' ',
+        h('span', { class: 'unit', text: 'sats' }),
+      ]),
+    ]),
+  ]);
+
+  const topUpBtn = h('button', { class: 'primary', onClick: () => toggleTopUp(true) }, ['Top Up']);
+
+  return h('div', { class: 'card hot' }, [
+    h('h3', { text: 'Cashu balance' }),
+    hero,
+    h('div', { class: 'wallet-card-actions', style: 'margin-top: 14px;' }, [topUpBtn]),
+    renderTopUpForm(),
+  ]);
+}
+
+// Inline Cashu-token receive form (POST /api/wallet/receive {token}). Hidden by
+// default; the "Top Up" button here (and the chat dock) reveals + focuses it.
+function renderTopUpForm() {
+  topUpInputEl = h('textarea', {
+    rows: 4,
+    placeholder: 'cashuAeyJ0b2tlbiI6W3sicHJvb2ZzIjpb…',
+    style: 'width: 100%; font-family: var(--font-mono); font-size: 12px;',
+  });
+  const status = h('div', { class: 'muted', style: 'font-size: 12px; min-height: 18px; margin-top: 6px;', text: 'Paste a Cashu token from your wallet. Only whitelisted mints will be accepted.' });
+  const submit = h('button', { class: 'primary' }, ['Redeem to agent']);
+  const cancel = h('button', { onClick: () => toggleTopUp(false) }, ['Cancel']);
+  const actions = h('div', { style: 'display:flex; gap: 8px; justify-content: flex-end; margin-top: 12px;' }, [cancel, submit]);
+
+  submit.addEventListener('click', async () => {
+    const tok = (topUpInputEl.value || '').trim();
+    if (!tok) { status.textContent = 'Paste a Cashu token first.'; return; }
+    if (!isAgentConfigured() || !isSessionLive()) {
+      status.textContent = 'Sign in to redeem a token.';
+      startLogin();
+      return;
+    }
+    submit.disabled = true;
+    status.style.color = '';
+    status.textContent = 'Sending to agent…';
+    const r = await walletReceive(tok);
+    if (!r.ok) {
+      submit.disabled = false;
+      status.textContent = `Failed: ${r.reason}`;
+      status.style.color = 'hsl(var(--destructive))';
+      return;
+    }
+    // /api/wallet/receive replies { ok, added_sats, mint } — it does NOT echo the
+    // new total, so read the authoritative balance back from /api/wallet/balance.
+    const added = Number.isFinite(r.data?.added_sats) ? r.data.added_sats : null;
+    const b = await walletBalance();
+    const newBal = b.ok ? readBalanceSats(b.data) : null;
+    status.textContent = newBal != null
+      ? `Received ${added ?? '?'} sats. New balance: ${newBal} sats.`
+      : `Received ${added ?? '?'} sats.`;
+    updateRoutstr({ connected: true, ...(newBal != null ? { cashuBalanceSats: newBal } : {}) });
+    if (balanceNumEl && balanceNumEl.isConnected && newBal != null) {
+      balanceNumEl.textContent = formatSats(newBal);
+    }
+    submit.disabled = false;
+    topUpInputEl.value = '';
+    setTimeout(() => renderRoutstr(document.getElementById('main-content')), 900);
+  });
+
+  topUpSectionEl = h('div', { class: 'topup-form', style: 'display: none; margin-top: 12px;' }, [
+    h('div', { class: 'muted', style: 'font-size: 12px; margin-bottom: 6px;', text: 'Paste a Cashu token — it is sent to your agent, decoded and stored on your Torii. Your browser never keeps proofs.' }),
+    topUpInputEl,
+    status,
+    actions,
+  ]);
+  return topUpSectionEl;
+}
+
+function toggleTopUp(show) {
+  if (!topUpSectionEl) return;
+  topUpSectionEl.style.display = show ? 'block' : 'none';
+  if (show && topUpInputEl) topUpInputEl.focus();
+}
+
+function maybeFocusTopUp() {
+  let flag = null;
+  try { flag = sessionStorage.getItem(FOCUS_TOPUP_KEY); } catch (_e) {}
+  if (!flag) return;
+  try { sessionStorage.removeItem(FOCUS_TOPUP_KEY); } catch (_e) {}
+  toggleTopUp(true);
+}
+
+// ─── Card 2: NWC wallet (NIP-47 Nostr Wallet Connect) ───────────────────────
+//
+// The agent implements NWC (NIP-47) only — NOT NIP-60 — so this card is
+// labelled "NWC wallet". It reuses the existing onboarding wallet endpoints
+// (status/connect/test/disconnect) rather than adding any new protocol support.
+
+function renderNwcCard(live) {
+  const body = h('div', { class: 'nwc-body' }, [
+    h('div', { class: 'muted', text: live ? 'Checking wallet…' : 'Sign in to connect a Lightning wallet.' }),
+  ]);
+  const card = h('div', { class: 'card' }, [
+    h('h3', { text: 'NWC wallet' }),
+    h('p', { class: 'muted', text: 'Nostr Wallet Connect (NIP-47). Link a NWC-capable Lightning wallet to fund the agent by payment.' }),
+    body,
+  ]);
+  if (live) loadNwcStatus(body);
+  else {
+    body.appendChild(h('div', { class: 'wallet-card-actions', style: 'margin-top: 12px;' }, [
+      h('button', { class: 'primary', onClick: startLogin }, ['Sign in']),
+    ]));
+  }
+  return card;
+}
+
+async function loadNwcStatus(body) {
+  const r = await nwcStatus();
+  clear(body);
+  if (!r.ok) {
+    // Logged-out / offline builds get { offline } from req(); anything else is a
+    // server-controlled reason. Render an accurate not-connected state either way.
+    body.appendChild(h('div', {}, [
+      h('span', { class: 'pill', text: 'not connected' }),
+    ]));
+    if (r.reason && !r.offline) {
+      body.appendChild(h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 8px;', text: r.reason }));
+    }
+    body.appendChild(renderNwcActions(false, body));
+    return;
+  }
+  const d = r.data || {};
+  const connected = d.connected === true;
+  const head = h('div', {}, [
+    h('span', { class: connected ? 'pill ok' : 'pill', text: connected ? 'connected' : 'not connected' }),
+  ]);
+  if (connected && d.alias) { head.appendChild(document.createTextNode(' ')); head.appendChild(h('span', { class: 'mono muted', text: d.alias })); }
+  body.appendChild(head);
+
+  if (connected) {
+    const bits = [];
+    if (d.network) bits.push(`network: ${d.network}`);
+    bits.push(d.can_fund_routstr ? 'can fund Routstr by payment' : 'cannot fund Routstr (no pay_invoice)');
+    body.appendChild(h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 8px;', text: bits.join(' · ') }));
+  } else {
+    body.appendChild(h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 8px;', text: 'No NWC wallet linked yet.' }));
+    if (d.error) body.appendChild(h('div', { class: 'muted', style: 'font-size: 12px;', text: d.error }));
+  }
+  const statusLine = h('div', { class: 'muted', style: 'font-size: 12px; min-height: 16px; margin-top: 8px;' });
+  body.appendChild(renderNwcActions(connected, body, statusLine));
+  body.appendChild(statusLine);
+}
+
+function renderNwcActions(connected, body, statusLine) {
+  const wrap = h('div', { class: 'wallet-card-actions', style: 'display:flex; gap: 8px; margin-top: 12px;' });
+  if (connected) {
+    const test = h('button', {}, ['Test']);
+    test.addEventListener('click', async () => {
+      if (statusLine) { statusLine.style.color = ''; statusLine.textContent = 'Testing wallet…'; }
+      const r = await nwcTest();
+      if (!statusLine) return;
+      if (r.ok) statusLine.textContent = r.data?.can_fund_routstr ? 'Wallet responded — can fund Routstr.' : 'Wallet responded.';
+      else { statusLine.textContent = `Test failed: ${r.reason}`; statusLine.style.color = 'hsl(var(--destructive))'; }
+    });
+    const disc = h('button', {}, ['Disconnect']);
+    disc.addEventListener('click', async () => {
+      if (statusLine) { statusLine.style.color = ''; statusLine.textContent = 'Disconnecting…'; }
+      await nwcDisconnect();
+      loadNwcStatus(body);
+    });
+    wrap.appendChild(test);
+    wrap.appendChild(disc);
+  } else {
+    const conn = h('button', { class: 'primary' }, ['Connect']);
+    conn.addEventListener('click', () => openNwcConnectModal(body));
+    wrap.appendChild(conn);
+  }
+  return wrap;
+}
+
+function openNwcConnectModal(body) {
+  const input = h('textarea', {
+    rows: 3,
+    placeholder: 'nostr+walletconnect://…',
+    style: 'width: 100%; font-family: var(--font-mono); font-size: 12px;',
+  });
+  const status = h('div', { class: 'muted', style: 'font-size: 12px; min-height: 18px; margin-top: 6px;', text: 'Paste your NWC connection URI. It is stored encrypted on your Torii.' });
+  const submit = h('button', { class: 'primary' }, ['Connect wallet']);
+  const cancel = h('button', {}, ['Cancel']);
+  const actions = h('div', { style: 'display:flex; gap: 8px; justify-content: flex-end; margin-top: 12px;' }, [cancel, submit]);
+  const modalBody = h('div', {}, [input, status, actions]);
+
+  const handle = openModal({
+    title: 'Connect NWC wallet',
+    subtitle: 'Nostr Wallet Connect (NIP-47). The URI never leaves your agent unencrypted.',
+    body: modalBody,
+  });
+  cancel.addEventListener('click', () => handle.close());
+  submit.addEventListener('click', async () => {
+    const uri = (input.value || '').trim();
+    if (!uri) { status.textContent = 'Paste a NWC URI first.'; return; }
+    submit.disabled = true;
+    status.style.color = '';
+    status.textContent = 'Connecting…';
+    const r = await nwcConnect(uri);
+    if (!r.ok) {
+      submit.disabled = false;
+      status.textContent = `Failed: ${r.reason}`;
+      status.style.color = 'hsl(var(--destructive))';
+      return;
+    }
+    handle.close();
+    loadNwcStatus(body);
+  });
 }
 
 function renderModelPicker(c) {
@@ -190,54 +415,7 @@ function connect() {
     startLogin();
     return;
   }
-  openTopUpModal();
-}
-
-function openTopUpModal() {
-  const input = h('textarea', {
-    rows: 4,
-    placeholder: 'cashuAeyJ0b2tlbiI6W3sicHJvb2ZzIjpb…',
-    style: 'width: 100%; font-family: var(--font-mono); font-size: 12px;',
-  });
-  const status = h('div', { class: 'muted', style: 'font-size: 12px; min-height: 18px; margin-top: 6px;', text: 'Paste a Cashu token from your wallet. Only whitelisted mints will be accepted.' });
-  const submit = h('button', { class: 'primary' }, ['Redeem to agent']);
-  const cancel = h('button', {}, ['Cancel']);
-  const actions = h('div', { style: 'display:flex; gap: 8px; justify-content: flex-end; margin-top: 12px;' }, [cancel, submit]);
-  const body = h('div', {}, [input, status, actions]);
-
-  const handle = openModal({
-    title: 'Top up agent wallet',
-    subtitle: 'The Cashu token is sent to your agent, decoded and stored on your Torii. Your browser never keeps proofs — it just hands them to your own gateway.',
-    body,
-  });
-
-  cancel.addEventListener('click', () => handle.close());
-  submit.addEventListener('click', async () => {
-    const tok = (input.value || '').trim();
-    if (!tok) { status.textContent = 'Paste a Cashu token first.'; return; }
-    submit.disabled = true;
-    status.textContent = 'Sending to agent…';
-    const r = await walletReceive(tok);
-    if (!r.ok) {
-      submit.disabled = false;
-      status.textContent = `Failed: ${r.reason}`;
-      status.style.color = 'hsl(var(--destructive))';
-      return;
-    }
-    // /api/wallet/receive replies { ok, added_sats, mint } — it does NOT echo the
-    // new total, so read the authoritative balance back from /api/wallet/balance.
-    const added = Number.isFinite(r.data?.added_sats) ? r.data.added_sats : null;
-    const b = await walletBalance();
-    const newBal = b.ok ? readBalanceSats(b.data) : null;
-    status.textContent = newBal != null
-      ? `Received ${added ?? '?'} sats. New balance: ${newBal} sats.`
-      : `Received ${added ?? '?'} sats.`;
-    updateRoutstr({ connected: true, ...(newBal != null ? { cashuBalanceSats: newBal } : {}) });
-    setTimeout(() => {
-      handle.close();
-      renderRoutstr(document.getElementById('main-content'));
-    }, 900);
-  });
+  toggleTopUp(true);
 }
 
 function disconnect() {
