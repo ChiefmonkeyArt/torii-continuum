@@ -15,8 +15,10 @@ import { chat as agentChat } from './data/agent.js';
 import { isSessionLive } from './auth.js';
 import { currentRoute } from './router.js';
 import { threadKeyFor, pageTypeFor, projectSlugFrom, trimThread, sanitizeThreads, THREAD_CAP } from './chat-threads.js';
+import { clampInputHeight, inputShouldScroll, reserveSpaceFor } from './chat-layout.js';
 
 let logEl, inputEl, sendBtn, contextEl, modeEl, toggleEl, dockEl;
+let dockResizeObserver = null;
 // Per-thread message history. Each key (see chat-threads.threadKeyFor) maps to
 // its own message array so navigating between pages/projects swaps the visible
 // conversation without losing any thread's history.
@@ -32,6 +34,8 @@ const THREADS_STORAGE_KEY = 'continuum.chat.threads';
 export function mountChat(root) {
   dockEl = document.createElement('div');
   dockEl.className = 'chat-dock collapsed';
+  dockEl.setAttribute('role', 'region');
+  dockEl.setAttribute('aria-label', 'Continuum chat');
   dockEl.innerHTML = `
     <div class="chat-log" role="log" aria-live="polite"></div>
     <div class="chat-input-row">
@@ -59,13 +63,44 @@ export function mountChat(root) {
   modeEl.addEventListener('click', toggleMode);
   toggleEl.addEventListener('click', () => setExpanded(!expanded));
 
+  // Keep the content scroller's reserved bottom space in lockstep with the
+  // floating dock's height — whether it changes from auto-grow, expand/collapse,
+  // a new message, or a viewport resize — so no content is ever obscured.
+  if (typeof ResizeObserver !== 'undefined') {
+    dockResizeObserver = new ResizeObserver(() => reserveSpace());
+    dockResizeObserver.observe(dockEl);
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', reserveSpace);
+  }
+
   loadThreads();
   syncActiveThread();
+  autosize();
+  reserveSpace();
 }
 
+// Auto-grow the textarea with its content up to a sensible max, then let it
+// scroll internally instead of pushing the dock taller. Any height change
+// re-reserves matching space below the content.
 function autosize() {
+  if (!inputEl) return;
   inputEl.style.height = 'auto';
-  inputEl.style.height = Math.min(140, inputEl.scrollHeight) + 'px';
+  const scrollH = inputEl.scrollHeight;
+  inputEl.style.height = clampInputHeight(scrollH) + 'px';
+  inputEl.style.overflowY = inputShouldScroll(scrollH) ? 'auto' : 'hidden';
+  reserveSpace();
+}
+
+// Publish the floating dock's height (plus a gap) as --chat-reserve so the main
+// content scroller can pad its bottom by exactly that much. A zero measurement
+// (pre-layout) leaves the CSS fallback in place rather than collapsing content.
+function reserveSpace() {
+  if (!dockEl || typeof document === 'undefined') return;
+  const reserve = reserveSpaceFor(dockEl.offsetHeight);
+  const root = document.documentElement;
+  if (!root || !root.style) return;
+  if (reserve > 0) root.style.setProperty('--chat-reserve', reserve + 'px');
 }
 
 function greet() {
@@ -181,7 +216,8 @@ function setExpanded(v) {
   dockEl.classList.toggle('expanded', expanded);
   dockEl.classList.toggle('collapsed', !expanded);
   toggleEl.textContent = expanded ? '▼' : '▲';
-  if (expanded) setTimeout(() => { logEl.scrollTop = logEl.scrollHeight; }, 200);
+  reserveSpace();
+  if (expanded) setTimeout(() => { logEl.scrollTop = logEl.scrollHeight; reserveSpace(); }, 200);
 }
 
 async function send() {
