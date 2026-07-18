@@ -22,10 +22,11 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import {
-  PROTECTED_PATTERNS,
+  PUBLIC_PATTERNS,
   ROOT_PATH,
   LOGIN_PATH,
   DASHBOARD_PATH,
+  isPublicPattern,
   isProtectedPattern,
   rootTarget,
   guardRedirect,
@@ -75,9 +76,9 @@ describe('nav-guard: authenticated root → dashboard', () => {
 });
 
 describe('nav-guard: dashboard protection', () => {
-  it('marks /dashboard protected', () => {
+  it('marks /dashboard protected (and it is not in the public allowlist)', () => {
     expect(isProtectedPattern('/dashboard')).toBe(true);
-    expect(PROTECTED_PATTERNS).toContain('/dashboard');
+    expect(PUBLIC_PATTERNS).not.toContain('/dashboard');
   });
   it('bounces a logged-out visitor from /dashboard to login', () => {
     expect(guardRedirect('/dashboard', false)).toBe(LOGIN_PATH);
@@ -96,15 +97,22 @@ describe('nav-guard: no redirect loop', () => {
   });
 });
 
-describe('nav-guard: #/about is public, isolated, never protected', () => {
-  it('does not protect /about (sales content is reachable logged out)', () => {
-    expect(isProtectedPattern('/about')).toBe(false);
-    expect(guardRedirect('/about', false)).toBeNull();
+describe('full-app gating: only the login page is public (default-deny)', () => {
+  it('the public allowlist is exactly the root/login path', () => {
+    expect(PUBLIC_PATTERNS).toEqual(['/']);
+    expect(isPublicPattern('/')).toBe(true);
+    expect(guardRedirect('/', false)).toBeNull();
   });
-  it('does not protect the demo shell views', () => {
-    for (const p of ['/projects', '/marketplace', '/routstr']) {
-      expect(isProtectedPattern(p)).toBe(false);
-      expect(guardRedirect(p, false)).toBeNull();
+  it('gates /about — the sales surface now requires a session too', () => {
+    expect(isProtectedPattern('/about')).toBe(true);
+    expect(guardRedirect('/about', false)).toBe(LOGIN_PATH);
+    expect(guardRedirect('/about', true)).toBeNull();
+  });
+  it('gates the former demo shell views (/projects, /marketplace, /routstr, /team)', () => {
+    for (const p of ['/projects', '/projects/torii', '/marketplace', '/routstr', '/team']) {
+      expect(isProtectedPattern(p)).toBe(true);
+      expect(guardRedirect(p, false)).toBe(LOGIN_PATH);
+      expect(guardRedirect(p, true)).toBeNull();
     }
   });
 });
@@ -237,10 +245,20 @@ describe('wiring: main.js maps the application-first shell (source lock)', () =>
     expect(aboutHandler).toMatch(/renderAbout\(/);
   });
 
-  it('dashboard route is guarded by guardRedirect before rendering', () => {
-    const dash = main.slice(main.indexOf("route('/dashboard'"));
-    expect(dash).toMatch(/guardRedirect\(\s*'\/dashboard'/);
-    expect(dash.indexOf('guardRedirect')).toBeLessThan(dash.indexOf('renderDashboard'));
+  it('every non-root route is wrapped in the central guard() helper', () => {
+    // The guard() wrapper runs guardRedirect(pattern, isSessionLive()) and bails
+    // before the wrapped renderer, so a logged-out visitor never sees the view.
+    expect(main).toMatch(/function guarded\(pattern, handler\)/);
+    expect(main).toMatch(/guardRedirect\(pattern, isSessionLive\(\)\)/);
+    for (const p of ['/about', '/projects', '/marketplace', '/routstr', '/team', '/dashboard']) {
+      expect(main).toMatch(new RegExp(`route\\(\\s*'${p.replace(/\//g, '\\/')}'\\s*,\\s*guarded\\(\\s*'${p.replace(/\//g, '\\/')}'`));
+    }
+  });
+
+  it('the root/login route is NOT wrapped in the guard (it is the public surface)', () => {
+    const rootHandler = main.slice(main.indexOf("route('/',"), main.indexOf("route('/about'"));
+    expect(rootHandler).not.toMatch(/guarded\(/);
+    expect(rootHandler).toMatch(/renderLogin\(/);
   });
 
   it('root no longer imports or renders the legacy renderLanding symbol', () => {

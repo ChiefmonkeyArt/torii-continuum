@@ -33,6 +33,20 @@ function setLandingMode(on) {
   app.classList.toggle('landing-mode', !!on);
 }
 
+// Central auth gate. Wraps a route handler so that a logged-out visitor asking
+// for a protected pattern is bounced to the login page BEFORE the protected
+// view renders — the guarded handler returns without ever calling the wrapped
+// renderer, so the protected screen is not shown even for a frame. Auth rules
+// live in nav-guard (default-deny: only '/' is public); this is the single
+// wiring point that enforces them across every app route.
+function guarded(pattern, handler) {
+  return (params) => {
+    const redirect = guardRedirect(pattern, isSessionLive());
+    if (redirect) { navigate(redirect); return; }
+    handler(params);
+  };
+}
+
 function boot() {
   const root = document.getElementById('app');
   if (!root) return;
@@ -52,21 +66,18 @@ function boot() {
     if (target) { navigate(target); return; }
     setLandingMode(true); renderLogin(mainContent());
   });
-  // Sales/marketing content, isolated. Never the root, never onboarding done.
-  route('/about', () => { setLandingMode(true); renderAbout(mainContent()); });
-  route('/projects', () => { setLandingMode(false); renderProjects(mainContent()); renderSidebar(); });
-  route('/projects/:slug', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug); renderSidebar(); });
-  route('/projects/:slug/board', ({ slug }) => { setLandingMode(false); renderBoard(mainContent(), slug); renderSidebar(); });
-  route('/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent()); renderSidebar(); });
-  route('/routstr', () => { setLandingMode(false); renderRoutstr(mainContent()); renderSidebar(); });
-  route('/team', () => { setLandingMode(false); renderTeam(mainContent()); renderSidebar(); });
-  // Protected: a logged-out visitor (incl. a refresh/deep-link) is bounced to
-  // the login page at root. rootTarget keeps that terminal (no loop).
-  route('/dashboard', () => {
-    const redirect = guardRedirect('/dashboard', isSessionLive());
-    if (redirect) { navigate(redirect); return; }
-    setLandingMode(false); renderDashboard(mainContent()); renderSidebar();
-  });
+  // Every non-root route is protected (default-deny in nav-guard): a logged-out
+  // visitor — including a refresh or a deep link — is bounced to the login page
+  // at root before the view renders. rootTarget keeps that terminal (no loop).
+  // Sales/marketing content (`/about`) is isolated and gated like the rest.
+  route('/about', guarded('/about', () => { setLandingMode(true); renderAbout(mainContent()); }));
+  route('/projects', guarded('/projects', () => { setLandingMode(false); renderProjects(mainContent()); renderSidebar(); }));
+  route('/projects/:slug', guarded('/projects/:slug', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug); renderSidebar(); }));
+  route('/projects/:slug/board', guarded('/projects/:slug/board', ({ slug }) => { setLandingMode(false); renderBoard(mainContent(), slug); renderSidebar(); }));
+  route('/marketplace', guarded('/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent()); renderSidebar(); }));
+  route('/routstr', guarded('/routstr', () => { setLandingMode(false); renderRoutstr(mainContent()); renderSidebar(); }));
+  route('/team', guarded('/team', () => { setLandingMode(false); renderTeam(mainContent()); renderSidebar(); }));
+  route('/dashboard', guarded('/dashboard', () => { setLandingMode(false); renderDashboard(mainContent()); renderSidebar(); }));
 
   startRouter();
   mountChat(root);

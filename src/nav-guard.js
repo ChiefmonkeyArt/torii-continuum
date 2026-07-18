@@ -4,7 +4,15 @@
  * Continuum's root (`/continuum/`) is the application, never a marketing page:
  *   • an authenticated operator lands directly on the dashboard;
  *   • everyone else sees the branded login page rendered in place at root;
- *   • the sales/marketing surface is isolated behind an explicit `/about` route.
+ *   • every other screen — including the sales/marketing `/about` surface and
+ *     the former "demo" routes (/projects, /marketplace, /routstr, /team) — is
+ *     gated behind a live session.
+ *
+ * The contract is DEFAULT-DENY: the login page (root) is the ONLY public
+ * surface. Any other pattern requires `isSessionLive()`; a logged-out visitor
+ * asking for one is bounced to the login page instead of rendering the screen.
+ * New app routes are therefore protected automatically — no per-view opt-in and
+ * no allowlist to keep in sync.
  *
  * These helpers are pure (no DOM, no storage) so the redirect contract is
  * unit-tested directly. The router/main wiring calls them on every resolve —
@@ -12,9 +20,9 @@
  * to `#/dashboard` triggers — so refresh/deep-link behaviour is guarded too.
  */
 
-// Views that require a live session. A logged-out visitor asking for one of
-// these is sent to the login page (root) instead of the view.
-export const PROTECTED_PATTERNS = Object.freeze(['/dashboard']);
+// The only public route: the login page, rendered in place at root. Everything
+// not listed here is protected (default-deny).
+export const PUBLIC_PATTERNS = Object.freeze(['/']);
 
 // The root path. When unauthenticated this renders the login page in place;
 // when authenticated it redirects to the dashboard.
@@ -22,8 +30,13 @@ export const ROOT_PATH = '/';
 export const LOGIN_PATH = '/'; // login is rendered at root, no separate hash
 export const DASHBOARD_PATH = '/dashboard';
 
+export function isPublicPattern(pattern) {
+  return PUBLIC_PATTERNS.includes(pattern);
+}
+
+// Default-deny: any pattern that is not explicitly public is protected.
 export function isProtectedPattern(pattern) {
-  return PROTECTED_PATTERNS.includes(pattern);
+  return !isPublicPattern(pattern);
 }
 
 /**
@@ -40,9 +53,9 @@ export function rootTarget(isAuthed) {
  * must bounce the visitor, or null when the requested view may render as-is.
  *
  * Only protected patterns bounce, and only when unauthenticated; the bounce
- * target is the login page (root). Because root renders login in place (it
- * does not itself bounce anywhere when unauthenticated), there is no redirect
- * loop: protected→root→login is terminal.
+ * target is the login page (root). Because root is public and renders login in
+ * place (it does not itself bounce anywhere when unauthenticated), there is no
+ * redirect loop: protected→root→login is terminal.
  * @param {string} pattern route pattern being resolved (e.g. '/dashboard')
  * @param {boolean} isAuthed
  * @returns {string|null}
