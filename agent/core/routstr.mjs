@@ -5,8 +5,10 @@
  *   1. Pick the model from cfg.routstr.models[skill]. Default "chat" if unknown.
  *   2. Ask wallet.send(estimated_sats) for a Cashu token.
  *   3. POST to `${endpoint}/v1/chat/completions` with:
- *        X-Cashu: <cashuA token>   (Routstr's per-request stateless payment
- *                                   header — see docs.routstr.com/api/overview)
+ *        X-Cashu: <cashuA v3 token>  (Routstr's per-request stateless payment
+ *                                     header — see docs.routstr.com/api/overview.
+ *                                     Must be v3/cashuA: Routstr's melt step
+ *                                     crashes on v4/cashuB → Cloudflare 520.)
  *      body: { model, messages, max_tokens, ... }
  *   4. Parse OpenAI-shaped response.
  *   5. Reclaim change: Routstr returns the unused sats as a Cashu token in the
@@ -79,6 +81,25 @@ function fetchWithTimeout(url, opts, ms) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), ms);
   return fetch(url, { ...opts, signal: ac.signal }).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Env-gated 520-diagnosis probe (OFF by default; set ROUTSTR_DEBUG=1 to enable).
+ * Logs ONLY non-sensitive response metadata: HTTP status, Cloudflare cf-ray,
+ * whether a refund header rode back, the token PREFIX (e.g. "cashuA"/"cashuB",
+ * never the full token), and the first ~200 chars of the body. NEVER logs the
+ * full token, proofs, or message contents.
+ */
+function debugProbe(log, res, body, token) {
+  if (process.env.ROUTSTR_DEBUG !== '1') return;
+  let cfRay = null;
+  const h = res?.headers;
+  if (h && typeof h.get === 'function') cfRay = h.get('cf-ray') ?? h.get('CF-Ray');
+  else if (h && typeof h === 'object') cfRay = h['cf-ray'] ?? h['CF-Ray'];
+  log.info(`[routstr:debug] status=${res?.status} cf-ray=${cfRay || 'none'} ` +
+    `refund_hdr=${readRefundHeader(res) ? 'yes' : 'no'} ` +
+    `token_prefix=${typeof token === 'string' ? token.slice(0, 7) : 'n/a'} ` +
+    `body="${typeof body === 'string' ? body.slice(0, 200) : ''}"`);
 }
 
 function modelForSkill(cfg, skill) {
@@ -180,6 +201,7 @@ export function createRoutstr(cfg, wallet, log) {
         }),
       });
       body = await res.text();
+      debugProbe(log, res, body, send.token);
     } catch (e) {
       // AFTER dispatch: the token is spent/unknown — NEVER roll it back into
       // spendable balance. Try to reclaim a lost refund instead.
