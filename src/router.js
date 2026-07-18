@@ -45,13 +45,32 @@ function resolve() {
 
 export function currentRoute() { return currentHandler; }
 
-export function navigate(path) {
-  if (window.location.hash === '#' + path) {
+/**
+ * Navigate to a hash path.
+ * @param {string} path e.g. '/dashboard'
+ * @param {object} [opts]
+ * @param {boolean} [opts.replace] replace the current history entry instead of
+ *   pushing a new one. Used on sign-out so the authenticated entry we are
+ *   leaving cannot be returned to with the Back button, and by the auth
+ *   revalidation on history/bfcache restores so a bounced protected hash does
+ *   not linger in history.
+ */
+export function navigate(path, opts = {}) {
+  const target = '#' + path;
+  if (window.location.hash === target) {
     resolve();
+  } else if (opts.replace && typeof window.location.replace === 'function') {
+    const { pathname, search } = window.location;
+    window.location.replace(`${pathname || ''}${search || ''}${target}`);
   } else {
     window.location.hash = path;
   }
 }
+
+// Re-resolve the current hash against the route table. Exposed so auth
+// revalidation (popstate / bfcache pageshow) can force the guard to run and the
+// view to re-render even when the hash itself did not change.
+export function resolveCurrent() { resolve(); }
 
 export function startRouter() {
   window.addEventListener('hashchange', resolve);

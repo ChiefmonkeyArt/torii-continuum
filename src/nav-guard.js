@@ -81,3 +81,29 @@ export function guardRedirect(pattern, isAuthed) {
 export function sessionChangeTarget(isAuthed) {
   return isAuthed ? DASHBOARD_PATH : ROOT_PATH;
 }
+
+/**
+ * Revalidation decision for a HISTORY navigation or a back-forward-cache
+ * restore (popstate / pageshow.persisted), where the normal hashchange→resolve
+ * guard may not run. Given the pattern currently displayed and the FRESHLY
+ * re-checked auth state, return a path to force-navigate to, or null when the
+ * current view already matches the auth state.
+ *
+ * This is the belt-and-braces that makes sign-out a hard boundary: pressing
+ * Back to a protected hash after logout — or the browser restoring a cached
+ * authenticated DOM from bfcache — is bounced to the login page before the
+ * protected content is usable. Pure (no DOM/storage) so the contract is
+ * unit-tested directly.
+ *   • protected pattern while logged out → LOGIN_PATH (bounce);
+ *   • root while authed                  → DASHBOARD_PATH (never sit on login);
+ *   • otherwise                          → null (already correct).
+ * @param {string} pattern the route pattern currently displayed
+ * @param {boolean} isAuthed the freshly revalidated auth state
+ * @returns {string|null}
+ */
+export function restoreTarget(pattern, isAuthed) {
+  const bounce = guardRedirect(pattern, isAuthed);
+  if (bounce) return bounce;
+  if (pattern === ROOT_PATH && isAuthed) return DASHBOARD_PATH;
+  return null;
+}
