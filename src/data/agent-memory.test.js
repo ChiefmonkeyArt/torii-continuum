@@ -91,27 +91,33 @@ describe('MEMORY-1 client fns — request shapes', () => {
     expect(calls[0].opts.method).toBe('GET');
   });
 
-  it('memoryPropose POSTs the proposal fields', async () => {
-    await memoryPropose({ project: 'p', kind: 30094, cls: 'semantic', d_tag: 'k', payload: { a: 1 }, source: 'chat' });
+  it('memoryPropose POSTs ciphertext + hash ONLY — never plaintext', async () => {
+    await memoryPropose({ project: 'p', kind: 30094, cls: 'semantic', d_tag: 'k', ciphertext: 'SEALED', payload_sha256: 'a'.repeat(64), source: 'chat' });
     expect(calls[0].url).toBe('https://agent.example/api/memory/proposals');
     expect(calls[0].opts.method).toBe('POST');
     const sent = body();
     expect(sent.kind).toBe(30094);
     expect(sent.d_tag).toBe('k');
-    expect(sent.payload).toEqual({ a: 1 });
+    expect(sent.ciphertext).toBe('SEALED');
+    expect(sent.payload_sha256).toBe('a'.repeat(64));
+    // Hard invariant: the client never forwards plaintext.
+    expect('payload' in sent).toBe(false);
+    expect('evidence' in sent).toBe(false);
+    expect('plaintext' in sent).toBe(false);
   });
 
-  it('memoryApprove POSTs ciphertext + hash + nonce ONLY — never plaintext or a key', async () => {
+  it('memoryApprove POSTs hash + nonce ONLY — never plaintext, ciphertext, or a key', async () => {
     await memoryApprove('prop 1', {
-      payload_sha256: 'a'.repeat(64), approval_nonce: 'nonce-1', ciphertext: 'SEALED', event_id: 'ev1',
+      payload_sha256: 'a'.repeat(64), approval_nonce: 'nonce-1', event_id: 'ev1',
     });
     // Path segment url-encoded.
     expect(calls[0].url).toBe('https://agent.example/api/memory/proposals/prop%201/approve');
     expect(calls[0].opts.method).toBe('POST');
     const sent = body();
-    expect(sent).toEqual({ payload_sha256: 'a'.repeat(64), approval_nonce: 'nonce-1', ciphertext: 'SEALED', event_id: 'ev1' });
-    // Hard invariant: the client never forwards plaintext or any key material.
+    expect(sent).toEqual({ payload_sha256: 'a'.repeat(64), approval_nonce: 'nonce-1', event_id: 'ev1' });
+    // Hard invariant: the client re-sends neither plaintext, ciphertext, nor key material.
     expect('payload' in sent).toBe(false);
+    expect('ciphertext' in sent).toBe(false);
     expect('plaintext' in sent).toBe(false);
     expect('key' in sent).toBe(false);
     expect('privkey' in sent).toBe(false);

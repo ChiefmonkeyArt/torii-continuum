@@ -138,29 +138,71 @@ function proposalsCard(body, data) {
 
 function proposalRow(body, p) {
   const err = h('div', { class: 'muted', style: 'color: var(--accent-danger); font-size: 12px; min-height: 16px;', role: 'alert' });
-  const approveBtn = h('button', { class: 'primary', onClick: onApprove }, ['Approve & seal']);
+  const revealBtn = h('button', { onClick: onReveal }, ['Reveal (decrypt in browser)']);
+  const approveBtn = h('button', { class: 'primary', disabled: true, onClick: onApprove }, ['Approve']);
   const rejectBtn = h('button', { onClick: onReject }, ['Reject']);
+  const pre = h('pre', { class: 'mono', style: 'font-size: 12px; white-space: pre-wrap; word-break: break-word; background: hsl(var(--muted, 0 0% 96%)); padding: 8px; border-radius: 6px; margin: 8px 0;', text: 'Encrypted at rest — click “Reveal” to decrypt in your browser and verify what will be approved.' });
+
+  // Reviewed plaintext (transient, in-memory only) and whether its canonical
+  // hash matched the proposal's payload_sha256. Approval is gated on a match.
+  let reviewedPlaintext = null;
+  let hashVerified = false;
+
+  function nip44Available() {
+    return typeof window !== 'undefined' && window.nostr && window.nostr.nip44 && typeof window.nostr.nip44.decrypt === 'function';
+  }
+
+  async function onReveal() {
+    err.textContent = '';
+    if (!nip44Available()) {
+      err.textContent = 'A NIP-44-capable Nostr signer (e.g. a browser extension) is required to decrypt this memory.';
+      return;
+    }
+    revealBtn.disabled = true; revealBtn.textContent = 'Decrypting…';
+    try {
+      const pk = await window.nostr.getPublicKey();
+      reviewedPlaintext = await window.nostr.nip44.decrypt(pk, p.ciphertext);
+      let displayText = reviewedPlaintext;
+      let payloadObj;
+      try { payloadObj = JSON.parse(reviewedPlaintext); displayText = JSON.stringify(payloadObj, null, 2); } catch { payloadObj = undefined; }
+      pre.textContent = displayText;
+      // Verify the decrypted payload's canonical hash matches what the agent
+      // stored, so an owner never approves a swapped/tampered ciphertext.
+      if (payloadObj !== undefined) {
+        const recomputed = await canonicalSha256Hex(payloadObj);
+        hashVerified = recomputed === p.payload_sha256;
+      } else {
+        hashVerified = false;
+      }
+      if (!hashVerified) {
+        err.textContent = '⚠ Decrypted payload does not match the reviewed hash — approval blocked. This proposal may be corrupt.';
+        approveBtn.disabled = true;
+      } else {
+        approveBtn.disabled = false;
+      }
+    } catch (e) {
+      err.textContent = `Could not decrypt: ${e.message || e}`;
+    } finally {
+      revealBtn.disabled = false; revealBtn.textContent = 'Reveal (decrypt in browser)';
+    }
+  }
 
   async function onApprove() {
     err.textContent = '';
-    if (!(typeof window !== 'undefined' && window.nostr && window.nostr.nip44 && typeof window.nostr.nip44.encrypt === 'function')) {
-      err.textContent = 'A NIP-44-capable Nostr signer (e.g. a browser extension) is required to seal the approved memory.';
-      return;
-    }
-    approveBtn.disabled = true; approveBtn.textContent = 'Sealing…';
+    if (!hashVerified) { err.textContent = 'Reveal and verify the payload before approving.'; return; }
+    approveBtn.disabled = true; approveBtn.textContent = 'Approving…';
     try {
-      const pk = await window.nostr.getPublicKey();
-      const plaintext = JSON.stringify(p.payload);
-      const ciphertext = await window.nostr.nip44.encrypt(pk, plaintext);
+      // Ciphertext is already sealed on the proposal; approval sends only the
+      // reviewed hash + single-use nonce. No plaintext/ciphertext is re-sent.
       const r = await memoryApprove(p.id, {
-        payload_sha256: p.payload_sha256, approval_nonce: p.approval_nonce, ciphertext,
+        payload_sha256: p.payload_sha256, approval_nonce: p.approval_nonce,
       });
       if (!r.ok) { err.textContent = r.reason || 'Approval failed.'; return; }
       load(body);
     } catch (e) {
-      err.textContent = `Could not seal: ${e.message || e}`;
+      err.textContent = `Approval failed: ${e.message || e}`;
     } finally {
-      approveBtn.disabled = false; approveBtn.textContent = 'Approve & seal';
+      approveBtn.disabled = false; approveBtn.textContent = 'Approve';
     }
   }
 
@@ -173,18 +215,14 @@ function proposalRow(body, p) {
     load(body);
   }
 
-  const payloadText = (() => {
-    try { return JSON.stringify(p.payload, null, 2); } catch { return String(p.payload); }
-  })();
-
   return h('div', { style: 'padding: 10px 0; border-top: 1px solid hsl(var(--border));' }, [
     h('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline;' }, [
       h('span', { class: 'pill', text: p.class }),
       h('span', { class: 'mono', style: 'font-size: 12.5px;', text: p.d_tag }),
       h('span', { class: 'muted', style: 'font-size: 12px;', text: `project ${p.project} · ${p.source}` }),
     ]),
-    h('pre', { class: 'mono', style: 'font-size: 12px; white-space: pre-wrap; word-break: break-word; background: hsl(var(--muted, 0 0% 96%)); padding: 8px; border-radius: 6px; margin: 8px 0;', text: payloadText }),
-    h('div', { class: 'form-actions', style: 'display: flex; gap: 8px;' }, [approveBtn, rejectBtn]),
+    pre,
+    h('div', { class: 'form-actions', style: 'display: flex; gap: 8px;' }, [revealBtn, approveBtn, rejectBtn]),
     err,
   ]);
 }
@@ -347,6 +385,43 @@ function portabilityCard(body) {
 }
 
 // ─── helpers ─────────────────────────────────────────────────
+
+// Canonical serialization mirroring agent/lib/constitution.mjs canonicalize():
+// JSON.stringify over deeply key-sorted values. Must match byte-for-byte so a
+// browser-recomputed payload hash equals the agent's stored payload_sha256.
+function sortDeep(value) {
+  if (Array.isArray(value)) return value.map(sortDeep);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value).sort()) out[key] = sortDeep(value[key]);
+    return out;
+  }
+  return value;
+}
+
+export function canonicalize(value) {
+  return JSON.stringify(sortDeep(value));
+}
+
+/** SHA-256 hex of the canonical serialization of `value` (browser WebCrypto). */
+export async function canonicalSha256Hex(value) {
+  const bytes = new TextEncoder().encode(canonicalize(value));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Seal a proposed payload for a ciphertext-only proposal. Encrypts the payload
+ * with NIP-44 v2 to the owner's OWN key and returns { ciphertext, payload_sha256 }.
+ * Callers post exactly this to memoryPropose() — plaintext never leaves here.
+ */
+export async function sealProposalPayload(payload) {
+  const pk = await window.nostr.getPublicKey();
+  const plaintext = JSON.stringify(payload);
+  const ciphertext = await window.nostr.nip44.encrypt(pk, plaintext);
+  const payload_sha256 = await canonicalSha256Hex(payload);
+  return { ciphertext, payload_sha256 };
+}
 
 function kv(k, v) {
   return h('div', { style: 'display: flex; gap: 12px; padding: 6px 0; border-bottom: 1px solid hsl(var(--border));' }, [

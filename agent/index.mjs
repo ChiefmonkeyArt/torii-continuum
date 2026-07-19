@@ -232,6 +232,15 @@ async function migrateLegacyProcedural() {
 }
 await migrateLegacyProcedural().catch((e) => app.log.warn(`[migrate] procedural migration failed: ${e.message}`));
 
+// One-time boot migration (privacy patch): v0.2.82-alpha persisted pending
+// proposals with a plaintext `payload` on disk. Ciphertext-only is now enforced
+// from proposal creation onward, so purge any retired plaintext proposals left
+// on any host — detected by schema/`payload`/`evidence`, unlinked without
+// reading content, audited metadata-only. Production was never deployed; this
+// runs defensively regardless.
+await consent.migratePlaintextProposals()
+  .catch((e) => app.log.warn(`[migrate] plaintext-proposal purge failed: ${e.message}`));
+
 // Resolve the caller's bot id from their genesis manifest. Memory is isolated
 // by owner AND bot; a bot id is the genesis manifest's bot_id. Owners without a
 // genesis manifest cannot write durable memory (default-deny: owner-bound bot
@@ -810,20 +819,26 @@ app.post('/api/memory/store', { preHandler: requireAdmin }, async (req, reply) =
 
 // ── MEMORY-1: consent proposal flow (owner-visible pending approval) ────────
 // A proposal is an AI-suggested (or explicit "remember this") memory that is
-// NEVER auto-persisted. The owner reviews the exact payload, then approves by
-// posting the NIP-44 ciphertext of that payload plus the payload hash + a
-// single-use nonce; approval is idempotent and audited.
+// NEVER auto-persisted AND never carries plaintext. The browser seals the
+// proposed text with NIP-44 v2 to the owner's own key and posts only the
+// ciphertext + a canonical-plaintext hash + minimal metadata; the agent stores
+// ciphertext-at-rest from creation. The owner reviews by decrypting client-side,
+// then approves with the reviewed hash + single-use nonce (no re-sent payload);
+// approval promotes the already-sealed blob and is idempotent and audited.
 
-// POST /api/memory/proposals — create a pending proposal.
-//   { project?, kind, d_tag, payload, evidence?, source? }
+// POST /api/memory/proposals — create a pending (sealed) proposal.
+//   { project?, kind, d_tag, ciphertext, payload_sha256, source? }
+// Any plaintext `payload` in the body is refused by consent.propose().
 app.post('/api/memory/proposals', { preHandler: requireAdmin }, async (req, reply) => {
   const botId = await resolveBotId(req.session.npub);
   if (!botId) return reply.code(403).send({ error: 'no genesis manifest (bot not owner-bound)' });
   const b = req.body || {};
+  const v = validateCiphertext(b.ciphertext);
+  if (!v.ok) return reply.code(400).send({ error: `bad ciphertext: ${v.reason}`, code: 'ciphertext' });
   const r = await consent.propose({
     ownerNpub: req.session.npub, botId, projectSlug: b.project,
-    kind: b.kind, cls: b.cls, dTag: b.d_tag, payload: b.payload,
-    evidence: b.evidence, source: b.source,
+    kind: b.kind, cls: b.cls, dTag: b.d_tag,
+    ciphertext: b.ciphertext, payloadSha256: b.payload_sha256, source: b.source,
   });
   if (!r.ok) return reply.code(400).send({ error: r.reason, code: r.code });
   return r;
@@ -836,7 +851,7 @@ app.get('/api/memory/proposals', { preHandler: requireAdmin }, async (req, reply
   return consent.listPending({ ownerNpub: req.session.npub, botId });
 });
 
-// GET /api/memory/proposals/:id — one proposal (includes payload for review).
+// GET /api/memory/proposals/:id — one proposal (ciphertext for client decrypt).
 app.get('/api/memory/proposals/:id', { preHandler: requireAdmin }, async (req, reply) => {
   const botId = await resolveBotId(req.session.npub);
   if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
@@ -846,16 +861,16 @@ app.get('/api/memory/proposals/:id', { preHandler: requireAdmin }, async (req, r
 });
 
 // POST /api/memory/proposals/:id/approve — ratify the EXACT reviewed payload.
-//   { payload_sha256, approval_nonce, ciphertext, event_id? }
+//   { payload_sha256, approval_nonce, event_id? }
+// The ciphertext is ALREADY sealed on the pending proposal (stored at creation);
+// approval does NOT re-send it. The owner echoes only the reviewed hash + nonce.
 app.post('/api/memory/proposals/:id/approve', { preHandler: requireAdmin }, async (req, reply) => {
   const botId = await resolveBotId(req.session.npub);
   if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
-  const v = validateCiphertext(req.body?.ciphertext);
-  if (!v.ok) return reply.code(400).send({ error: `bad ciphertext: ${v.reason}` });
   const r = await consent.approve({
     ownerNpub: req.session.npub, botId, id: req.params.id,
     expectPayloadSha256: req.body?.payload_sha256, approvalNonce: req.body?.approval_nonce,
-    ciphertext: req.body?.ciphertext, eventId: req.body?.event_id || null,
+    eventId: req.body?.event_id || null,
     constitutionVersion: getConstitution().version,
   });
   if (!r.ok) return reply.code(r.code === 'not_found' ? 404 : 400).send({ error: r.reason, code: r.code });
