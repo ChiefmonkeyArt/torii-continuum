@@ -296,6 +296,91 @@ export async function genesisCreate(fields) {
   });
 }
 
+// ─── MEMORY-1: consent, scoped storage, portability ─────────
+//
+// Durable AI memory is a PROPOSAL until the owner explicitly approves it, and
+// approval is bound to the exact payload hash the owner reviewed. All ciphertext
+// is sealed in the browser (NIP-44) — the agent never sees plaintext or a key.
+// Portability is manual (download/upload) and owner-signed; import quarantines.
+
+/** GET /api/memory/working-values — which constitution/COP covenant is live (provenance only, no secrets). */
+export async function memoryWorkingValues() {
+  return req('GET', '/api/memory/working-values');
+}
+
+/** GET /api/memory/usage — per-owner usage, quotas, per-scope breakdown. */
+export async function memoryUsage() {
+  return req('GET', '/api/memory/usage');
+}
+
+/** GET /api/memory/scoped?project=&class= — item metadata for a scope (no ciphertext). */
+export async function memoryScoped({ project, cls } = {}) {
+  const qs = new URLSearchParams();
+  if (project) qs.set('project', project);
+  if (cls) qs.set('class', cls);
+  const q = qs.toString();
+  return req('GET', `/api/memory/scoped${q ? `?${q}` : ''}`);
+}
+
+/** POST /api/memory/scoped/verify — recompute item hashes (corruption check) for a scope. */
+export async function memoryVerify({ project } = {}) {
+  return req('POST', '/api/memory/scoped/verify', { project });
+}
+
+/** POST /api/memory/scoped/delete — enact deletion (unlink + tombstone + audit). Requires confirm. */
+export async function memoryDelete({ id, project, reason } = {}) {
+  return req('POST', '/api/memory/scoped/delete', { id, project, reason, confirm: true });
+}
+
+/** GET /api/memory/proposals — pending AI/owner memory proposals awaiting review. */
+export async function memoryProposals() {
+  return req('GET', '/api/memory/proposals');
+}
+
+/** POST /api/memory/proposals — create a pending proposal (never auto-persisted). */
+export async function memoryPropose({ project, kind, cls, d_tag, payload, evidence, source } = {}) {
+  return req('POST', '/api/memory/proposals', { project, kind, cls, d_tag, payload, evidence, source });
+}
+
+/**
+ * POST /api/memory/proposals/:id/approve — ratify the EXACT reviewed payload.
+ * The browser first NIP-44-encrypts the approved payload; only the ciphertext
+ * plus the reviewed payload hash + single-use nonce are sent.
+ */
+export async function memoryApprove(id, { payload_sha256, approval_nonce, ciphertext, event_id } = {}) {
+  return req('POST', `/api/memory/proposals/${encodeURIComponent(id)}/approve`, { payload_sha256, approval_nonce, ciphertext, event_id });
+}
+
+/** POST /api/memory/proposals/:id/reject — explicit, audited rejection. */
+export async function memoryReject(id, { approval_nonce } = {}) {
+  return req('POST', `/api/memory/proposals/${encodeURIComponent(id)}/reject`, { approval_nonce });
+}
+
+/** POST /api/memory/export — assemble an UNSIGNED bundle for the browser to sign + download. Requires confirm. */
+export async function memoryExport() {
+  return req('POST', '/api/memory/export', { confirm: true });
+}
+
+/** POST /api/memory/import — verify a signed bundle and quarantine its items (default-deny foreign/tampered). */
+export async function memoryImport(bundle) {
+  return req('POST', '/api/memory/import', { bundle });
+}
+
+/** GET /api/memory/quarantine — imported, untrusted items awaiting owner approval. */
+export async function memoryQuarantine() {
+  return req('GET', '/api/memory/quarantine');
+}
+
+/** POST /api/memory/quarantine/:sha/approve — promote a reviewed quarantine item into live memory. */
+export async function memoryQuarantineApprove(sha, { sha256, project, d_tag } = {}) {
+  return req('POST', `/api/memory/quarantine/${encodeURIComponent(sha)}/approve`, { sha256, project, d_tag });
+}
+
+/** POST /api/memory/quarantine/:sha/reject — discard a quarantine item. */
+export async function memoryQuarantineReject(sha) {
+  return req('POST', `/api/memory/quarantine/${encodeURIComponent(sha)}/reject`, {});
+}
+
 // ─── Health ─────────────────────────────────────────────────
 
 export async function health() {

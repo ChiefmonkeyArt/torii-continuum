@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { id: 'dashboard',   label: 'Dashboard',   icon: iconDashboard,   path: '/dashboard' },
   { id: 'team',        label: 'Team',        icon: iconTeam,        path: '/team' },
   { id: 'genesis',     label: 'Genesis',     icon: iconGenesis,     path: '/genesis' },
+  { id: 'memory',      label: 'Memory',      icon: iconMemory,      path: '/memory' },
 ];
 
 let mainEl, sidebarEl;
@@ -297,6 +298,7 @@ function getActiveNav() {
   if (cr.pattern.startsWith('/dashboard')) return 'dashboard';
   if (cr.pattern.startsWith('/team')) return 'team';
   if (cr.pattern.startsWith('/genesis')) return 'genesis';
+  if (cr.pattern.startsWith('/memory')) return 'memory';
   return 'projects';
 }
 
@@ -318,6 +320,9 @@ function iconTeam() {
 }
 function iconGenesis() {
   return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2"/><path d="M8 1v2.5M8 12.5V15M1 8h2.5M12.5 8H15M3 3l1.8 1.8M11.2 11.2 13 13M13 3l-1.8 1.8M4.8 11.2 3 13"/></svg>`;
+}
+function iconMemory() {
+  return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="10" height="10" rx="1.5"/><path d="M1 6h2M1 10h2M13 6h2M13 10h2M6 1v2M10 1v2M6 13v2M10 13v2"/><rect x="6" y="6" width="4" height="4" rx="0.5"/></svg>`;
 }
 function iconStar() {
   return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M8 2l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.8 4.2 13.8l.7-4.3-3.1-3 4.3-.6z"/></svg>`;

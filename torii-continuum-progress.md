@@ -9,6 +9,28 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.82-alpha — secure persistent memory: encrypted-at-rest, consent-gated, owner-scoped, signed portability (MEMORY-1)
+
+First persistent-memory slice. A sovereign bot gains durable memory that is **encrypted at rest (NIP-44, sealed in the browser — the agent never sees plaintext or a key)**, **consent-gated** (nothing durable is saved without explicit owner approval), and **isolated by owner + bot + project**. No vector DB or embeddings are introduced — similarity retrieval stays deferred to RAG-1; MEMORY-1 does exact-scope fetch only and does not fake vector RAG. Kind 30092 stays identity/policy/provenance only and is untouched.
+
+**Scoped encrypted storage (`agent/lib/memstore.mjs`).** Layout `memory/owners/<ownerHex>/bots/<botId>/projects/<slug>/<class>/<id>.enc`. `ownerHex` derives from the **verified session** (`ownerHexFromNpub`), never the request body. Every path segment is allowlist-validated (`[a-z0-9_-]`, bounded) so traversal/IDOR is rejected before a path is built; empty project ⇒ reserved `_global`. Classes with retention (conversation 7d / episodic 365d not-permanent; semantic/procedural/project permanent). Per-item sha256 integrity (`read()`/`verifyScope()` fail closed on tamper), atomic temp+rename writes (0700 dirs / 0600 files), bounds + quotas (`MAX_ITEM_BYTES=65535`; per-scope 500 items / 8 MiB; per-owner 64 MiB), retention reaping, delete = unlink + tombstone + audit.
+
+**EROFS fix (`agent/lib/events.mjs`).** `dirForKind(PROCEDURAL_SKILL)` now returns `memory/procedural` (was the read-only `skills/` tree, which failed with EROFS under `ProtectSystem=strict`); `legacyDirForKind()` records the old path for read-time re-homing.
+
+**Consent state machine (`agent/lib/consent.mjs`).** Proposals never auto-persist. `approve()` binds to the **exact reviewed payload hash** (`hash_mismatch` else) + a **single-use nonce** (replay-proof, idempotent), and stores only the **browser-sealed ciphertext**. `reject()` is explicit + audited. Cross-owner/bot/project default-deny.
+
+**Working values (`agent/lib/workingvalues.mjs`).** Deterministic, versioned header carrying live constitution + Code-of-Practice provenance, injected **above** character and **above** retrieved memory on every turn (`agent/skills/chat.mjs`). Retrieved/imported text is wrapped by `fenceUntrusted()` as **untrusted data, never instructions** (prompt-injection / memory-poisoning mitigation). Reference Canon stays advisory.
+
+**Manual owner-signed portability (`agent/lib/portability.mjs`).** Bundle `torii.continuum.memory_bundle/1` (ciphertexts only + metadata), **deterministic manifest**, browser-signed via NIP-07 under detached signing-only kind `30099` (never published to a relay). Export requires confirm. Import is **default-deny + quarantine**: rejects foreign owner / tampered ciphertext / tampered manifest / bad-or-wrong-key signature; accepted items land in quarantine (never live), dedupe by sha256, owner approves them out. Relay publish + automatic multi-device sync remain deferred.
+
+**API + UI.** New admin-gated `/api/memory/*` routes (working-values, usage, scoped list/verify/delete, proposals CRUD/approve/reject, export/import, quarantine list/approve/reject) in `agent/index.mjs`; client wrappers in `src/data/agent.js`; owner console `src/views/memory.js` at route `/memory` + sidebar "Memory". All rendering XSS-safe via `h()` (textContent only). Spec: `docs/sovereign-ai-memory-1-spec.md`.
+
+**Ops.** systemd + Ansible + `install-agent.sh` writable paths corrected: `pending/` added to `ReadWritePaths` (was EROFS-prone), vestigial `ciphertexts/` no longer freshly created or writable but kept in migrate/rsync-exclude so an existing box's legacy data is never dropped on upgrade.
+
+**Security review.** IDOR/session-spoof (owner from session), path-traversal/symlink (segment allowlist + temp+rename), no plaintext/keys on host (browser sealing), replay/CSRF (single-use nonce + admin gate + idempotent), tamper/corruption (per-item sha256 + hash-chained audit), prompt-injection/memory-poisoning (values-outrank-memory + untrusted-data fence), cross-project leakage (project a required scope), disk exhaustion (caps + quotas + retention), foreign/tampered import (signature + owner + manifest + per-item hash verify, quarantine-not-live), XSS (textContent-only). Fully backward compatible.
+
+**Validation.** Agent `node --test` 286 pass (incl. 21 new `agent/test/memory1.test.js`); frontend `vitest` 401 pass (incl. new `src/data/agent-memory.test.js` + `src/views/memory-structure.test.js`); `vite build` clean. Version -> 0.2.82-alpha (root+agent package.json + lockfiles). Annotated tag v0.2.82-alpha; **not deployed** — the enabled deploy timer and live production pin are **not** altered.
+
 ## v0.2.81-alpha — source-grounded Sovereign AI Code of Practice + constitution genesis-1.1.0 (three-layer principle architecture; RAG/LoRA gate) (SOVEREIGN-COP-1)
 
 Codifies the founding intent as a three-layer, versioned, honest principle system **before** any adaptive LoRA/RAG slice ships — so retrieval and training inherit enforceable gates instead of being retrofitted. Privacy was the owner's first-order intent but was not yet an explicit Layer-A clause, so a constitution evolution was warranted.

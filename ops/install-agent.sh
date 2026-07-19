@@ -160,8 +160,11 @@ if [[ ! -d /opt/torii ]]; then
 fi
 install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$INSTALL_DIR"
 
-# Persistent runtime state — created if absent, never wiped on re-run.
-for d in memory memory/wallet pending ciphertexts; do
+# Persistent runtime state — created if absent, never wiped on re-run. The
+# former top-level ciphertexts/ is vestigial as of MEMORY-1 (all encrypted
+# memory now lives under memory/), so it is no longer created fresh. It stays in
+# the rsync exclude below so a legacy box that still has one is never clobbered.
+for d in memory memory/wallet pending; do
   install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "${INSTALL_DIR}/${d}"
 done
 

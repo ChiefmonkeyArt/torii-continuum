@@ -1,6 +1,6 @@
 # Torii Continuum — Sovereign AI: Genesis, LoRA & RAG Technical Specification
 
-Status: **Implementation-grade** · Slices shipped: **GENESIS-1** (v0.2.78-alpha) + **PRINCIPLES/constitution genesis-1.1.0** (v0.2.81-alpha) · LoRA/RAG: **specified, not built, gated by Layers A/B/C**
+Status: **Implementation-grade** · Slices shipped: **GENESIS-1** (v0.2.78-alpha) + **PRINCIPLES/constitution genesis-1.1.0** (v0.2.81-alpha) + **MEMORY-1** (v0.2.82-alpha — encrypted-at-rest, consent-gated, owner/bot/project-scoped durable memory + owner-signed portability; see `docs/sovereign-ai-memory-1-spec.md`) · LoRA/RAG: **specified, not built, gated by Layers A/B/C** (MEMORY-1 does exact-scope fetch only; similarity retrieval remains RAG-1)
 
 > This document is the durable design contract for Torii Continuum's sovereign
 > bot stack. GENESIS-1 (the genesis lifecycle + humanitarian constitution) is

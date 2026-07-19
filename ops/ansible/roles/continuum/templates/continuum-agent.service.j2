@@ -20,7 +20,12 @@ SyslogIdentifier=continuum-agent
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/{{ continuum_user }}/app/agent/memory /home/{{ continuum_user }}/app/agent/pending /home/{{ continuum_user }}/app/agent/ciphertexts
+# Writable state only. memory/ is the single MEMORY-1 root (owner/bot/project
+# scoped ciphertexts, proposals, quarantine, procedural, audit ledger, wallet).
+# pending/ holds unsigned draft events awaiting the operator's in-browser
+# signature. The former top-level ciphertexts/ path is vestigial — all encrypted
+# memory now lives under memory/ — so it is intentionally NOT writable.
+ReadWritePaths=/home/{{ continuum_user }}/app/agent/memory /home/{{ continuum_user }}/app/agent/pending
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

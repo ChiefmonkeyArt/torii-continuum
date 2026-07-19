@@ -144,14 +144,27 @@ Privacy is a positive capability, not secrecy. Operationalised as:
   consent record.)*
 - **Encryption at rest for private data.** The character/memory stack is sealed
   NIP-44 v2 to the owner's own key; the host holds no decryption key. Agent
-  operational secrets use AES-256-GCM+HKDF and fail closed on tamper.
+  operational secrets use AES-256-GCM+HKDF and fail closed on tamper. *(Shipped
+  MEMORY-1 v0.2.82-alpha: durable memory is browser-sealed NIP-44; the agent
+  stores ciphertext only — `memstore` never receives plaintext or a key.
+  Acceptance: `memory1.test.js`.)*
 - **No private keys on the host, ever.** All signing and sealed-stack decryption
   happen browser-side. *(Layer A `no-private-keys`; Acceptance: no code path
   accepts/derives/persists an owner private key — `genesis.test.js`,
-  `secretstore.test.js`.)*
+  `secretstore.test.js`; MEMORY-1 approve/export send ciphertext + signature
+  only — `agent-memory.test.js`, `memory-structure.test.js`.)*
 - **Deletion, export, revocation are first-class.** Owners can export their data
   and identity, delete durable memory (audited), and revoke consents; emergency
-  wipe tears down the sealed stack.
+  wipe tears down the sealed stack. *(Shipped MEMORY-1: owner delete = unlink +
+  tombstone + audit; owner-signed encrypted export; consent proposals are
+  reject-able and never auto-persisted. Honest limit: deletion cannot recall an
+  already-downloaded bundle — stated in the console.)*
+- **Consent before durable memory (no silent persistence).** AI/"remember this"
+  memories are proposals, never auto-saved; the owner reviews the exact plaintext
+  and approves by sealing it, bound to the exact payload hash + a single-use
+  nonce; imports are quarantined (default-deny), never trusted automatically.
+  *(Shipped MEMORY-1; Acceptance: `memory1.test.js` consent + portability
+  default-deny suites.)*
 - **Permission-filtered retrieval.** (RAG-1 gate) A query only searches corpora
   the current action is authorised to touch; default-deny where scope is unclear;
   retrieved context is attributed in prompt assembly.

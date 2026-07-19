@@ -54,9 +54,14 @@ SyslogIdentifier=torii-continuum-agent
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-# Writable state only. memory/ holds the Cashu wallet, cost/audit logs, and
-# character ciphertexts. config.yaml is writable for the first-touch claim.
+# Writable state only. memory/ is the single MEMORY-1 root: Cashu wallet,
+# cost/audit ledger, secrets, and all owner/bot/project-scoped ciphertexts,
+# proposals, and import quarantine. pending/ holds unsigned draft events the
+# operator signs in-browser. config.yaml is writable for the first-touch claim.
+# Everything else (code, node_modules, the former vestigial ciphertexts/) stays
+# read-only to the service.
 ReadWritePaths=/opt/torii/continuum-agent/memory
+ReadWritePaths=/opt/torii/continuum-agent/pending
 ReadWritePaths=/opt/torii/continuum-agent/config.yaml
 ReadOnlyPaths=/opt/torii/continuum-agent
 PrivateTmp=true

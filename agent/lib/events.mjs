@@ -234,18 +234,38 @@ export function draftEmergencyWipe({ operatorNpub, generatedAt = now() }) {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * Canonical write dir for a kind. Every path is UNDER `memory/`, the single
+ * systemd-writable root (ReadWritePaths=…/memory). This is a hard requirement:
+ * the agent tree is mounted read-only under `ProtectSystem=strict` except
+ * `memory/`, so a write target anywhere else (the old `skills/` for 30095)
+ * failed with EROFS at runtime. See ops/systemd/torii-continuum-agent.service.
+ *
  * @param {number} kind
- * @returns {string}  relative dir under agent/memory/ (or agent/skills/ for 30095)
+ * @returns {string}  relative dir under agent/, always beginning with `memory/`
  */
 export function dirForKind(kind) {
   switch (kind) {
     case CHARACTER_ROOT: return 'memory/character';
     case SEMANTIC_FACT: return 'memory/semantic';
-    case PROCEDURAL_SKILL: return 'skills';
+    case PROCEDURAL_SKILL: return 'memory/procedural';
     case DESTRUCTIVE_INTENT: return 'memory/intents';
     case EMERGENCY_WIPE: return 'memory/panic';
     default: throw new Error(`unknown kind ${kind}`);
   }
+}
+
+/**
+ * Legacy (pre-MEMORY-1) write dir for a kind, used ONLY for read-time
+ * migration so ciphertexts written before the EROFS fix are still discovered
+ * and re-homed. The single divergence is 30095, which used to be routed to the
+ * read-only `skills/` tree. Returns null when there is no distinct legacy path.
+ *
+ * @param {number} kind
+ * @returns {string|null}
+ */
+export function legacyDirForKind(kind) {
+  if (kind === PROCEDURAL_SKILL) return 'skills';
+  return null;
 }
 
 export const KINDS = {
