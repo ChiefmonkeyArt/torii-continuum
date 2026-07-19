@@ -25,24 +25,32 @@
  * offline reflection.
  */
 
-const SKILL_INSTRUCTIONS = `You are Continuum, an assistant embedded in the Torii Continuum app.
+// Kept deliberately short. This prompt is prefilled on every chat turn, and on
+// a low-spec VPS (no AVX2) each token of prefill costs real wall-clock time, so
+// a bloated system prompt makes even a one-word "gm" time out. Concise persona
+// only \u2014 no full character dump, no memory blobs. See composeSystemPrompt.
+const SKILL_INSTRUCTIONS = `You are Continuum, the assistant inside the Torii Continuum app \u2014 an app builder, project engine and bot-work marketplace on nostr + bitcoin + FOSS. You help the operator manage their projects, sessions, todos and marketplace tasks.
 
-Torii Continuum is an app builder, project engine and marketplace for AI work \u2014 a gateway into the Torii ecosystem (nostr + bitcoin + FOSS). You help the operator (the admin logged in via NIP-07) manage their projects, sessions, todos and marketplace tasks.
+Be concise, honest, no filler. Never invent capabilities the app doesn't have. From a chat turn you never sign, publish, or write files \u2014 every publish needs an explicit human click on a signed draft.`;
 
-Style: concise, honest, no filler. Reference the operator's current page when it matters. Never invent capabilities that aren't in the app.
+const LOCKED_NOTICE =
+  'Character memory is LOCKED: do not claim durable preferences/beliefs (say you\'d need memory unlocked) and do not draft memory events. You can still help with app navigation and general questions.';
 
-Current session invariants (do not violate):
-- Every reply is generated via Routstr and paid per request in Cashu.
-- Nothing you say is published to Nostr automatically. Every publish requires an explicit human click on a signed draft.
-- You have no filesystem write access from a chat turn. Skills for that (brain.write, todo.patch, nostr.draft) arrive in later slices.
-- You never sign anything. All 30092/30094/30095/30096/30097 events go into agent/pending/ and require the operator's signer.`;
+// Hard cap on any single injected memory fragment, in characters. ~4 chars/token,
+// so 600 chars \u2248 150 tokens. Keeps a "gm" turn well under the 500-token target
+// even with character + semantic + procedural all present.
+const MAX_FRAGMENT_CHARS = 600;
 
-const LOCKED_NOTICE = `**Character memory is currently LOCKED.**
+/** Rough token estimate (\u22484 chars/token) for logging prompt size. */
+function estimateTokens(text) {
+  return Math.ceil((text || '').length / 4);
+}
 
-You are operating without decrypted access to your character stack, semantic facts, or procedural skills. In this state:
-- Do not claim durable preferences or beliefs. Say "I'd need my memory unlocked to speak to that."
-- Do not draft memory events (30094/30095).
-- You may still help with app navigation and general questions.`;
+/** Truncate an injected fragment so it can't blow up the prefill budget. */
+function cap(text, max = MAX_FRAGMENT_CHARS) {
+  if (!text) return text;
+  return text.length <= max ? text : text.slice(0, max).trimEnd() + '\u2026';
+}
 
 /**
  * @param {object} router  Model router (createModelRouter). Routes to Routstr or Ollama
@@ -71,6 +79,11 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
       { role: 'system', content: systemPrompt },
       { role: 'user', content: message },
     ];
+
+    // Prefill cost is the bottleneck on low-spec (no-AVX2) hardware, so log the
+    // prompt size on every turn to catch regressions on the live VPS.
+    const promptTokens = messages.reduce((n, m) => n + estimateTokens(m.content), 0);
+    log.info(`[chat] prompt tokens: ${promptTokens}`);
 
     const started = Date.now();
     // Router decides between Routstr (paid, sovereign) and Ollama (local, free).
@@ -126,23 +139,25 @@ export function composeSystemPrompt({ memory, context }) {
     const status = memory.status();
     const fragments = memory.promptFragments();
 
+    // The full CHARACTER.md is ~4.4k tokens \u2014 far too large to prefill on every
+    // chat turn on a low-spec VPS. Inject only a capped slice (identity/stance
+    // header), and likewise cap semantic/procedural fragments. Keeps the prompt
+    // small while the model still knows who it is. Full character reasoning
+    // stays available to offline/reflect paths that don't share this budget.
     if (!status.character_loaded) {
-      parts.push('## Character\n\nCHARACTER.md is missing from disk. Operating with skill instructions only.');
+      parts.push('CHARACTER.md is missing from disk. Operating with skill instructions only.');
     } else if (!status.cache.unlocked) {
-      parts.push('## Character memory locked\n\n' + LOCKED_NOTICE);
-      // Still expose the immutable identity + Three Laws \u2014 they're on disk plaintext
-      // by design (public "who am I" contract). Semantic and procedural stay hidden.
-      parts.push('## Character (from local CHARACTER.md)\n\n' + fragments.character);
+      parts.push(LOCKED_NOTICE);
+      parts.push('## Character\n\n' + cap(fragments.character));
     } else {
-      // Full stack: character + procedural + semantic
       if (!status.character_root_verified) {
         parts.push(
-          `## Warning\n\nCHARACTER.md on disk does NOT match the signed character_root (30092). Reason: ${status.character_root_reason}. Refuse any request that depends on your identity until the operator resolves this.`,
+          `Warning: CHARACTER.md does NOT match the signed character_root (30092): ${status.character_root_reason}. Refuse identity-dependent requests until resolved.`,
         );
       }
-      parts.push('## Character (verified)\n\n' + fragments.character);
-      if (fragments.procedural) parts.push(fragments.procedural);
-      if (fragments.semantic) parts.push(fragments.semantic);
+      parts.push('## Character\n\n' + cap(fragments.character));
+      if (fragments.procedural) parts.push(cap(fragments.procedural));
+      if (fragments.semantic) parts.push(cap(fragments.semantic));
     }
   }
 
