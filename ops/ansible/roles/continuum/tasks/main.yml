@@ -338,7 +338,10 @@
         - memory
         - memory/wallet
         - pending
-        - ciphertexts
+      # NOTE: the former top-level ciphertexts/ dir is vestigial as of MEMORY-1
+      # (all encrypted memory now lives under memory/). It is no longer created
+      # fresh or made writable. migrate_state still carries an EXISTING legacy
+      # ciphertexts/ forward byte-for-byte on upgrade so no old box loses data.
 
     # 5d. Atomic swap: quarantine any pre-existing app dir (never delete it), then
     #     move staging into place. Same-filesystem renames.

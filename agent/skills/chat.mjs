@@ -25,6 +25,8 @@
  * offline reflection.
  */
 
+import { buildWorkingValues, fenceUntrusted } from '../lib/workingvalues.mjs';
+
 // Kept deliberately short. This prompt is prefilled on every chat turn, and on
 // a low-spec VPS (no AVX2) each token of prefill costs real wall-clock time, so
 // a bloated system prompt makes even a one-word "gm" time out. Concise persona
@@ -83,7 +85,11 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
     // Prefill cost is the bottleneck on low-spec (no-AVX2) hardware, so log the
     // prompt size on every turn to catch regressions on the live VPS.
     const promptTokens = messages.reduce((n, m) => n + estimateTokens(m.content), 0);
-    log.info(`[chat] prompt tokens: ${promptTokens}`);
+    // Record which working-values covenant constrained this turn (version +
+    // digest + rendered-header hash) so prompt provenance is auditable without
+    // logging the prompt body. The constitution is public, versioned data.
+    const { provenance } = buildWorkingValues();
+    log.info(`[chat] prompt tokens: ${promptTokens} · working-values ${provenance.constitution_version}/${provenance.code_of_practice_version} hdr=${provenance.header_sha256.slice(0, 12)}`);
 
     const started = Date.now();
     // Router decides between Routstr (paid, sovereign) and Ollama (local, free).
@@ -133,7 +139,13 @@ export function composeSystemPrompt({ memory, context }) {
     ? `The operator is currently on the "${context.label}" page (${context.where || 'unknown'}).`
     : '';
 
-  const parts = [SKILL_INSTRUCTIONS];
+  // Layer 0: the working-values header (Genesis constitution + Code of Practice)
+  // is injected ABOVE character and any retrieved memory. It is the live
+  // covenant that outranks everything below it, so a poisoned memory fragment
+  // can never silently override it. Deterministic + versioned; provenance is
+  // logged by handle() for prompt diagnostics without exposing anything secret.
+  const { header: workingValues } = buildWorkingValues();
+  const parts = [workingValues, SKILL_INSTRUCTIONS];
 
   if (memory) {
     const status = memory.status();
@@ -157,7 +169,10 @@ export function composeSystemPrompt({ memory, context }) {
       }
       parts.push('## Character\n\n' + cap(fragments.character));
       if (fragments.procedural) parts.push(cap(fragments.procedural));
-      if (fragments.semantic) parts.push(cap(fragments.semantic));
+      // Semantic facts are RETRIEVED MEMORY: treat as untrusted data, never as
+      // instructions. Fenced with an explicit boundary so a poisoned fact can't
+      // smuggle directives past the covenant/character above it.
+      if (fragments.semantic) parts.push(fenceUntrusted('Durable facts', cap(fragments.semantic)));
     }
   }
 

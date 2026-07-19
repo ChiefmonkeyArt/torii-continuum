@@ -19,7 +19,8 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { writeFile, mkdir, unlink, readdir, readFile } from 'node:fs/promises';
+import { writeFile, mkdir, unlink, readdir, readFile, stat, rename } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import { loadConfig, persistAdminNpub } from './core/config.mjs';
 import { createAuth } from './core/auth.mjs';
 import { createWallet } from './core/wallet.mjs';
@@ -31,7 +32,11 @@ import { createMemoryCache, validateCiphertext, ciphertextFilename, fingerprintC
 import { scrub } from './lib/scrub.mjs';
 import { createMemoryLoader } from './lib/memory.mjs';
 import { createReflector } from './lib/reflect.mjs';
-import { KINDS, dirForKind } from './lib/events.mjs';
+import { KINDS, dirForKind, legacyDirForKind } from './lib/events.mjs';
+import { createMemStore, classForKind } from './lib/memstore.mjs';
+import { createConsent } from './lib/consent.mjs';
+import { createPortability } from './lib/portability.mjs';
+import { buildWorkingValues } from './lib/workingvalues.mjs';
 import { createSecretStore } from './lib/secretstore.mjs';
 import { createNwcClient, createLiveNwcTransport } from './core/nwc.mjs';
 import { createRoutstrProvider } from './core/routstr-provider.mjs';
@@ -39,7 +44,7 @@ import { createOnboarding } from './core/onboarding.mjs';
 import { createProjectSources } from './core/project-sources.mjs';
 import { createReleaseChecker } from './core/release-check.mjs';
 import { createUpdater } from './core/updater.mjs';
-import { createGenesis } from './core/genesis.mjs';
+import { createGenesis, ownerHexFromNpub } from './core/genesis.mjs';
 import { createAudit } from './lib/audit.mjs';
 import { getConstitution } from './lib/constitution.mjs';
 
@@ -189,6 +194,53 @@ const chatSkill = createChatSkill(router, app.log, { memory, reflector });
 // — those are labelled subsequent stages in the manifest provenance + the UI.
 const audit = createAudit(join(AGENT_ROOT, 'memory', 'audit.jsonl'), { log: app.log });
 const genesis = createGenesis({ agentRoot: AGENT_ROOT, audit, log: app.log });
+
+// MEMORY-1 stack — scoped sealed storage + owner-consent state machine +
+// manual encrypted portability. All under the single writable root memory/.
+const MEMORY_ROOT = join(AGENT_ROOT, 'memory');
+const memstore = createMemStore({ memoryRoot: MEMORY_ROOT, log: app.log });
+const consent = createConsent({ memoryRoot: MEMORY_ROOT, memstore, audit, log: app.log });
+const portability = createPortability({ memoryRoot: MEMORY_ROOT, memstore, audit, log: app.log });
+
+// One-time boot migration: the pre-MEMORY-1 EROFS bug routed 30095 procedural
+// ciphertexts to the read-only skills/ tree. Re-home any that exist there into
+// the canonical memory/procedural/ dir without duplicating or dropping data.
+async function migrateLegacyProcedural() {
+  const legacyRel = legacyDirForKind(KINDS.PROCEDURAL_SKILL);
+  if (!legacyRel) return;
+  const legacyDir = join(AGENT_ROOT, legacyRel);
+  let files;
+  try { files = await readdir(legacyDir); } catch { return; }
+  const encs = files.filter((f) => f.endsWith('.enc'));
+  if (encs.length === 0) return;
+  const destDir = join(AGENT_ROOT, dirForKind(KINDS.PROCEDURAL_SKILL));
+  await mkdir(destDir, { recursive: true });
+  let moved = 0;
+  for (const f of encs) {
+    const dest = join(destDir, f);
+    try {
+      await stat(dest); // already migrated — skip, never overwrite
+    } catch {
+      try {
+        const body = await readFile(join(legacyDir, f), 'utf8');
+        await writeFile(dest, body, 'utf8');
+        moved++;
+      } catch (e) { app.log.warn(`[migrate] procedural ${f}: ${e.message}`); }
+    }
+  }
+  if (moved) app.log.info(`[migrate] re-homed ${moved} legacy procedural ciphertext(s) skills/ → memory/procedural/`);
+}
+await migrateLegacyProcedural().catch((e) => app.log.warn(`[migrate] procedural migration failed: ${e.message}`));
+
+// Resolve the caller's bot id from their genesis manifest. Memory is isolated
+// by owner AND bot; a bot id is the genesis manifest's bot_id. Owners without a
+// genesis manifest cannot write durable memory (default-deny: owner-bound bot
+// is a precondition, mirroring the constitution's owner-bound clause).
+async function resolveBotId(ownerNpub) {
+  const g = await genesis.read(ownerNpub).catch(() => null);
+  if (g && g.exists && g.manifest?.bot_id) return g.manifest.bot_id;
+  return null;
+}
 
 // Onboarding stack (v0.2.35-alpha) — encrypted-at-rest secret store for the
 // operator secrets the agent must USE (NWC URI, Routstr sk- key), plus the
@@ -707,6 +759,16 @@ app.post('/api/memory/lock', { preHandler: requireAdmin }, async (req) => {
 // POST /api/memory/store — write a ciphertext blob to disk. Body:
 //   { ciphertext, kind, d_tag, event_id? }
 // Agent stores raw ciphertext keyed on event id (or a random draft tag).
+//
+// MEMORY-1 policy enforcement: this direct-store path is now (a) OWNER-BOUND —
+// the caller must have a genesis manifest whose policy lists memory_write as a
+// consent-gated action (default-deny otherwise), and (b) AUDITED — every write
+// appends a `memory.store` line (fingerprint only, never plaintext). AI-
+// generated durable memory must NOT use this path: it goes through the
+// proposal → approve flow below (/api/memory/proposals…), which binds the
+// approval to the exact reviewed payload. This path is the operator's own
+// explicit, browser-signed write (identity root / panic / intents / a manually
+// signed fact), which is itself the consent act, but is still logged.
 app.post('/api/memory/store', { preHandler: requireAdmin }, async (req, reply) => {
   const { ciphertext, kind, d_tag, event_id } = req.body || {};
   const v = validateCiphertext(ciphertext);
@@ -716,6 +778,11 @@ app.post('/api/memory/store', { preHandler: requireAdmin }, async (req, reply) =
   }
   if (typeof d_tag !== 'string' || d_tag.length === 0 || d_tag.length > 64) {
     return reply.code(400).send({ error: 'd_tag required (1..64 chars)' });
+  }
+  // Owner-bound gate: no genesis manifest → no durable memory (default-deny).
+  const g = await genesis.read(req.session.npub).catch(() => null);
+  if (!g || !g.exists) {
+    return reply.code(403).send({ error: 'memory_write denied: no genesis manifest (bot not owner-bound)' });
   }
   let filename;
   try {
@@ -727,9 +794,178 @@ app.post('/api/memory/store', { preHandler: requireAdmin }, async (req, reply) =
   const absDir = join(AGENT_ROOT, relDir);
   await mkdir(absDir, { recursive: true });
   const absPath = join(absDir, filename);
-  await writeFile(absPath, ciphertext, 'utf8');
-  app.log.info(`[memory] stored ${kind}:${d_tag} → ${relDir}/${filename} (fp=${fingerprintCiphertext(ciphertext)})`);
-  return { ok: true, path: `${relDir}/${filename}`, fingerprint: fingerprintCiphertext(ciphertext) };
+  // Atomic write (temp + rename) so a crash cannot leave a torn ciphertext.
+  const tmp = join(absDir, `.${filename}.${randomBytes(8).toString('hex')}.tmp`);
+  await writeFile(tmp, ciphertext, { mode: 0o600 });
+  await rename(tmp, absPath);
+  const fp = fingerprintCiphertext(ciphertext);
+  app.log.info(`[memory] stored ${kind}:${d_tag} → ${relDir}/${filename} (fp=${fp})`);
+  await audit.append('memory.store', {
+    owner_pubkey_prefix: (g.manifest?.owner?.pubkey_hex || '').slice(0, 12),
+    bot_id: g.manifest?.bot_id || null, kind, d_tag,
+    path: `${relDir}/${filename}`, ciphertext_fp: fp,
+  }).catch((e) => app.log.error(`[memory] audit store failed: ${e.message}`));
+  return { ok: true, path: `${relDir}/${filename}`, fingerprint: fp };
+});
+
+// ── MEMORY-1: consent proposal flow (owner-visible pending approval) ────────
+// A proposal is an AI-suggested (or explicit "remember this") memory that is
+// NEVER auto-persisted. The owner reviews the exact payload, then approves by
+// posting the NIP-44 ciphertext of that payload plus the payload hash + a
+// single-use nonce; approval is idempotent and audited.
+
+// POST /api/memory/proposals — create a pending proposal.
+//   { project?, kind, d_tag, payload, evidence?, source? }
+app.post('/api/memory/proposals', { preHandler: requireAdmin }, async (req, reply) => {
+  const botId = await resolveBotId(req.session.npub);
+  if (!botId) return reply.code(403).send({ error: 'no genesis manifest (bot not owner-bound)' });
+  const b = req.body || {};
+  const r = await consent.propose({
+    ownerNpub: req.session.npub, botId, projectSlug: b.project,
+    kind: b.kind, cls: b.cls, dTag: b.d_tag, payload: b.payload,
+    evidence: b.evidence, source: b.source,
+  });
+  if (!r.ok) return reply.code(400).send({ error: r.reason, code: r.code });
+  return r;
+});
+
+// GET /api/memory/proposals — list pending proposals for this owner+bot.
+app.get('/api/memory/proposals', { preHandler: requireAdmin }, async (req, reply) => {
+  const botId = await resolveBotId(req.session.npub);
+  if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
+  return consent.listPending({ ownerNpub: req.session.npub, botId });
+});
+
+// GET /api/memory/proposals/:id — one proposal (includes payload for review).
+app.get('/api/memory/proposals/:id', { preHandler: requireAdmin }, async (req, reply) => {
+  const botId = await resolveBotId(req.session.npub);
+  if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
+  const r = await consent.get({ ownerNpub: req.session.npub, botId, id: req.params.id });
+  if (!r.ok) return reply.code(404).send({ error: r.reason });
+  return r;
+});
+
+// POST /api/memory/proposals/:id/approve — ratify the EXACT reviewed payload.
+//   { payload_sha256, approval_nonce, ciphertext, event_id? }
+app.post('/api/memory/proposals/:id/approve', { preHandler: requireAdmin }, async (req, reply) => {
+  const botId = await resolveBotId(req.session.npub);
+  if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
+  const v = validateCiphertext(req.body?.ciphertext);
+  if (!v.ok) return reply.code(400).send({ error: `bad ciphertext: ${v.reason}` });
+  const r = await consent.approve({
+    ownerNpub: req.session.npub, botId, id: req.params.id,
+    expectPayloadSha256: req.body?.payload_sha256, approvalNonce: req.body?.approval_nonce,
+    ciphertext: req.body?.ciphertext, eventId: req.body?.event_id || null,
+    constitutionVersion: getConstitution().version,
+  });
+  if (!r.ok) return reply.code(r.code === 'not_found' ? 404 : 400).send({ error: r.reason, code: r.code });
+  return r;
+});
+
+// POST /api/memory/proposals/:id/reject — explicit rejection (audited).
+app.post('/api/memory/proposals/:id/reject', { preHandler: requireAdmin }, async (req, reply) => {
+  const botId = await resolveBotId(req.session.npub);
+  if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
+  const r = await consent.reject({
+    ownerNpub: req.session.npub, botId, id: req.params.id, approvalNonce: req.body?.approval_nonce,
+  });
+  if (!r.ok) return reply.code(r.code === 'not_found' ? 404 : 400).send({ error: r.reason, code: r.code });
+  return r;
+});
+
+// ── MEMORY-1: scoped storage inspection + deletion ──────────────────────────
+// GET /api/memory/scoped?project=&class= — list item metadata (no ciphertext).
+app.get('/api/memory/scoped', { preHandler: requireAdmin }, async (req, reply) => {
+  const botId = await resolveBotId(req.session.npub);
+  if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
+  const r = await memstore.list({ ownerNpub: req.session.npub, botId, projectSlug: req.query?.project, cls: req.query?.class || null });
+  if (!r.ok) return reply.code(400).send({ error: r.reason });
+  return r;
+});
+
+// GET /api/memory/usage — per-owner usage + quotas + per-scope breakdown.
+app.get('/api/memory/usage', { preHandler: requireAdmin }, async (req, reply) => {
+  const r = await memstore.usage(req.session.npub);
+  if (!r.ok) return reply.code(400).send({ error: r.reason });
+  return r;
+});
+
+// POST /api/memory/scoped/verify — recompute item hashes (corruption check).
+app.post('/api/memory/scoped/verify', { preHandler: requireAdmin }, async (req, reply) => {
+  const botId = await resolveBotId(req.session.npub);
+  if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
+  return memstore.verifyScope({ ownerNpub: req.session.npub, botId, projectSlug: req.body?.project });
+});
+
+// POST /api/memory/scoped/delete — enact deletion: unlink + tombstone + audit.
+//   { project?, id, reason? }  This is the real on-disk enactment the prior
+//   30096 draft-only flow lacked. Honest limitation: exported/off-box copies
+//   are outside our reach (documented in the tombstone + spec).
+app.post('/api/memory/scoped/delete', { preHandler: requireAdmin }, async (req, reply) => {
+  const botId = await resolveBotId(req.session.npub);
+  if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
+  if (req.body?.confirm !== true) return reply.code(400).send({ error: 'confirm:true required to enact deletion' });
+  const r = await memstore.remove({ ownerNpub: req.session.npub, botId, projectSlug: req.body?.project, id: req.body?.id, reason: req.body?.reason });
+  if (!r.ok) return reply.code(404).send({ error: r.reason });
+  await audit.append('memory.delete', {
+    owner_pubkey_prefix: (ownerHexFromNpub(req.session.npub) || '').slice(0, 12),
+    bot_id: botId, id: req.body?.id, tombstone_sha256: r.tombstone?.sha256, project: req.body?.project || '_global',
+  }).catch((e) => app.log.error(`[memory] audit delete failed: ${e.message}`));
+  return r;
+});
+
+// ── MEMORY-1: working-values provenance (what constrains the live prompt) ────
+app.get('/api/memory/working-values', { preHandler: requireAdmin }, async () => {
+  const { provenance } = buildWorkingValues();
+  return { ok: true, ...provenance };
+});
+
+// ── MEMORY-1: manual encrypted portability (download/upload, owner-signed) ───
+// POST /api/memory/export — assemble an UNSIGNED bundle for the browser to
+// sign + download. Requires explicit confirmation.
+app.post('/api/memory/export', { preHandler: requireAdmin }, async (req, reply) => {
+  const botId = await resolveBotId(req.session.npub);
+  if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
+  if (req.body?.confirm !== true) return reply.code(400).send({ error: 'confirm:true required to export memory' });
+  const r = await portability.buildBundle({ ownerNpub: req.session.npub, botId });
+  if (!r.ok) return reply.code(400).send({ error: r.reason });
+  return r;
+});
+
+// POST /api/memory/import — verify a signed bundle and QUARANTINE its items.
+//   { bundle }  Rejected by default if foreign/tampered/malformed.
+app.post('/api/memory/import', { preHandler: requireAdmin }, async (req, reply) => {
+  const r = await portability.importToQuarantine({ ownerNpub: req.session.npub, bundle: req.body?.bundle });
+  if (!r.ok) return reply.code(400).send({ error: r.reason });
+  return r;
+});
+
+// GET /api/memory/quarantine?bot= — list quarantined (imported, untrusted) items.
+app.get('/api/memory/quarantine', { preHandler: requireAdmin }, async (req, reply) => {
+  const botId = await resolveBotId(req.session.npub);
+  if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
+  return portability.listQuarantine({ ownerNpub: req.session.npub, botId });
+});
+
+// POST /api/memory/quarantine/:sha/approve — promote a reviewed quarantine item.
+app.post('/api/memory/quarantine/:sha/approve', { preHandler: requireAdmin }, async (req, reply) => {
+  const botId = await resolveBotId(req.session.npub);
+  if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
+  const r = await portability.approveQuarantine({
+    ownerNpub: req.session.npub, botId, sha256: req.params.sha,
+    expectSha256: req.body?.sha256, projectSlug: req.body?.project, dTag: req.body?.d_tag,
+  });
+  if (!r.ok) return reply.code(400).send({ error: r.reason, code: r.code });
+  return r;
+});
+
+// POST /api/memory/quarantine/:sha/reject — discard a quarantine item.
+app.post('/api/memory/quarantine/:sha/reject', { preHandler: requireAdmin }, async (req, reply) => {
+  const botId = await resolveBotId(req.session.npub);
+  if (!botId) return reply.code(403).send({ error: 'no genesis manifest' });
+  const r = await portability.rejectQuarantine({ ownerNpub: req.session.npub, botId, sha256: req.params.sha });
+  if (!r.ok) return reply.code(400).send({ error: r.reason });
+  return r;
 });
 
 // GET /api/memory/ciphertexts — list all encrypted files so browser can
