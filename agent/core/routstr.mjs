@@ -9,20 +9,25 @@
  *                                     header — see docs.routstr.com/api/overview.
  *                                     Must be v3/cashuA: Routstr's melt step
  *                                     crashes on v4/cashuB → Cloudflare 520.)
- *      body: { model, messages, max_tokens, ... }
- *   4. Parse OpenAI-shaped response.
+ *      body: { model, messages, max_tokens, stream: true }
+ *   4. Parse the text/event-stream response: accumulate choices[].delta.content
+ *      across the SSE `data:` chunks into a single reply string, stopping at the
+ *      `data: [DONE]` terminator.
  *   5. Reclaim change: Routstr returns the unused sats as a Cashu token in the
- *      `X-Cashu-Refund` response header. We receive() it straight back into the
- *      wallet so the balance only loses what the request actually cost.
+ *      `X-Cashu` (or legacy `X-Cashu-Refund`) response header. We receive() it
+ *      straight back into the wallet so the balance only loses what the request
+ *      actually cost.
  *   6. Log to cost log. Return content + usage (sats_spent net of the refund).
  *
  * If the primary provider fails AND cfg.routstr.fallback.enabled === true,
  * walk the fallback ladder for the skill. Each ladder attempt gets its own
  * Cashu token (rollback the previous one first).
  *
- * We intentionally do NOT stream in v1. Streaming complicates rollback and
- * offers no perceived-latency benefit for the short replies the console
- * needs. Add streaming in a follow-up slice.
+ * We stream (stream: true) because Routstr's NON-streaming path returns a
+ * Cloudflare 520 for every model — the melt succeeds but the response builder
+ * crashes. Streaming returns a real SSE reply (HTTP 200). We still buffer the
+ * whole stream and hand the chat handler a plain string, so rollback semantics
+ * are unchanged: the payment is committed the moment the request is dispatched.
  */
 
 import { appendFile, mkdir } from 'node:fs/promises';
@@ -40,21 +45,58 @@ function estimateSats(cfg, _skill) {
 }
 
 /**
- * Read the X-Cashu-Refund token off a fetch Response. Tolerates both a real
- * Headers object (has .get) and a plain-object header bag (test doubles).
- * Returns a trimmed non-empty string or null.
+ * Read the refund Cashu token off a fetch Response. Routstr returns the change
+ * from an over-payment in the `X-Cashu` response header; older builds used
+ * `X-Cashu-Refund`. We check both. Tolerates a real Headers object (has .get)
+ * and a plain-object header bag (test doubles). Returns a trimmed non-empty
+ * string or null.
  */
 function readRefundHeader(res) {
   const headers = res?.headers;
+  if (!headers) return null;
+  // A real Headers object is case-insensitive; a plain-object / Map bag (test
+  // doubles) is not, so we probe each canonical casing explicitly.
+  const candidates = ['x-cashu-refund', 'X-Cashu-Refund', 'x-cashu', 'X-Cashu'];
+  const pick = (name) => {
+    if (typeof headers.get === 'function') return headers.get(name);
+    if (typeof headers === 'object') return headers[name];
+    return null;
+  };
   let raw = null;
-  if (headers && typeof headers.get === 'function') {
-    raw = headers.get('x-cashu-refund') ?? headers.get('X-Cashu-Refund');
-  } else if (headers && typeof headers === 'object') {
-    raw = headers['x-cashu-refund'] ?? headers['X-Cashu-Refund'];
+  for (const name of candidates) {
+    raw = pick(name);
+    if (typeof raw === 'string' && raw.trim().length > 0) return raw.trim();
   }
-  if (typeof raw !== 'string') return null;
-  const trimmed = raw.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  return null;
+}
+
+/**
+ * Parse a text/event-stream chat-completions body. Reads each SSE `data:` line,
+ * JSON-parses the chunk, and accumulates choices[0].delta.content into a single
+ * reply string. Stops at the `data: [DONE]` terminator. A trailing chunk may
+ * carry `usage`; we surface it when present. Non-JSON or non-data lines (event:,
+ * comments, blank keep-alives, a Cloudflare HTML error body) are skipped, so a
+ * garbage 200 body simply yields empty content.
+ */
+function parseSSE(body) {
+  let content = '';
+  let usage = null;
+  if (typeof body !== 'string') return { content, usage };
+  for (const rawLine of body.split('\n')) {
+    const line = rawLine.trim();
+    if (!line.startsWith('data:')) continue;
+    const data = line.slice(5).trim();
+    if (data === '' || data === '[DONE]') {
+      if (data === '[DONE]') break;
+      continue;
+    }
+    let chunk;
+    try { chunk = JSON.parse(data); } catch { continue; }
+    const delta = chunk.choices?.[0]?.delta;
+    if (delta && typeof delta.content === 'string') content += delta.content;
+    if (chunk.usage) usage = chunk.usage;
+  }
+  return { content, usage };
 }
 
 /**
@@ -197,7 +239,10 @@ export function createRoutstr(cfg, wallet, log) {
           model,
           messages,
           max_tokens: maxTokens,
-          stream: false,
+          // Routstr's non-streaming path 520s for every model (the melt
+          // succeeds, then the response builder crashes). Streaming returns a
+          // real SSE reply. We buffer the whole stream below.
+          stream: true,
         }),
       });
       body = await res.text();
@@ -226,23 +271,21 @@ export function createRoutstr(cfg, wallet, log) {
       return { ok: false, reason: `http ${res.status}: ${body.slice(0, 200)}` };
     }
 
-    let parsed;
-    try {
-      parsed = JSON.parse(body);
-    } catch (e) {
-      // 200 but non-JSON (e.g. a Cloudflare HTML 520 that still set status 200).
-      // The token is already handed off — do NOT roll back; reclaim instead.
-      await tryRefundReclaim(paymentToken);
-      return { ok: false, reason: `bad response json: ${e.message}` };
-    }
-
-    const content = parsed.choices?.[0]?.message?.content;
+    // Streaming: the 200 body is a text/event-stream. Accumulate the delta
+    // content into a single reply string (the chat handler expects a plain
+    // string). We buffer the full body via res.text() rather than reading the
+    // stream incrementally — replies are short and buffering keeps the payment
+    // rollback contract unchanged (the token is committed at dispatch time).
+    const { content, usage: streamUsage } = parseSSE(body);
     if (!content) {
-      // AFTER dispatch: NEVER roll back. Payment is consumed.
-      return { ok: false, reason: 'no content in response' };
+      // 200 with no usable SSE content (e.g. a Cloudflare HTML 520 that still
+      // set status 200, or an empty stream). The token is already handed off —
+      // do NOT roll back; try to reclaim any lost refund instead.
+      await tryRefundReclaim(paymentToken);
+      return { ok: false, reason: 'no content in stream' };
     }
 
-    const usage = parsed.usage || {};
+    const usage = streamUsage || {};
     const durationMs = Date.now() - started;
 
     // Reclaim change. Routstr consumes only what the request cost and returns

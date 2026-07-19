@@ -4,7 +4,12 @@
  * Covers the live-chat bug fix: the client must pay each completion with a
  * Cashu token in the `X-Cashu` request header (NOT Authorization — that yielded
  * http 401 "API key or Cashu token required"), and must reclaim the change the
- * provider returns in the `X-Cashu-Refund` response header back into the wallet.
+ * provider returns in the `X-Cashu` / `X-Cashu-Refund` response header back
+ * into the wallet.
+ *
+ * The client streams (stream: true) because Routstr's non-streaming path 520s
+ * for every model. The 200 body is a text/event-stream; the completion() double
+ * below emits OpenAI-shaped SSE `data:` chunks terminated by `data: [DONE]`.
  *
  * HTTP is faked by stubbing globalThis.fetch (the client uses the global). The
  * wallet is a light stub for the client-side tests; the spend-produces-token
@@ -29,14 +34,25 @@ function silentLog() {
   return { info() {}, warn() {}, error() {} };
 }
 
-// Minimal OpenAI-shaped completion response with optional headers.
+// Build an OpenAI-shaped SSE body: a role chunk, one content delta, a final
+// usage chunk, then the [DONE] terminator. Mirrors what Routstr streams back.
+function sseBody(content) {
+  return [
+    `data: ${JSON.stringify({ choices: [{ delta: { role: 'assistant' } }] })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: {} }], usage: { prompt_tokens: 3, completion_tokens: 7 } })}`,
+    'data: [DONE]',
+  ].join('\n\n') + '\n\n';
+}
+
+// Minimal streaming (text/event-stream) completion response with optional headers.
 function completion(content, headers = {}) {
   return {
     ok: true,
     status: 200,
     headers: new Map(Object.entries(headers)),
     async text() {
-      return JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 3, completion_tokens: 7 } });
+      return sseBody(content);
     },
   };
 }
@@ -81,6 +97,36 @@ test('chat attaches the Cashu token in the X-Cashu header (not Authorization)', 
   assert.ok(!('Authorization' in seen.headers), 'must not send an Authorization header');
 });
 
+test('chat requests a stream and accumulates multi-delta SSE content into one reply', async () => {
+  const cfg = await baseCfg();
+  const wallet = {
+    async send() { return { ok: true, token: 'cashuSEND', mint: 'm', sats: 50, rollback: async () => {} }; },
+    async receive() { throw new Error('no refund expected'); },
+  };
+  // A stream split across several content deltas — the client must concatenate.
+  const multiDelta = [
+    `data: ${JSON.stringify({ choices: [{ delta: { role: 'assistant' } }] })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: 'Hi' } }] })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: '! 👋 ' } }] })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: 'How are you?' } }] })}`,
+    'data: [DONE]',
+    // Anything after [DONE] must be ignored.
+    `data: ${JSON.stringify({ choices: [{ delta: { content: 'IGNORED' } }] })}`,
+  ].join('\n\n') + '\n\n';
+
+  let seenBody;
+  await withFetch(async (_url, opts) => {
+    seenBody = JSON.parse(opts.body);
+    return { ok: true, status: 200, headers: new Map(), async text() { return multiDelta; } };
+  }, async () => {
+    const routstr = createRoutstr(cfg, wallet, silentLog());
+    const r = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
+    assert.equal(r.ok, true);
+    assert.equal(r.content, 'Hi! 👋 How are you?');
+  });
+  assert.equal(seenBody.stream, true, 'the request body must set stream: true');
+});
+
 test('chat reclaims the X-Cashu-Refund change back into the wallet', async () => {
   const cfg = await baseCfg();
   const received = [];
@@ -97,6 +143,25 @@ test('chat reclaims the X-Cashu-Refund change back into the wallet', async () =>
   assert.deepEqual(received, ['cashuREFUND'], 'refund token must be received back into the wallet');
   assert.equal(result.sats_refunded, 30);
   assert.equal(result.sats_spent, 20, 'net spend = allocated 50 - reclaimed 30');
+});
+
+test('chat reclaims a refund carried in the X-Cashu response header', async () => {
+  const cfg = await baseCfg();
+  const received = [];
+  const wallet = {
+    async send() { return { ok: true, token: 'cashuSEND', mint: 'm', sats: 50, rollback: async () => {} }; },
+    async receive(token) { received.push(token); return { ok: true, added_sats: 12, mint: 'm' }; },
+  };
+  let result;
+  // Routstr returns the change in the bare `X-Cashu` response header.
+  await withFetch(async () => completion('ok', { 'X-Cashu': 'cashuCHANGE' }), async () => {
+    const routstr = createRoutstr(cfg, wallet, silentLog());
+    result = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(received, ['cashuCHANGE'], 'refund in X-Cashu must be swept back into the wallet');
+  assert.equal(result.sats_refunded, 12);
+  assert.equal(result.sats_spent, 38);
 });
 
 test('chat without a refund header spends the full allocation and never calls receive', async () => {
