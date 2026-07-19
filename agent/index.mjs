@@ -308,7 +308,18 @@ app.get('/api/version', { config: rateLimitConfig(versionMax, '/api/version') },
 // meaningful if anyone can fetch the canonical artifact to compare against.
 app.get('/api/constitution', async () => {
   const c = getConstitution();
-  return { ok: true, version: c.version, digest: c.digest, constitution: c.body };
+  return {
+    ok: true,
+    version: c.version,
+    digest: c.digest,
+    constitution: c.body,
+    // Layer B/C provenance + normative hierarchy (not part of the hashed body;
+    // Layer A stays minimal). The UI renders these as plain text, never as
+    // navigable external links, so there is no added XSS / unsafe-nav surface.
+    layers: c.layers,
+    // Full version registry so a client can verify a historical pin locally.
+    versions: c.versions,
+  };
 });
 
 // GET /api/health/models — provider reachability probe.

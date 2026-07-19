@@ -155,6 +155,12 @@ export function createGenesis(deps = {}) {
       manifest,
       constitution_ok: check.ok,
       constitution_reason: check.ok ? null : check.reason,
+      // Whether the covenant the bot was born under is still the CURRENT version.
+      // An older-but-valid version is not tampering — it is honest provenance —
+      // so the UI can distinguish "drifted" (constitution_ok:false) from
+      // "born under an earlier version" (constitution_ok:true, is_current:false).
+      constitution_is_current: check.ok ? check.pinned_is_current === true : false,
+      constitution_current_version: check.current_version,
       manifest_digest_ok: manifestDigest(manifest) === manifest.manifest_digest,
     };
   }
