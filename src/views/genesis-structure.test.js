@@ -61,4 +61,39 @@ describe('genesis view — visible provenance + tamper evidence', () => {
     expect(src).toMatch(/constitution_ok/);
     expect(src).toMatch(/manifest_digest_ok/);
   });
+
+  it('distinguishes an earlier-but-valid covenant from tampering', () => {
+    expect(src).toMatch(/constitution_is_current/);
+    expect(src).toMatch(/constitution_current_version/);
+  });
+});
+
+describe('genesis view — layered principles provenance (Layer B + C)', () => {
+  it('renders a layers card from the constitution layers block', () => {
+    expect(src).toMatch(/layersCard\(/);
+    expect(src).toMatch(/con\.layers/);
+  });
+
+  it('names the Code of Practice and Reference Canon docs', () => {
+    expect(src).toMatch(/Code of Practice/);
+    expect(src).toMatch(/Reference Canon/);
+  });
+
+  it('surfaces the normative hierarchy for conflict resolution', () => {
+    expect(src).toMatch(/normative_hierarchy/);
+    expect(src).toMatch(/hard refusal of clear harm/i);
+  });
+
+  it('renders doc references as plain text, never as navigable links', () => {
+    // No anchor tags and no href/window.open — provenance is text-only, so the
+    // layers card adds no external-navigation or XSS surface.
+    expect(src).not.toMatch(/href/i);
+    expect(src).not.toMatch(/window\.open/);
+    expect(src).not.toMatch(/h\('a'/);
+  });
+
+  it('shows the genesis-1.1.0 sovereignty invariants', () => {
+    expect(src).toMatch(/invariants/);
+    expect(src).toMatch(/Sovereignty invariants/i);
+  });
 });

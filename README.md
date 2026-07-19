@@ -63,6 +63,8 @@ npm run preview   # serve dist/
 - M4 ✅ NIP-07 signer, agent scaffold, landing page (v0.2.0-alpha)
 - M5 ✅ Kanban boards, read-only source sync (local Markdown + public GitHub), wallet health (v0.2.47-alpha)
 - Ops ✅ Deploy hardening: a code-only Ansible promotion restarts the agent before readiness, and readiness verifies the live `/api/health` version equals the deployed tag (v0.2.48-alpha, OPS-DEPLOY-1)
+- Sovereign AI ✅ Genesis sovereign-bot birth + humanitarian constitution with tamper evidence and visible provenance (v0.2.78-alpha, GENESIS-1)
+- Sovereign AI ✅ Three-layer principle architecture — Layer A constitution evolved to `genesis-1.1.0` (version registry + historical verification), Layer B Code of Practice (`cop-1.0.0`), Layer C Reference Canon (`canon-1.0.0`); RAG/LoRA gated before any adaptive stage (v0.2.81-alpha, SOVEREIGN-COP-1)
 - M6  Local Ollama fallback, brain.write + todo.patch skills
 - M7  Nostr event publishing (gift-wrap-only), own relay + sync
 

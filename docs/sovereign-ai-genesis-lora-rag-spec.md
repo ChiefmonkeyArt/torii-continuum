@@ -1,6 +1,6 @@
 # Torii Continuum — Sovereign AI: Genesis, LoRA & RAG Technical Specification
 
-Status: **Implementation-grade** · Slice shipped: **GENESIS-1** (v0.2.78-alpha) · LoRA/RAG: **specified, not built**
+Status: **Implementation-grade** · Slices shipped: **GENESIS-1** (v0.2.78-alpha) + **PRINCIPLES/constitution genesis-1.1.0** (v0.2.81-alpha) · LoRA/RAG: **specified, not built, gated by Layers A/B/C**
 
 > This document is the durable design contract for Torii Continuum's sovereign
 > bot stack. GENESIS-1 (the genesis lifecycle + humanitarian constitution) is
@@ -137,30 +137,47 @@ overwrite another's manifest; it is structurally impossible, not policy-checked.
 
 ---
 
-## 4. Humanitarian Constitution — Semantics & Versioning
+## 4. Humanitarian Constitution — Semantics, Versioning & the Three Layers
 
-Implemented in `agent/lib/constitution.mjs`.
+Implemented in `agent/lib/constitution.mjs`. The constitution is **Layer A** of
+a three-layer principle architecture (see §4.2). Layer A is the minimal,
+machine-enforceable floor; Layers B and C are prose docs.
 
 - **Structured, deterministic data.** The constitution is a frozen JS object
   (schema `torii.continuum.constitution/1`), not prose-in-a-string. It has a
   `preamble`, four **articles** (the humanitarian tenets), five **genesis
   clauses** (owner-bound, explicit-command-only, default-deny, no-private-keys,
-  provenance-not-drm), and an **amendability** object that *honestly* enumerates
-  what is and is not guaranteed.
+  provenance-not-drm), a set of **invariants** (added in genesis-1.1.0:
+  selective-revelation, verify-dont-trust, four-freedoms-forkable), and an
+  **amendability** object that *honestly* enumerates what is and is not
+  guaranteed.
+- **Version registry (explicit selection strategy).** `constitution.mjs` holds a
+  FROZEN registry of every constitution body ever shipped, keyed by version.
+  `getConstitution()` returns the CURRENT version; `getConstitutionByVersion(v)`
+  returns any historical body; `listConstitutionVersions()` enumerates them. New
+  bodies are MINTED as new versions — a shipped body is never edited — so a
+  manifest's pinned `(version, digest)` keeps verifying forever.
 - **Stable digest.** `canonicalize()` performs a recursive key-sort (arrays keep
-  order, non-finite numbers refused) → `digestOf()` SHA-256. The digest is
-  reproducible across installs and process restarts.
-  - **Locked value (genesis-1.0.0):**
+  order, non-finite numbers refused) → `digestOf()` SHA-256, reproducible across
+  installs and restarts. Each registered version has its own locked digest:
+  - **genesis-1.0.0 (historical, frozen):**
     `178ad323601455f92a345b286eef6c9628f2e71ff7f3f8ad856c16a37e775524`
-  - This value is asserted in `agent/test/constitution.test.js`. Changing the
-    covenant text without a deliberate version bump breaks that test — the digest
-    can never drift silently.
-- **Versioning.** `CONSTITUTION_VERSION = 'genesis-1.0.0'`. Any material change
-  is a new version + new digest, committed together with the test lock. Old
-  manifests keep pointing at the version/digest they were born under.
-- **Verification.** `verifyConstitutionDigest(pinnedDigest, pinnedVersion)`
-  recomputes the live digest and compares. A genesis read runs this so the UI can
-  show whether the covenant a bot was born under still matches the running one.
+  - **genesis-1.1.0 (current):**
+    `4761094b97937fa496b6e5280da8ff30a332d221429abf9195c35d99694a220e`
+  - Both are asserted in `agent/test/constitution.test.js`. Editing any shipped
+    body breaks its lock — a digest can never drift silently, and a historical
+    digest can never be silently rewritten.
+- **Versioning.** `CONSTITUTION_VERSION = 'genesis-1.1.0'`. Any material change
+  MINTS a new version + new digest (a new frozen registry entry), committed with
+  its test lock. Old manifests keep pointing at the version/digest they were born
+  under; new genesis binds to the current version.
+- **Verification (historical + tamper).** `verifyConstitutionDigest(pinnedDigest,
+  pinnedVersion)` looks up the pinned version's frozen body in the registry and
+  compares. A manifest born under genesis-1.0.0 therefore keeps verifying after
+  1.1.0 ships (it is not "drift"); tampering with any frozen body still fails the
+  check; an unknown version fails closed. A genesis read returns `constitution_ok`
+  plus `constitution_is_current` / `constitution_current_version` so the UI can
+  distinguish "drifted" from "born under an earlier, still-valid version."
 - **Amendability (the honesty boundary, encoded as data):**
   ```json
   {
@@ -181,6 +198,31 @@ Implemented in `agent/lib/constitution.mjs`.
    become an instrument of mass harm even under command.
 4. **Build extraordinary things that help humanity evolve** — bias toward
    creation, learning, and durable positive-sum work.
+
+### 4.2 The three principle layers (A/B/C)
+
+Torii's normative material is split into three layers with different
+enforceability and amendment rules. This split is itself load-bearing: a tiny
+set of invariants belongs in the machine constitution; operational preferences
+belong in an amendable code; attributed philosophy belongs in a non-binding
+canon. Do **not** put economic/philosophical preferences into hard refusal logic.
+
+| Layer | Location | Nature | Amendment |
+|---|---|---|---|
+| **A — Constitution** | `agent/lib/constitution.mjs` | Minimal machine-readable invariants (enforceable floors/defaults) | New version + digest; historical versions frozen in the registry |
+| **B — Code of Practice** | `docs/sovereign-ai-code-of-practice.md` (`cop-1.0.0`) | Operational rules → engineering/agent behaviour + acceptance tests; protocol/economic/openness preferences; privacy as selective disclosure; local/circular economy kept separate | Open PR + changelog + version bump |
+| **C — Reference Canon** | `docs/sovereign-ai-reference-canon.md` (`canon-1.0.0`) | Attributed influences with exact source URLs; contested doctrine flagged, never elevated to authority | Additive |
+
+`getConstitution()` and `GET /api/constitution` surface a `layers` block (the
+Layer B/C doc paths + versions) and the **normative hierarchy** used for conflict
+resolution: `law_safety_hard_refusal_of_clear_harm > owner_authority >
+consent_and_privacy > humanitarian_care > operational_preferences >
+advisory_references`. The Genesis UI renders these as plain text (no navigable
+external links → no added XSS/nav surface). The layers block is **not** part of
+the hashed constitution body — Layer A stays minimal.
+
+**These layers are prerequisites/gates.** Per Layer B §10, no RAG or LoRA slice
+ships until its gate items are satisfied — see §7.1 and §8 below.
 
 ---
 
@@ -217,6 +259,13 @@ require explicit owner consent as later stages come online:
 
 > **Not implemented.** The manifest records `provenance.lora = 'not-started'`.
 > This section is the target contract.
+>
+> **GATE (Layer B §10).** No LoRA slice ships until: training data is
+> curated-&-approved-only (unreviewed chats never included, fail-closed); adapter
+> cards pin base model + dataset digest + the **current** constitution
+> version/digest; training is owner-local by default. The constitution-version
+> gate applies — a new adapter binds to the current constitution version with
+> visible provenance, and historical pins are preserved.
 
 ### 7.1 Principles
 
@@ -255,7 +304,7 @@ draft example ─▶ review queue ─▶ owner APPROVE ─▶ dataset (append-on
 // lora_adapter_card/1 (provenance, plaintext + digest)
 { "schema":"torii.continuum.lora_adapter_card/1",
   "adapter_id":"…","base_model":"…","base_digest":"sha256:…",
-  "dataset_digest":"sha256:…","constitution_version":"genesis-1.0.0",
+  "dataset_digest":"sha256:…","constitution_version":"genesis-1.1.0",
   "hyperparams":{…},"created_at":123,"active":false,"card_digest":"…" }
 ```
 
@@ -271,6 +320,13 @@ draft example ─▶ review queue ─▶ owner APPROVE ─▶ dataset (append-on
 ## 8. RAG — Ingestion, Retrieval & Memory Lifecycle (FORWARD SPEC — not built)
 
 > **Not implemented.** The manifest records `provenance.rag = 'not-started'`.
+>
+> **RAG-1 GATE (Layer B §10).** No retrieval slice ships until: retrieval is
+> permission-filtered and consent-scoped (default-deny where scope is unclear);
+> retrieved context is provenance-stamped and attributed in prompt assembly;
+> sources are owner-added only (no silent crawling); deletion/forgetting is
+> first-class; processing is local-first with remote inference consent-gated.
+> These map to Code of Practice §3–§4 and are prerequisites, not aspirations.
 
 ### 8.1 Ingestion
 
@@ -473,6 +529,12 @@ manager (read-only ingestion).
   `manifest_digest_ok:false`.
 - **Given** the constitution text is changed without a version bump, **when** the
   suite runs, **then** the locked-digest test fails.
+- **Given** a manifest born under genesis-1.0.0, **when** it is read after
+  genesis-1.1.0 has shipped, **then** it still verifies (`constitution_ok:true`)
+  against the frozen 1.0.0 body and is flagged `constitution_is_current:false` —
+  an earlier valid covenant, not drift.
+- **Given** a pinned digest with an unknown constitution version, **when** it is
+  verified, **then** it fails closed.
 - **Given** an audit line is edited or removed, **when** `verify()` runs, **then**
   it returns `ok:false` at the break point.
 - **Given** the constitution UI, **when** rendered, **then** LoRA and RAG are
@@ -483,9 +545,12 @@ manager (read-only ingestion).
 ## 20. Tests
 
 **Agent (`node --test`):**
-- `constitution.test.js` — digest lock (`178ad323…`), reproducibility, canonical
-  key-order independence, non-finite refusal, verify accept/reject, honest
-  amendability fields.
+- `constitution.test.js` — current digest lock (`4761094b…`, genesis-1.1.0),
+  **historical digest lock (`178ad323…`, genesis-1.0.0)**, registry listing +
+  version selection, reproducibility, canonical key-order independence,
+  non-finite refusal, verify accept (current + historical), fail-closed on
+  tampered digest / unknown version / right-digest-wrong-version, honest
+  amendability, the genesis-1.1.0 invariants, and the layers/hierarchy provenance.
 - `genesis.test.js` — npub decode/reject, owner-bound create, idempotency (no
   fork), validation + length bounds, default-deny cross-owner, tamper evidence,
   0600/0700 perms, audit line appended + verifies.
@@ -497,7 +562,9 @@ manager (read-only ingestion).
   sends only display fields and never a pubkey/owner even if injected**; offline
   short-circuit.
 - `src/views/genesis-structure.test.js` — no pubkey input; XSS-safe (`h()`, no
-  raw HTML); LoRA/RAG labelled subsequent; digest surfaced; tamper flags shown.
+  raw HTML, no `href`/anchor/`window.open`); LoRA/RAG labelled subsequent; digest
+  surfaced; tamper flags shown; earlier-valid-covenant distinguished from
+  tampering; Layer B/C provenance + normative hierarchy + invariants rendered.
 
 **Whole-suite gates:** full `vitest run`, full agent `node --test`, `npm run build`.
 
@@ -530,5 +597,10 @@ manager (read-only ingestion).
 
 ---
 
-*Locked constitution digest (genesis-1.0.0):*
-`178ad323601455f92a345b286eef6c9628f2e71ff7f3f8ad856c16a37e775524`
+*Locked constitution digests:*
+- genesis-1.1.0 (current): `4761094b97937fa496b6e5280da8ff30a332d221429abf9195c35d99694a220e`
+- genesis-1.0.0 (historical, frozen): `178ad323601455f92a345b286eef6c9628f2e71ff7f3f8ad856c16a37e775524`
+
+*Related layers:* Code of Practice — `docs/sovereign-ai-code-of-practice.md`
+(`cop-1.0.0`); Reference Canon — `docs/sovereign-ai-reference-canon.md`
+(`canon-1.0.0`).

@@ -62,12 +62,14 @@ async function load(body) {
   if (data.exists && data.manifest) {
     body.appendChild(provenanceCard(data));
     if (con) body.appendChild(constitutionCard(con, { compact: true }));
+    if (con && con.layers) body.appendChild(layersCard(con.layers));
     return;
   }
 
   // No manifest yet — show the creation form and the full constitution preview.
   body.appendChild(createForm(body, con));
   if (con) body.appendChild(constitutionCard(con, { compact: false }));
+  if (con && con.layers) body.appendChild(layersCard(con.layers));
 }
 
 function offlineCard() {
@@ -170,6 +172,14 @@ function provenanceCard(data) {
 
   const stageNote = h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 14px;', text: `Provenance stage: ${m.provenance?.stage || 'genesis-1'} · LoRA: ${m.provenance?.lora || 'not-started'} · RAG: ${m.provenance?.rag || 'not-started'}. These are subsequent stages and are not active yet.` });
 
+  // Covenant currency: a bot born under an earlier-but-valid constitution version
+  // is honest provenance, NOT tampering. Only show this when the pin is valid
+  // (conOk) but no longer the current version.
+  let currencyNote = null;
+  if (conOk && data.constitution_is_current === false && data.constitution_current_version) {
+    currencyNote = h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 6px;', text: `This bot was born under constitution ${m.constitution?.version} — still valid and verified. The current constitution is ${data.constitution_current_version}; the birth covenant is preserved and pinned, never rewritten.` });
+  }
+
   const children = [
     h('div', { style: 'display: flex; align-items: center; gap: 10px; flex-wrap: wrap;' }, [
       h('h2', { class: 'page-title', style: 'font-size: 18px; margin: 0;', text: m.display_name || 'Your sovereign bot' }),
@@ -181,6 +191,7 @@ function provenanceCard(data) {
   ];
   if (intent) children.push(intent);
   children.push(stageNote);
+  if (currencyNote) children.push(currencyNote);
 
   return h('div', { class: 'card' }, children);
 }
@@ -224,5 +235,66 @@ function constitutionCard(con, { compact }) {
     ]));
   }
 
+  // Layer-A sovereignty invariants (added in genesis-1.1.0). Rendered the same
+  // way as the humanitarian articles — textContent only, no raw HTML.
+  const invariants = Array.isArray(c.invariants) ? c.invariants : [];
+  if (invariants.length && !compact) {
+    children.push(h('div', { class: 'muted', style: 'font-size: 12px; font-weight: 600; margin: 12px 0 2px; text-transform: uppercase; letter-spacing: 0.04em;', text: 'Sovereignty invariants' }));
+    for (const inv of invariants) {
+      children.push(h('div', { style: 'padding: 8px 0; border-top: 1px solid hsl(var(--border));' }, [
+        h('div', { style: 'font-size: 13px; font-weight: 600; margin-bottom: 2px;', text: inv.rule || inv.id || 'Invariant' }),
+        inv.statement ? h('div', { class: 'muted', style: 'font-size: 12.5px;', text: inv.statement }) : null,
+      ]));
+    }
+  }
+
   return h('div', { class: 'card' }, children);
+}
+
+// ─── Layered principles provenance (Layer B + Layer C) ──────
+//
+// Surfaces WHERE the operational rules (Code of Practice, Layer B) and the
+// attributed influences (Reference Canon, Layer C) live, plus the normative
+// hierarchy used to resolve conflicts. Everything is rendered via textContent —
+// doc paths are shown as plain text, NOT as clickable/navigable links, so no
+// external-navigation or XSS surface is added.
+
+const HIERARCHY_LABELS = {
+  law_safety_hard_refusal_of_clear_harm: 'Law, safety & hard refusal of clear harm',
+  owner_authority: 'Owner authority',
+  consent_and_privacy: 'Consent & privacy',
+  humanitarian_care: 'Humanitarian care',
+  operational_preferences: 'Operational preferences (Code of Practice)',
+  advisory_references: 'Advisory references (Reference Canon)',
+};
+
+function layersCard(layers) {
+  const b = layers.b_code_of_practice || {};
+  const c = layers.c_reference_canon || {};
+  const hierarchy = Array.isArray(layers.normative_hierarchy) ? layers.normative_hierarchy : [];
+
+  const layerRow = (tag, title, meta) => h('div', {
+    style: 'display: flex; gap: 12px; padding: 8px 0; border-top: 1px solid hsl(var(--border)); align-items: baseline;',
+  }, [
+    h('span', { class: 'pill', style: 'flex: 0 0 auto;', text: tag }),
+    h('div', {}, [
+      h('div', { style: 'font-size: 13px; font-weight: 600;', text: title }),
+      h('div', { class: 'mono muted', style: 'font-size: 11.5px; word-break: break-all;', text: meta }),
+    ]),
+  ]);
+
+  const hierarchyItems = hierarchy.map((key, i) => h('li', {
+    class: 'muted', style: 'font-size: 12.5px; margin-bottom: 2px;',
+    text: `${i + 1}. ${HIERARCHY_LABELS[key] || key}`,
+  }));
+
+  return h('div', { class: 'card' }, [
+    h('h2', { class: 'page-title', style: 'font-size: 17px; margin: 0 0 4px;', text: 'Layered principles' }),
+    h('div', { class: 'muted', style: 'font-size: 12.5px; margin-bottom: 6px;', text: 'The constitution above is Layer A — minimal, machine-enforceable invariants. Operational rules and attributed influences live in two further layers, shown here for provenance (see these docs in the repository).' }),
+    layerRow('Layer A', layers.a_constitution?.title || 'Genesis constitutional invariants', `enforceable · ${layers.a_constitution?.version || ''}`),
+    layerRow('Layer B', b.title || 'Sovereign AI Code of Practice', `${b.doc || ''} · ${b.version || ''}`),
+    layerRow('Layer C', c.title || 'Sovereign AI Reference Canon', `${c.doc || ''} · ${c.version || ''} · non-binding`),
+    h('div', { class: 'muted', style: 'font-size: 12px; font-weight: 600; margin: 14px 0 4px; text-transform: uppercase; letter-spacing: 0.04em;', text: 'Conflict resolution — normative hierarchy (highest first)' }),
+    h('ol', { style: 'margin: 0; padding-left: 18px;' }, hierarchyItems),
+  ]);
 }
