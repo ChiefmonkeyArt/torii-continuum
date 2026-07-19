@@ -98,7 +98,7 @@ routstr:
   # Per-skill model pins. Skill name → model id (Routstr provider decides which
   # underlying provider serves it). "auto" defers to Routstr default routing.
   models:
-    chat:      "deepseek-chat"
+    chat:      "deepseek-v3.2"
     coding:    "deepseek-v3.2"
     summarise: "llama-3.1-8b-instruct"
     routing:   "llama-3.1-8b-instruct"        # tiny "which skill?" classifier
@@ -199,7 +199,7 @@ nwc:
 #
 ollama:
   # Master switch. false = agent never touches Ollama, even if it's running.
-  enabled: false
+  enabled: true
 
   # Where the Ollama daemon listens. Loopback only for security.
   endpoint: "http://127.0.0.1:11434"
@@ -210,19 +210,20 @@ ollama:
   #   llama3.1:8b     — 5 GB disk, ~6 GB RAM,  ~5 tok/s on 4 vCPU
   #   qwen2.5:7b      — 5 GB disk, ~6 GB RAM,  ~7 tok/s on 4 vCPU
   #   qwen2.5:14b     — 9 GB disk, ~10 GB RAM, ~2 tok/s on 4 vCPU  (GPU strongly advised)
-  model: "llama3.2:3b"
+  model: "qwen2.5:0.5b"
 
   # Per-skill overrides. Fall back to `model` above when unset.
   models:
-    chat:    "llama3.2:3b"
+    chat:    "qwen2.5:0.5b"
     reflect: "qwen2.5:7b"    # reflection is offline, can afford a bigger model
 
   # Ollama sampling knobs. Lower = more deterministic, better for reflection.
   temperature: 0.4
 
   # Per-request timeout. Slow CPUs on big models can push this; 60s is safe
-  # for 3B, bump to 180s for 8B on 2 vCPU.
-  timeout_ms: 60000
+  # for 3B, bump to 180s for 8B on 2 vCPU. Low-spec VPS default: 180s so a
+  # cold qwen2.5:0.5b load + first token doesn't abort under load.
+  timeout_ms: 180000
 
 
 # ─────────────────────────────────────────────────────────────
