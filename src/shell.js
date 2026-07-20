@@ -10,6 +10,7 @@ import { isAgentConfigured, versionInfo, requestUpdate } from './data/agent.js';
 import { describeVersionState, updateTargetTag } from './data/release.js';
 import { h, openModal } from './views/util.js';
 import { demoAware } from './demo/demo-mode.js';
+import { navClickTarget } from './components/nav-link.js';
 
 const NAV_ITEMS = [
   { id: 'projects',    label: 'Projects',    icon: iconProjects,    path: '/projects' },
@@ -63,22 +64,22 @@ export function renderSidebar() {
 
     <div class="nav-section">Workspace</div>
     ${NAV_ITEMS.map((n) => `
-      <div class="nav-item ${active === n.id ? 'active' : ''}" data-path="${n.path}" role="button" tabindex="0">
+      <a class="nav-item ${active === n.id ? 'active' : ''}" href="${demoAware('#' + n.path)}" data-path="${n.path}">
         <span class="nav-icon">${n.icon()}</span>
         <span>${n.label}</span>
         ${n.id === 'projects' ? `<span class="nav-badge">${projectCount}</span>` : ''}
-      </div>
+      </a>
     `).join('')}
 
     <div class="nav-section">Signals</div>
-    <div class="nav-item" data-path="/marketplace?ours=1" role="button" tabindex="0">
+    <a class="nav-item" href="${demoAware('#/marketplace?ours=1')}" data-path="/marketplace?ours=1">
       <span class="nav-icon">${iconStar()}</span>
       <span>Our tasks</span>
-    </div>
-    <div class="nav-item" data-path="/routstr" role="button" tabindex="0">
+    </a>
+    <a class="nav-item" href="${demoAware('#/routstr')}" data-path="/routstr">
       <span class="nav-icon">${iconPulse()}</span>
       <span>Usage</span>
-    </div>
+    </a>
 
     <div class="sidebar-footer">
       <div class="footer-note">
@@ -117,16 +118,16 @@ export function renderSidebar() {
     else { startLogin({ onStatus: (s) => renderLoginStatus(loginStatusEl, s) }); }
   });
   sidebarEl.querySelectorAll('.nav-item').forEach((el) => {
-    el.addEventListener('click', () => {
-      // While browsing the demo, keep sidebar navigation inside the /demo
-      // subtree — otherwise a click lands on a guarded route and bounces to the
-      // login modal (the v0.2.85 demo-nav regression). demoAware is a no-op
-      // outside demo mode.
-      const path = el.dataset.path.replace(/\?.*/, '');
-      navigate(demoAware('#' + path).slice(1));
-    });
-    el.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
+    // Real anchors now (href baked with demoAware at render time, so hover URL,
+    // ⌘/Ctrl-click "open in new tab" and the intercepted SPA transition all
+    // agree and none bounce to a guarded route — the v0.2.85 demo-nav
+    // regression). navClickTarget escape-hatches modifier / non-primary clicks
+    // to the browser and returns the router target for a plain left click.
+    el.addEventListener('click', (e) => {
+      const target = navClickTarget(e, el.getAttribute('href'));
+      if (target == null) return;
+      e.preventDefault();
+      navigate(target);
     });
   });
   sidebarEl.querySelector('.brand').addEventListener('click', () => navigate('/'));

@@ -228,6 +228,15 @@ describe('src/main.js — every required demo route is registered (nav wiring)',
   it('the sidebar navigation is demo-aware (no guarded bounce while in the mockup)', () => {
     const shell = readFileSync(join(here, '..', 'shell.js'), 'utf8');
     expect(shell).toContain("import { demoAware } from './demo/demo-mode.js'");
-    expect(shell).toMatch(/demoAware\('#' \+ path\)/);
+    // Nav items are real anchors whose href is baked demo-aware at render time.
+    expect(shell).toMatch(/demoAware\('#' \+ n\.path\)/);
+  });
+
+  it('the sidebar renders nav items as real anchors that intercept plain clicks', () => {
+    const shell = readFileSync(join(here, '..', 'shell.js'), 'utf8');
+    expect(shell).toContain("import { navClickTarget } from './components/nav-link.js'");
+    // <a class="nav-item" href=…> not a role=button div.
+    expect(shell).toMatch(/<a class="nav-item/);
+    expect(shell).toMatch(/navClickTarget\(e, el\.getAttribute\('href'\)\)/);
   });
 });

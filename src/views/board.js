@@ -26,6 +26,7 @@ import {
   BOARD_LIMITS,
 } from '../data/store.js';
 import { navigate } from '../router.js';
+import { NavLink } from '../components/nav-link.js';
 import { setChatContext, compose } from '../chat.js';
 import { buildCardPrompt } from './card-prompt.js';
 import { renderProjectTabs } from './projectHome.js';
@@ -143,9 +144,9 @@ export function renderBoard(mount, slug) {
   clear(mount);
 
   mount.appendChild(h('div', { class: 'crumbs' }, [
-    h('a', { onClick: () => navigate('/projects') }, ['Projects']),
+    NavLink({ href: '#/projects', children: ['Projects'] }),
     h('span', { text: '›' }),
-    h('a', { onClick: () => navigate(`/projects/${slug}`) }, [h('span', { class: 'mono', text: slug })]),
+    NavLink({ href: `#/projects/${slug}`, children: [h('span', { class: 'mono', text: slug })] }),
     h('span', { text: '›' }),
     h('span', { text: 'Board' }),
   ]));

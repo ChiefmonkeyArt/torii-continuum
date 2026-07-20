@@ -2,6 +2,7 @@
 import { h, clear, timeAgo, formatBytes } from './util.js';
 import * as store from '../data/store.js';
 import { navigate } from '../router.js';
+import { NavLink } from '../components/nav-link.js';
 import { setChatContext } from '../chat.js';
 import { renderSidebar } from '../shell.js';
 import { isDemo, demoSource, demoBanner, demoPath, goToLogin } from '../demo/demo-mode.js';
@@ -26,7 +27,7 @@ export function renderProjectHome(mount, slug, opts = {}) {
 
   // Crumbs
   const crumbs = h('div', { class: 'crumbs' }, [
-    h('a', { onClick: () => navigate(demoPath(opts, '/projects')) }, ['Projects']),
+    NavLink({ href: '#/projects', children: ['Projects'] }),
     h('span', { text: '›' }),
     h('span', { class: 'mono', text: slug }),
   ]);
