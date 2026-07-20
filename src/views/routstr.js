@@ -31,6 +31,19 @@ const FOCUS_TOPUP_KEY = 'continuum.routstr.focusTopUp';
 
 // Poll the agent for live wallet balance while the Routstr page is mounted.
 let balancePollHandle = null;
+
+// Live Usage Stats poll (v0.2.86-alpha). Refresh the usage counters in place
+// every USAGE_POLL_MS, but only while the tab is visible AND the view is still
+// mounted — so a backgrounded tab does no work and an unmounted view leaks no
+// timer. Changed cells flash the accent colour for 200ms.
+const USAGE_POLL_MS = 5000;
+let usagePollHandle = null;
+let usageVisibilityHandler = null;
+let usageMount = null;
+// Live handles to the usage stat value nodes + budget bar so the poll can
+// diff/update them in place without re-rendering (and tearing) the page.
+let usageStatEls = {};
+let usageBarEl = null;
 // Live handle to the balance number node so the poll can refresh it in place
 // without re-rendering (and tearing) the whole page.
 let balanceNumEl = null;
@@ -73,9 +86,9 @@ export function renderRoutstr(mount, opts = {}) {
 
   if (demo) mount.appendChild(demoBanner());
 
-  // Kick off (or refresh) live balance polling when logged in.
-  if (live) startBalancePoll(mount);
-  else stopBalancePoll();
+  // Kick off (or refresh) live balance + usage polling when logged in.
+  if (live) { startBalancePoll(mount); startUsagePoll(mount); }
+  else { stopBalancePoll(); stopUsagePoll(); }
 
   const header = h('div', { class: 'page-header' }, [
     h('div', {}, [
@@ -754,35 +767,117 @@ function renderModelPicker(c, demo) {
   ]);
 }
 
+// The display strings for the usage card, derived from the stored usage object.
+// Pure + exported so the live-poll diff is unit-tested without a DOM.
+export function usageSnapshot(u = {}) {
+  const spent = u.satsSpent || 0;
+  const budget = u.monthlyBudget || 0;
+  return {
+    requests24h: String(u.requests24h ?? 0),
+    satsSpent: formatSats(spent) + ' sats',
+    tokensIn: formatSats(u.tokensIn ?? 0),
+    tokensOut: formatSats(u.tokensOut ?? 0),
+    budget: `${formatSats(spent)} / ${formatSats(budget)} sats`,
+    pct: budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : 0,
+  };
+}
+
+// Flash a value cell to the accent colour, then let the CSS transition ease it
+// back to its prior colour over 200ms — the visual cue that a counter changed.
+function flashCell(el) {
+  if (!el || !el.style) return;
+  const base = el.style.color || '';
+  el.style.transition = 'color 200ms ease';
+  el.style.color = 'var(--accent)';
+  setTimeout(() => { if (el && el.style) el.style.color = base; }, 200);
+}
+
+// Diff a fresh snapshot against the live cells: write + flash only the cells
+// whose text actually changed, and set the budget bar width. Returns the list
+// of changed keys. `flash` is injectable for testing. Exported for the same.
+export function applyUsage(els, barEl, snap, flash = flashCell) {
+  const changed = [];
+  for (const key of ['requests24h', 'satsSpent', 'tokensIn', 'tokensOut', 'budget']) {
+    const el = els && els[key];
+    if (!el || el.isConnected === false) continue;
+    const next = String(snap[key]);
+    if (el.textContent !== next) {
+      el.textContent = next;
+      flash(el);
+      changed.push(key);
+    }
+  }
+  if (barEl && barEl.isConnected !== false && barEl.style) barEl.style.width = snap.pct + '%';
+  return changed;
+}
+
 function renderUsage(c) {
-  const u = c.usage;
-  const pct = u.monthlyBudget > 0 ? Math.min(100, Math.round((u.satsSpent / u.monthlyBudget) * 100)) : 0;
+  const snap = usageSnapshot(c.usage);
+  usageStatEls = {};
+  const stat = (key, label) => {
+    const valueEl = h('div', {
+      class: 'mono',
+      style: 'font-size: 18px; color: var(--ink-hi); margin-top: 2px; transition: color 200ms ease;',
+      text: snap[key],
+    });
+    usageStatEls[key] = valueEl;
+    return h('div', {}, [
+      h('div', { class: 'label muted', style: 'font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;', text: label }),
+      valueEl,
+    ]);
+  };
+  const budgetEl = h('span', { text: snap.budget });
+  usageStatEls.budget = budgetEl;
+  usageBarEl = h('i', { style: `width: ${snap.pct}%` });
+
   return h('div', { class: 'card' }, [
     h('h3', { text: 'Usage stats' }),
     h('p', { class: 'muted', text: 'Last 24 hours. Live counters light up once you connect and start sending requests.' }),
     h('div', { class: 'grid-2', style: 'gap: 12px; margin-top: 8px;' }, [
-      renderStat('Requests · 24h', String(u.requests24h)),
-      renderStat('Sats spent · 24h', formatSats(u.satsSpent) + ' sats'),
-      renderStat('Tokens in',  formatSats(u.tokensIn)),
-      renderStat('Tokens out', formatSats(u.tokensOut)),
+      stat('requests24h', 'Requests · 24h'),
+      stat('satsSpent', 'Sats spent · 24h'),
+      stat('tokensIn', 'Tokens in'),
+      stat('tokensOut', 'Tokens out'),
     ]),
     h('div', { style: 'margin-top: 14px;' }, [
       h('div', { class: 'muted', style: 'font-size: 12px; display: flex; justify-content: space-between;' }, [
         h('span', { text: 'Monthly budget' }),
-        h('span', { text: `${formatSats(u.satsSpent)} / ${formatSats(u.monthlyBudget)} sats` }),
+        budgetEl,
       ]),
-      h('div', { class: 'usage-bar', style: 'margin-top: 6px;' }, [
-        h('i', { style: `width: ${pct}%` }),
-      ]),
+      h('div', { class: 'usage-bar', style: 'margin-top: 6px;' }, [ usageBarEl ]),
     ]),
   ]);
 }
 
-function renderStat(label, value) {
-  return h('div', {}, [
-    h('div', { class: 'label muted', style: 'font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;', text: label }),
-    h('div', { class: 'mono', style: 'font-size: 18px; color: var(--ink-hi); margin-top: 2px;', text: value }),
-  ]);
+// Refresh the usage cells from the store — the single gated tick body.
+function usageTick() {
+  // Gate 1: the tab must be visible (a backgrounded tab does no work).
+  if (typeof document !== 'undefined' && document.visibilityState && document.visibilityState !== 'visible') return;
+  // Gate 2: the view must still be mounted (no work + no tearing after unmount).
+  if (!usageMount || usageMount.isConnected === false) return;
+  applyUsage(usageStatEls, usageBarEl, usageSnapshot(getRoutstr().content.usage));
+}
+
+function startUsagePoll(mount) {
+  stopUsagePoll();
+  usageMount = mount;
+  usageVisibilityHandler = () => {
+    // Immediate refresh the moment the tab becomes visible again.
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') usageTick();
+  };
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', usageVisibilityHandler);
+  }
+  usagePollHandle = setInterval(usageTick, USAGE_POLL_MS);
+}
+
+function stopUsagePoll() {
+  if (usagePollHandle) { clearInterval(usagePollHandle); usagePollHandle = null; }
+  if (usageVisibilityHandler && typeof document !== 'undefined' && document.removeEventListener) {
+    document.removeEventListener('visibilitychange', usageVisibilityHandler);
+  }
+  usageVisibilityHandler = null;
+  usageMount = null;
 }
 
 function connect() {
