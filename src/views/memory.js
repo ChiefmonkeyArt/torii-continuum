@@ -29,7 +29,11 @@ import {
   memoryWorkingValues, memoryUsage, memoryScoped, memoryVerify, memoryDelete,
   memoryProposals, memoryApprove, memoryReject,
   memoryExport, memoryImport, memoryQuarantine, memoryQuarantineApprove, memoryQuarantineReject,
+  memoryState, memoryCiphertexts, memoryActivateChallenge, memoryActivate,
 } from '../data/agent.js';
+import {
+  ACTIVATION_STATES, signerAvailable, runActivation,
+} from './memory-activation.js';
 
 // Custom app kind for the DETACHED portable-bundle manifest signature. Mirrors
 // BUNDLE_SIG_KIND in agent/lib/portability.mjs — a signing-only event, never a
@@ -55,6 +59,44 @@ export function renderMemory(mount) {
 }
 
 async function load(body) {
+  // Authoritative first-run gate: ask the agent whether memory is unlocked FOR
+  // THIS OWNER before rendering anything. A locked owner sees the guided
+  // activation panel; an unlocked owner drops straight into the console. We
+  // never infer "unlocked" from anything but data.unlocked_for_owner.
+  const state = await memoryState();
+  clear(body);
+
+  if (state.offline || (!state.ok && state.reason === 'offline')) {
+    body.appendChild(offlineCard());
+    return;
+  }
+  if (!state.ok && state.status === 401) {
+    body.appendChild(card('Session expired', 'Sign in again to view your bot’s memory.'));
+    return;
+  }
+  if (!state.ok && state.status === 403) {
+    body.appendChild(card('No bot yet', 'Create your sovereign bot on the Genesis page first — memory is bound to an owner and bot.'));
+    return;
+  }
+  if (!state.ok) {
+    body.appendChild(card('Memory unavailable', state.reason || 'Could not read memory state. Please retry.'));
+    return;
+  }
+
+  if (!state.data?.unlocked_for_owner) {
+    body.appendChild(activationCard(body));
+    return;
+  }
+
+  await renderConsole(body);
+}
+
+// The normal Memory Console. Reached only when the owner's memory is
+// authoritatively unlocked (fresh load OR right after a successful activation,
+// with no page reload).
+async function renderConsole(body) {
+  clear(body);
+  body.appendChild(h('div', { class: 'muted', style: 'font-size: 13px;', text: 'Loading memory…' }));
   const [wv, usage, props, quar] = await Promise.all([
     memoryWorkingValues(), memoryUsage(), memoryProposals(), memoryQuarantine(),
   ]);
@@ -79,6 +121,98 @@ async function load(body) {
   body.appendChild(storedCard(body));
   body.appendChild(quarantineCard(body, quar.ok ? quar.data : { items: [] }));
   body.appendChild(portabilityCard(body));
+}
+
+// ─── first-run activation (MEMORY-ACTIVATION-1) ──────────────
+
+// Human-readable copy for each terminal/interim activation state. Interim
+// states drive a live status line; terminal states drive the recoverable
+// error/success messaging. Kept as data so the view stays declarative and the
+// strings are unit-inspectable.
+const ACTIVATION_COPY = Object.freeze({
+  [ACTIVATION_STATES.REQUESTING_SIGNATURE]: 'Requesting your signature… approve the request in your Nostr signer.',
+  [ACTIVATION_STATES.ACTIVATING]: 'Unlocking memory…',
+  [ACTIVATION_STATES.SIGNER_REJECTED]: 'Signature request was cancelled or rejected. Memory is still locked — you can try again.',
+  [ACTIVATION_STATES.SIGNER_UNAVAILABLE]: 'No NIP-44-capable Nostr signer was found. Install or unlock a signer extension, then retry.',
+  [ACTIVATION_STATES.ERROR]: 'Activation could not be completed. Memory is still locked — please retry.',
+});
+
+function activationCard(body) {
+  const status = h('div', {
+    class: 'muted',
+    style: 'font-size: 13px; min-height: 18px; margin-top: 4px;',
+    role: 'status',
+    'aria-live': 'polite',
+    'data-testid': 'activation-status',
+  });
+  const err = h('div', {
+    style: 'color: var(--accent-danger); font-size: 13px; min-height: 18px; margin-top: 4px;',
+    role: 'alert',
+    'data-testid': 'activation-error',
+  });
+
+  const cta = h('button', {
+    class: 'primary',
+    'data-testid': 'activate-memory',
+    onClick: onActivate,
+  }, ['Activate private memory']);
+
+  async function onActivate() {
+    err.textContent = '';
+    status.textContent = '';
+    cta.disabled = true;
+
+    const win = typeof window !== 'undefined' ? window : {};
+    const origin = (typeof window !== 'undefined' && window.location && window.location.origin) || '';
+
+    const deps = {
+      signerAvailable: () => signerAvailable(win),
+      getPublicKey: () => win.nostr.getPublicKey(),
+      signEvent: (evt) => win.nostr.signEvent(evt),
+      decrypt: (pk, ct) => win.nostr.nip44.decrypt(pk, ct),
+      fetchChallenge: () => memoryActivateChallenge(),
+      fetchCiphertexts: () => memoryCiphertexts(),
+      postActivate: (payload) => memoryActivate(payload),
+      fetchState: () => memoryState(),
+      origin,
+    };
+
+    const result = await runActivation(deps, (t) => {
+      const copy = ACTIVATION_COPY[t.state];
+      if (t.state === ACTIVATION_STATES.REQUESTING_SIGNATURE || t.state === ACTIVATION_STATES.ACTIVATING) {
+        status.textContent = copy || '';
+      } else if (t.state === ACTIVATION_STATES.SUCCESS) {
+        status.textContent = 'Memory unlocked.';
+      } else if (copy) {
+        // Terminal error/rejection/unavailable: surface as a recoverable error.
+        status.textContent = '';
+        err.textContent = t.reason ? `${copy} (${t.reason})` : copy;
+      }
+    });
+
+    if (result.ok) {
+      // Authoritative refresh already confirmed unlocked_for_owner:true inside
+      // runActivation — reveal the console in place, no reload.
+      await renderConsole(body);
+      return;
+    }
+    cta.disabled = false;
+  }
+
+  return h('div', { class: 'card', 'data-testid': 'activation-panel', style: 'border: 1px solid hsl(var(--border));' }, [
+    h('h2', { class: 'page-title', style: 'font-size: 20px; margin: 0 0 8px;', text: 'Activate private memory' }),
+    h('div', { style: 'font-size: 13.5px; line-height: 1.5; margin-bottom: 12px;' }, [
+      h('p', { style: 'margin: 0 0 8px;', text: 'Your bot’s durable memory is locked. Activation turns it on for you and only you:' }),
+      h('ul', { style: 'margin: 0 0 4px; padding-left: 20px; display: flex; flex-direction: column; gap: 4px;' }, [
+        h('li', { text: 'Owner-controlled — memory is bound to your key and no one else can unlock it.' }),
+        h('li', { text: 'Encrypted in this browser before anything is persisted — the agent never sees plaintext or your key.' }),
+        h('li', { text: 'Requires your signature — you authorize activation by signing a one-time challenge in your own Nostr signer.' }),
+      ]),
+    ]),
+    h('div', { class: 'form-actions', style: 'display: flex; gap: 8px; flex-wrap: wrap;' }, [cta]),
+    status,
+    err,
+  ]);
 }
 
 // ─── cards ───────────────────────────────────────────────────

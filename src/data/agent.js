@@ -403,6 +403,40 @@ export async function memoryQuarantineReject(sha) {
   return req('POST', `/api/memory/quarantine/${encodeURIComponent(sha)}/reject`, {});
 }
 
+// ─── Memory activation (MEMORY-ACTIVATION-1) ─────────────────
+
+/**
+ * GET /api/memory — authoritative memory state for the signed-in owner.
+ * `data.unlocked_for_owner` is the single source of truth the console trusts
+ * to decide first-run activation vs. the normal Memory Console.
+ */
+export async function memoryState() {
+  return req('GET', '/api/memory');
+}
+
+/**
+ * GET /api/memory/ciphertexts — the encrypted-at-rest blobs for the browser to
+ * decrypt with the owner's signer before activation. Never returns plaintext.
+ */
+export async function memoryCiphertexts() {
+  return req('GET', '/api/memory/ciphertexts');
+}
+
+/** POST /api/memory/activate/challenge — one-time challenge for the owner to sign. */
+export async function memoryActivateChallenge() {
+  return req('POST', '/api/memory/activate/challenge');
+}
+
+/**
+ * POST /api/memory/activate — hand the agent the owner-signed challenge + the
+ * browser-decrypted entries. The agent verifies the signature (owner-bound,
+ * single-use) before unlocking. Sends no plaintext beyond the entries the owner
+ * just decrypted in their own browser; carries no key.
+ */
+export async function memoryActivate({ event, entries } = {}) {
+  return req('POST', '/api/memory/activate', { event, entries });
+}
+
 // ─── Health ─────────────────────────────────────────────────
 
 export async function health() {
