@@ -168,7 +168,7 @@ function renderCashuCard(c, demo) {
   return h('div', { class: 'card hot' }, [
     h('h3', { text: 'Cashu balance' }),
     hero,
-    h('div', { class: 'wallet-card-actions', style: 'margin-top: 14px;' }, [topUpBtn]),
+    h('div', { class: 'wallet-card-actions' }, [topUpBtn]),
   ]);
 }
 
@@ -619,7 +619,7 @@ function renderNwcCard(live, demo) {
   ]);
   if (live) loadNwcStatus(body);
   else {
-    body.appendChild(h('div', { class: 'wallet-card-actions', style: 'margin-top: 12px;' }, [
+    body.appendChild(h('div', { class: 'wallet-card-actions' }, [
       h('button', { class: 'primary', onClick: demoIntercept(demo, () => startLogin()) }, ['Sign in']),
     ]));
   }
@@ -668,7 +668,7 @@ async function loadNwcStatus(body) {
 }
 
 function renderNwcActions(connected, body, statusLine) {
-  const wrap = h('div', { class: 'wallet-card-actions', style: 'display:flex; gap: 8px; margin-top: 12px;' });
+  const wrap = h('div', { class: 'wallet-card-actions' });
   if (connected) {
     const test = h('button', {}, ['Test']);
     test.addEventListener('click', async () => {

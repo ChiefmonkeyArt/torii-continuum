@@ -309,6 +309,16 @@
   font-weight: 600;
 }
 
+/* Wallet card action rows (Top Up / Connect / Test / Disconnect / Sign in):
+   right-aligned so the primary CTA sits at the trailing edge of the card. */
+.wallet-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 0 4px;
+  margin-top: 14px;
+}
+
 .usage-bar {
   height: 6px; border-radius: 999px;
   background: hsl(var(--muted));
