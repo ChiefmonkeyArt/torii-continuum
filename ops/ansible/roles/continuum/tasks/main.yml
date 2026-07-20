@@ -601,6 +601,9 @@
             RET_APP_STAGING: "{{ continuum_release_dir }}"
             RET_SOURCE_KEEP: "{{ continuum_retention_keep_sources }}"
             RET_BACKUP_KEEP: "{{ continuum_retention_keep_backups }}"
+            RET_QUARANTINE_PARENT: "{{ continuum_retention_quarantine_parent }}"
+            RET_QUARANTINE_AGE_DAYS: "{{ continuum_retention_quarantine_age_days }}"
+            RET_QUARANTINE_KEEP: "{{ continuum_retention_quarantine_keep }}"
           register: continuum_retention_sweep
           # The per-deletion log line is "reclaimed <label>: <path>"; the always-
           # printed summary "reclaimed N item(s)" has no colon, so this reports

@@ -1,13 +1,18 @@
 /** Projects list view. */
 import { h, clear, openModal, timeAgo } from './util.js';
-import { listProjects, createProject, milestonesFor, todosFor } from '../data/store.js';
+import * as store from '../data/store.js';
 import { navigate } from '../router.js';
 import { setChatContext } from '../chat.js';
 import { renderSidebar } from '../shell.js';
+import { isDemo, demoSource, demoBanner, demoPath, goToLogin } from '../demo/demo-mode.js';
 
-export function renderProjects(mount) {
+export function renderProjects(mount, opts = {}) {
+  const demo = isDemo(opts);
+  const S = demoSource(opts, store);
   setChatContext({ label: 'Projects', where: 'projects' });
   clear(mount);
+
+  if (demo) mount.appendChild(demoBanner());
 
   const header = h('div', { class: 'page-header' }, [
     h('div', {}, [
@@ -15,27 +20,27 @@ export function renderProjects(mount) {
       h('div', { class: 'page-sub', text: 'Your project engine. Continuum tracks each build like a nostr identity: portable, signable, yours.' }),
     ]),
     h('div', { class: 'page-actions' }, [
-      h('button', { class: 'primary', onClick: () => openNewProject() }, ['+ New project']),
+      h('button', { class: 'primary', onClick: () => (demo ? goToLogin() : openNewProject()) }, ['+ New project']),
     ]),
   ]);
   mount.appendChild(header);
 
   const grid = h('div', { class: 'grid-auto' });
-  const projects = listProjects();
+  const projects = S.listProjects();
   for (const p of projects) {
-    grid.appendChild(renderProjectCard(p));
+    grid.appendChild(renderProjectCard(p, S, opts));
   }
-  grid.appendChild(renderAddCard());
+  grid.appendChild(renderAddCard(demo));
   mount.appendChild(grid);
 }
 
-function renderProjectCard(p) {
+function renderProjectCard(p, S, opts) {
   const slug = p.content.slug;
-  const ms = milestonesFor(slug);
+  const ms = S.milestonesFor(slug);
   const done = ms.filter((m) => m.content.status === 'done').length;
   const active = ms.filter((m) => m.content.status === 'active').length;
   const pct = ms.length ? Math.round((done / ms.length) * 100) : 0;
-  const todos = todosFor(slug);
+  const todos = S.todosFor(slug);
   const openTodos = todos.filter((t) => !t.content.done).length;
 
   const sourcePill = p.content.source && p.content.source !== 'local'
@@ -61,20 +66,20 @@ function renderProjectCard(p) {
       h('span', { class: 'muted', text: `updated ${timeAgo(p.created_at)}` }),
     ]),
   ]);
-  card.addEventListener('click', () => navigate(`/projects/${slug}`));
+  card.addEventListener('click', () => navigate(demoPath(opts, `/projects/${slug}`)));
   card.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
   });
   return card;
 }
 
-function renderAddCard() {
+function renderAddCard(demo) {
   const card = h('div', { class: 'card project-card add', role: 'button', tabindex: 0 }, [
     h('div', { class: 'plus', text: '+' }),
     h('div', { text: 'Start a new project' }),
     h('div', { class: 'muted mono', text: 'blank · GitHub · ngit' }),
   ]);
-  card.addEventListener('click', openNewProject);
+  card.addEventListener('click', () => (demo ? goToLogin() : openNewProject()));
   card.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
   });
@@ -160,7 +165,7 @@ function openNewProject() {
     }
     const tags = tagsInput.value.split(',').map((s) => s.trim()).filter(Boolean);
     try {
-      const ev = createProject({
+      const ev = store.createProject({
         name, description: descInput.value.trim(), source, sourceUrl, tags,
       });
       modal.close();

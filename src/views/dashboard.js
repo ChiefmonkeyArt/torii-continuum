@@ -8,9 +8,10 @@
  *  Admin-gated endpoint — a logged-out visitor sees a login prompt instead.
  */
 import { h, clear, timeAgo } from './util.js';
-import { listProjects, todosFor, sessionsFor, boardStatsFor, subscribe } from '../data/store.js';
+import * as store from '../data/store.js';
 import { setChatContext } from '../chat.js';
 import { isAgentConfigured, isLoggedIn, healthModels, walletHealth } from '../data/agent.js';
+import { isDemo, demoSource, demoBanner, demoPath } from '../demo/demo-mode.js';
 
 // Module-level poll handle mirrors the routstr.js pattern. A single dashboard
 // mount owns at most one interval; navigating away clears it via the
@@ -200,26 +201,30 @@ function ProviderCard() {
   return card;
 }
 
-export function renderDashboard(mount) {
+export function renderDashboard(mount, opts = {}) {
+  const demo = isDemo(opts);
+  const S = demoSource(opts, store);
   setChatContext({ label: 'Dashboard', where: 'dashboard' });
   clear(mount);
 
-  const projects = listProjects();
+  if (demo) mount.appendChild(demoBanner());
+
+  const projects = S.listProjects();
   let openTodos = 0, totalTodos = 0, totalSessions = 0;
   // Overall progress now reflects real kanban board state aggregated across
   // every project's board, not milestone status (KANBAN-PROG-1).
   const board = { total: 0, backlog: 0, todo: 0, doing: 0, done: 0 };
   for (const p of projects) {
-    const bs = boardStatsFor(p.content.slug);
+    const bs = S.boardStatsFor(p.content.slug);
     board.total += bs.total;
     board.backlog += bs.backlog;
     board.todo += bs.todo;
     board.doing += bs.doing;
     board.done += bs.done;
-    const td = todosFor(p.content.slug);
+    const td = S.todosFor(p.content.slug);
     totalTodos += td.length;
     openTodos += td.filter((t) => !t.content.done).length;
-    totalSessions += sessionsFor(p.content.slug).length;
+    totalSessions += S.sessionsFor(p.content.slug).length;
   }
   const pct = board.total ? Math.round((board.done / board.total) * 100) : 0;
 
@@ -259,10 +264,12 @@ export function renderDashboard(mount) {
 
   mount.appendChild(h('div', { style: 'height: 16px' }));
 
-  // CONT-HEALTH-1: live provider reachability card. Polls
-  // /api/health/models every 20s while dashboard is mounted; cleaned up on
-  // hashchange away from #/dashboard.
-  mount.appendChild(ProviderCard());
+  // CONT-HEALTH-1: live provider reachability card. Polls /api/health/models
+  // every 20s while dashboard is mounted; cleaned up on hashchange away from
+  // #/dashboard. Skipped entirely in demo mode — the mockup makes NO network
+  // calls (the /api/* endpoints are admin-gated and there is no session), so a
+  // signed-out demo visitor never triggers an agent request.
+  if (!demo) mount.appendChild(ProviderCard());
 
   mount.appendChild(h('div', { style: 'height: 16px' }));
 
@@ -274,9 +281,9 @@ export function renderDashboard(mount) {
     clear(perProj);
     perProj.appendChild(h('h3', { text: 'By project' }));
     perProj.appendChild(h('p', { class: 'muted', text: 'Kanban progress across your boards. Click any project to open its home page.' }));
-    for (const p of listProjects()) {
-      const bs = boardStatsFor(p.content.slug);
-      perProj.appendChild(h('div', { class: 'session', style: 'margin-bottom: 6px; cursor:pointer;', role: 'button', onClick: () => { window.location.hash = `#/projects/${p.content.slug}`; } }, [
+    for (const p of S.listProjects()) {
+      const bs = S.boardStatsFor(p.content.slug);
+      perProj.appendChild(h('div', { class: 'session', style: 'margin-bottom: 6px; cursor:pointer;', role: 'button', onClick: () => { window.location.hash = `#${demoPath(opts, `/projects/${p.content.slug}`)}`; } }, [
         h('div', { class: 'title', text: p.content.name }),
         h('div', { style: 'flex: 1; padding: 0 12px;' }, [
           h('div', { class: 'project-progress' }, [h('i', { style: `width: ${bs.percent}%` })]),
@@ -292,8 +299,9 @@ export function renderDashboard(mount) {
 
   // Re-render the kanban-derived section on store mutations (card add/move/
   // delete). Guard against firing into a detached node and clean up alongside
-  // the provider poll when the user leaves #/dashboard.
-  storeUnsub = subscribe(() => {
+  // the provider poll when the user leaves #/dashboard. In demo mode S.subscribe
+  // is a no-op (fixtures never change) returning an unsubscribe, so this is inert.
+  storeUnsub = S.subscribe(() => {
     if (!perProj.isConnected) { stopProviderPoll(); return; }
     renderPerProject();
   });

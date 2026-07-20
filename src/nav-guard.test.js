@@ -24,6 +24,9 @@ import {
   sessionChangeTarget,
   isPublicPattern,
   isProtectedPattern,
+  isDemoPattern,
+  realEquivalent,
+  demoRedirect,
   ROOT_PATH,
   LOGIN_PATH,
   DASHBOARD_PATH,
@@ -70,6 +73,50 @@ describe('nav-guard — default-deny contract', () => {
     // Root render decision mirrors it.
     expect(rootTarget(true)).toBe(DASHBOARD_PATH);
     expect(rootTarget(false)).toBeNull();
+  });
+});
+
+// ── Demo surface rules ─────────────────────────────────────────────
+// The /demo subtree is public (signed-out mockup), never bounced when logged
+// out, and redirected to the real screen when a signed-in operator lands there.
+describe('nav-guard — demo surface', () => {
+  const DEMO_ROUTES = ['/demo', '/demo/dashboard', '/demo/projects', '/demo/projects/:slug', '/demo/marketplace', '/demo/routstr', '/demo/team'];
+
+  it('every demo route is public and not protected', () => {
+    for (const p of DEMO_ROUTES) {
+      expect(isPublicPattern(p)).toBe(true);
+      expect(isProtectedPattern(p)).toBe(false);
+      expect(isDemoPattern(p)).toBe(true);
+    }
+    // A real route is not a demo route.
+    expect(isDemoPattern('/dashboard')).toBe(false);
+    expect(isDemoPattern('/demonstration')).toBe(false); // prefix guard, not substring
+  });
+
+  it('never bounces a demo route when logged out', () => {
+    for (const p of DEMO_ROUTES) expect(guardRedirect(p, false)).toBeNull();
+  });
+
+  it('maps each demo route to its real equivalent (strip /demo, root→dashboard)', () => {
+    expect(realEquivalent('/demo')).toBe('/dashboard');
+    expect(realEquivalent('/demo/dashboard')).toBe('/dashboard');
+    expect(realEquivalent('/demo/projects')).toBe('/projects');
+    expect(realEquivalent('/demo/projects/:slug')).toBe('/projects/:slug');
+    expect(realEquivalent('/demo/marketplace')).toBe('/marketplace');
+    expect(realEquivalent('/demo/routstr')).toBe('/routstr');
+    expect(realEquivalent('/demo/team')).toBe('/team');
+    // Non-demo patterns pass through unchanged.
+    expect(realEquivalent('/dashboard')).toBe('/dashboard');
+  });
+
+  it('redirects a signed-in operator off demo to the real screen; leaves signed-out browsing', () => {
+    for (const p of DEMO_ROUTES) {
+      expect(demoRedirect(p, true)).toBe(realEquivalent(p));
+      expect(demoRedirect(p, false)).toBeNull();
+    }
+    // A real route never triggers a demo redirect, in either auth state.
+    expect(demoRedirect('/dashboard', true)).toBeNull();
+    expect(demoRedirect('/dashboard', false)).toBeNull();
   });
 });
 
@@ -232,16 +279,52 @@ describe('logout from a protected route → login modal', () => {
   });
 });
 
-// ── Source-structure guard: login surface exposes no unauthenticated entry ──
-describe('login surface no longer exposes an unauthenticated demo entry point', () => {
-  it('src/views/login.js contains no "Explore the demo" affordance', async () => {
+// ── Source-structure guard: the route table is default-deny by construction ──
+// A future author who adds an unguarded protected route must fail CI here.
+describe('src/main.js — every registered route is public-root or guarded()', () => {
+  it('no route escapes the guard except the public patterns', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join } = await import('node:path');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(join(here, 'main.js'), 'utf8');
+
+    // Public patterns that are allowed to register a bare (unguarded) handler:
+    // the root/login page renders in place, and the demo surface is explicitly
+    // public (nav-guard PUBLIC_PATTERNS) with its own in-view session gating.
+    const PUBLIC_OK = (pattern) =>
+      pattern === '/' || pattern === '/demo' || pattern.startsWith('/demo/');
+
+    // Match every `route('<pattern>', <rest-of-line>)` registration.
+    const re = /route\(\s*'([^']+)'\s*,([^\n]*)/g;
+    const seen = [];
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      const [, pattern, rest] = m;
+      seen.push(pattern);
+      if (PUBLIC_OK(pattern)) continue;
+      expect(rest.includes(`guarded('${pattern}'`)).toBe(true);
+    }
+    // Sanity: we actually parsed the table (guards nothing-matched false-pass).
+    expect(seen).toContain('/dashboard');
+    expect(seen.length).toBeGreaterThanOrEqual(8);
+  });
+});
+
+// ── Source-structure guard: login surface exposes ONLY the public demo peek ──
+// The login card may link to the public /demo mockup, but must not resurrect the
+// old unauthenticated entry points into the real (now-gated) app routes.
+describe('login surface exposes only the public demo peek', () => {
+  it('links to #/demo/dashboard and nothing that enters a gated real route', async () => {
     const { readFileSync } = await import('node:fs');
     const { fileURLToPath } = await import('node:url');
     const { dirname, join } = await import('node:path');
     const here = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(join(here, 'views/login.js'), 'utf8');
+    // The one allowed peek: an href into the public demo surface.
+    expect(src).toContain('#/demo/dashboard');
+    // The old affordances into real routes must stay gone.
     expect(src).not.toContain('Explore the demo');
-    // The link pointed at a now-gated demo route; the navigate() call is gone.
     expect(src).not.toMatch(/navigate\('\/projects'\)/);
   });
 });

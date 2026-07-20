@@ -35,6 +35,23 @@ const NIP42_KIND = 22242;
 // wedged extension) resolves as a clean timeout instead of hanging the button.
 const SIGNER_TIMEOUT_MS = 90_000;
 
+// Cross-tab sign-out broadcast. Writing this key fires a `storage` event in
+// every OTHER tab of the same origin (never the writer), so a sign-out in one
+// tab bounces them all to the login page. The value is a throwaway timestamp;
+// only the write itself matters. Never holds a token or any secret.
+export const SIGNOUT_SENTINEL_KEY = 'continuum.signout.v1';
+
+/**
+ * Is this `storage` event a cross-tab sign-out broadcast? True only for a write
+ * (newValue set) to the sentinel key — a removeItem/clear (newValue null) is
+ * ignored so clearing storage never spuriously signs a tab out. Pure + exported
+ * so the listener contract is unit-tested without a real StorageEvent.
+ * @param {{key?: string|null, newValue?: string|null}} event
+ */
+export function isSignoutBroadcast(event) {
+  return !!event && event.key === SIGNOUT_SENTINEL_KEY && event.newValue != null;
+}
+
 // Race guard: at most one login attempt in flight across ALL surfaces.
 let loginInFlight = false;
 
@@ -46,8 +63,23 @@ export function isLoginInFlight() { return loginInFlight; }
 
 export function isSessionLive() { return isLoggedIn(); }
 
-export function endSession() {
+/**
+ * End the local session and route back to login. Sign-out is purely local
+ * (stateless HMAC tokens carry their own expiry; there is no server session to
+ * revoke), so this clears the stored tokens and dispatches
+ * continuum:session-changed — the app handler routes to the login modal.
+ *
+ * By default it ALSO writes the cross-tab sign-out sentinel so every other open
+ * tab bounces to login too. The `localOnly` option skips that write: it is set
+ * by the `storage`-event handler that reacts to ANOTHER tab's broadcast, so
+ * reacting to a broadcast never re-broadcasts (no cross-tab loop).
+ * @param {{localOnly?: boolean}} [opts]
+ */
+export function endSession(opts = {}) {
   clearSession();
+  if (!opts.localOnly) {
+    try { localStorage.setItem(SIGNOUT_SENTINEL_KEY, String(Date.now())); } catch (_e) {}
+  }
   document.dispatchEvent(new CustomEvent('continuum:session-changed'));
 }
 

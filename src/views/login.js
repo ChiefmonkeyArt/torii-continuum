@@ -77,10 +77,14 @@ export function renderLogin(mount) {
 
     versionRow,
 
-    // No unauthenticated entry points. Every screen beyond this login card
-    // requires a live session (default-deny; see nav-guard), so the former
-    // demo and About links — which pointed at now-gated routes — are gone.
-    // A logged-out visitor sees ONLY this login card.
+    // A subtle, unauthenticated peek at the app: the /demo/* surface is a
+    // read-only mockup rendered from obviously-fake fixtures (see nav-guard
+    // PUBLIC_PATTERNS + src/demo). It never touches the agent or the real store,
+    // and every action inside it routes back here to sign in. This is the ONLY
+    // link off the login card; the real app routes stay default-deny.
+    h('div', { class: 'login-demo-peek muted' }, [
+      h('a', { class: 'login-demo-link', href: '#/demo/dashboard' }, ['View demo']),
+    ]),
 
     h('div', { class: 'login-foot muted', text: version }),
   ]);

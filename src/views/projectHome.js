@@ -1,38 +1,43 @@
 /** Project home page — milestones, todos, sessions, files. */
 import { h, clear, timeAgo, formatBytes } from './util.js';
-import { getProject, milestonesFor, todosFor, sessionsFor, filesFor, addTodo, toggleTodo, deleteProject } from '../data/store.js';
+import * as store from '../data/store.js';
 import { navigate } from '../router.js';
 import { setChatContext } from '../chat.js';
 import { renderSidebar } from '../shell.js';
+import { isDemo, demoSource, demoBanner, demoPath, goToLogin } from '../demo/demo-mode.js';
 
-export function renderProjectHome(mount, slug) {
-  const p = getProject(slug);
+export function renderProjectHome(mount, slug, opts = {}) {
+  const demo = isDemo(opts);
+  const S = demoSource(opts, store);
+  const p = S.getProject(slug);
   if (!p) {
     clear(mount);
     mount.appendChild(h('div', { class: 'empty' }, [
       h('div', { class: 'big', text: '⛩' }),
       h('div', { text: 'No project with that slug.' }),
-      h('button', { style: 'margin-top: 12px', onClick: () => navigate('/projects') }, ['Back to projects']),
+      h('button', { style: 'margin-top: 12px', onClick: () => navigate(demoPath(opts, '/projects')) }, ['Back to projects']),
     ]));
     return;
   }
   setChatContext({ label: p.content.name, where: 'project:' + slug });
   clear(mount);
 
+  if (demo) mount.appendChild(demoBanner());
+
   // Crumbs
   const crumbs = h('div', { class: 'crumbs' }, [
-    h('a', { onClick: () => navigate('/projects') }, ['Projects']),
+    h('a', { onClick: () => navigate(demoPath(opts, '/projects')) }, ['Projects']),
     h('span', { text: '›' }),
     h('span', { class: 'mono', text: slug }),
   ]);
   mount.appendChild(crumbs);
-  mount.appendChild(renderProjectTabs(slug, 'overview'));
+  mount.appendChild(renderProjectTabs(slug, 'overview', opts));
 
   // Header
-  const ms = milestonesFor(slug);
+  const ms = S.milestonesFor(slug);
   const done = ms.filter((m) => m.content.status === 'done').length;
   const pct = ms.length ? Math.round((done / ms.length) * 100) : 0;
-  const todos = todosFor(slug);
+  const todos = S.todosFor(slug);
   const openTodos = todos.filter((t) => !t.content.done).length;
 
   const sourceLink = p.content.sourceUrl
@@ -53,7 +58,7 @@ export function renderProjectHome(mount, slug) {
       h('button', { class: 'ghost', onClick: () => openInSource(p) }, ['Open source ↗']),
       p.content.slug === 'continuum' || p.content.slug === 'torii-quest'
         ? null
-        : h('button', { class: 'ghost', onClick: () => confirmDelete(p) }, ['Delete']),
+        : h('button', { class: 'ghost', onClick: () => (demo ? goToLogin() : confirmDelete(p)) }, ['Delete']),
     ]),
   ]);
   mount.appendChild(header);
@@ -87,14 +92,14 @@ export function renderProjectHome(mount, slug) {
 
   // Two-column: milestones/sessions on the left, todos/files on the right
   const cols = h('div', { class: 'grid-2' }, [
-    h('div', {}, [renderMilestones(slug), renderSessions(slug)]),
-    h('div', {}, [renderTodos(slug), renderFiles(slug)]),
+    h('div', {}, [renderMilestones(slug, S), renderSessions(slug, S)]),
+    h('div', {}, [renderTodos(slug, S, opts), renderFiles(slug, S)]),
   ]);
   mount.appendChild(cols);
 }
 
-function renderMilestones(slug) {
-  const ms = milestonesFor(slug);
+function renderMilestones(slug, S) {
+  const ms = S.milestonesFor(slug);
   const list = h('div', { class: 'milestone-list' });
   for (const m of ms) {
     list.appendChild(h('div', { class: `milestone ${m.content.status}` }, [
@@ -122,8 +127,8 @@ function statusToPill(status) {
   return '';
 }
 
-function renderSessions(slug) {
-  const sessions = sessionsFor(slug);
+function renderSessions(slug, S) {
+  const sessions = S.sessionsFor(slug);
   const list = h('div', { class: 'session-list' });
   for (const s of sessions) {
     list.appendChild(h('div', { class: 'session' }, [
@@ -140,15 +145,19 @@ function renderSessions(slug) {
   ]);
 }
 
-function renderTodos(slug) {
-  const todos = todosFor(slug);
+function renderTodos(slug, S, opts) {
+  const demo = isDemo(opts);
+  const todos = S.todosFor(slug);
   const list = h('div', { class: 'todo-list' });
   for (const t of todos) {
     const row = h('div', { class: `todo ${t.content.done ? 'done' : ''}` }, [
       h('input', {
         type: 'checkbox',
         checked: t.content.done ? 'checked' : false,
-        onChange: () => { toggleTodo(t); renderTodos.refresh?.(slug); },
+        onChange: () => {
+          if (demo) { goToLogin(); return; }
+          store.toggleTodo(t); renderTodos.refresh?.(slug);
+        },
       }),
       h('div', { class: 'text', text: t.content.text }),
     ]);
@@ -161,9 +170,10 @@ function renderTodos(slug) {
     placeholder: '+ add a todo…',
     onKeydown: (e) => {
       if (e.key === 'Enter') {
+        if (demo) { goToLogin(); return; }
         const v = addInput.value.trim();
         if (!v) return;
-        addTodo(slug, v);
+        store.addTodo(slug, v);
         addInput.value = '';
         renderTodos.refresh?.(slug);
       }
@@ -182,8 +192,8 @@ function renderTodos(slug) {
   return card;
 }
 
-function renderFiles(slug) {
-  const files = filesFor(slug);
+function renderFiles(slug, S) {
+  const files = S.filesFor(slug);
   const list = h('div', { class: 'file-list' });
   for (const f of files) {
     list.appendChild(h('div', { class: 'file' }, [
@@ -214,9 +224,9 @@ renderTodos.refresh = function refresh(slug) {
  * arrow-key/aria-controls tab management for a control that just navigates).
  * The active link is marked with aria-current="page".
  */
-export function renderProjectTabs(slug, active) {
+export function renderProjectTabs(slug, active, opts = {}) {
   const tab = (id, label, path) => {
-    const attrs = { class: `view-tab ${active === id ? 'active' : ''}`, href: `#${path}` };
+    const attrs = { class: `view-tab ${active === id ? 'active' : ''}`, href: `#${demoPath(opts, path)}` };
     if (active === id) attrs['aria-current'] = 'page';
     return h('a', attrs, [label]);
   };
@@ -234,7 +244,7 @@ function openInSource(p) {
 
 function confirmDelete(p) {
   if (window.confirm(`Delete "${p.content.name}"? This removes local milestones, todos, sessions, and files for this project.`)) {
-    deleteProject(p.content.slug);
+    store.deleteProject(p.content.slug);
     renderSidebar();
     navigate('/projects');
   }

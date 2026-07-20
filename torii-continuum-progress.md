@@ -9,6 +9,18 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.85-alpha — retention prune + auth-gate hardening + public demo mode (2026-07-20)
+
+Three items in one release. **Not deployed from the subagent** — the parent hands the operator the deploy command block.
+
+- **Retention (ops).** `ops/torii-disk-retention.sh` now prunes `/home/continuum/app.quarantine-*`: keeps the newest `RET_QUARANTINE_KEEP` (default 3) regardless of age, deletes the rest only once older than `RET_QUARANTINE_AGE_DAYS` (default 3). Strictly name-anchored to `app.quarantine-*` with a hard refuse on protected basenames. Ansible knobs `continuum_retention_quarantine_{parent,age_days,keep}`. Fix for the 2026-07-20 incident where nine quarantines (~5.5 GiB) filled `/dev/sda1` and broke the v0.2.84-alpha deploy. Gated on the shell test: `pass=97 fail=0`.
+- **Auth-gate hardening.** Multi-tab sign-out: `endSession()` writes a localStorage sign-out sentinel; a `storage` listener in `main.js` ends the session `localOnly` (no re-broadcast loop) and bounces the tab to login. Extended `shell-signout.test.js`; added a `main.js` route-table source-structure test to `nav-guard.test.js` (default-deny by construction).
+- **Public demo mode.** A signed-out visitor can browse a read-only mockup at `/demo/*` rendered from obviously-fake fixtures (`src/demo/demo-fixtures.js`; every human-facing string carries DEMO/Sample; fake Cashu balance 21042 sats). `nav-guard` marks `/demo` + `/demo/*` public; a signed-in operator landing on a demo route is redirected to the real screen (`demoRedirect`). Views take `{ demo, fixtures }` and swap data source via `demoSource()` — no view fork. Demo makes **zero** agent/network calls (dashboard drops the ProviderCard poll, routstr drops its balance/NWC polls) and gates every CTA to login. Persistent orange "DEMO MODE — fake data" banner; subtle "View demo" peek on the login card. Tests: `demo-fixtures`, `demo-mode-banner`, `demo-no-network` (asserts zero agent calls when `demo:true`), plus nav-guard demo rules.
+
+Test counts this release: root vitest **1348 pass**, agent node:test **307 pass**, ops shell **97 pass**.
+
+## v0.2.84-alpha — Routstr Lightning-QR top-up (2026-07-20)
+
 ## v0.2.84-alpha — MEMORY-ACTIVATION-1: guided owner-signed first-run memory activation (2026-07-20)
 
 **What.** Closed the first-run gap where a signed-in owner on `#/memory` with `unlocked_for_owner:false` saw no obvious way to turn memory on. The Memory view now gates on the **authoritative** per-owner state (`GET /api/memory.data.unlocked_for_owner`) and, when locked, shows a dominant, guided activation panel with a single primary CTA **"Activate private memory"**; unlocked owners bypass it entirely and success reveals the console **in place with no reload**.

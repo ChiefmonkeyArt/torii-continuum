@@ -14,8 +14,9 @@ import { initStore } from './data/store.js';
 import { mountShell, mainContent, renderSidebar, applyStoredTheme } from './shell.js';
 import { route, startRouter, navigate, currentRoute, resolveCurrent } from './router.js';
 import { mountChat } from './chat.js';
-import { isSessionLive } from './auth.js';
-import { rootTarget, guardRedirect, sessionChangeTarget, restoreTarget } from './nav-guard.js';
+import { isSessionLive, endSession, isSignoutBroadcast } from './auth.js';
+import { rootTarget, guardRedirect, sessionChangeTarget, restoreTarget, demoRedirect } from './nav-guard.js';
+import { demoStore } from './demo/demo-fixtures.js';
 
 import { renderAbout } from './views/landing.js';
 import { renderLogin } from './views/login.js';
@@ -49,6 +50,22 @@ function guarded(pattern, handler) {
     // WITHOUT leaving that protected hash sitting in history to return to.
     if (redirect) { navigate(redirect, { replace: true }); return; }
     handler(params);
+  };
+}
+
+// Demo surface wiring. The /demo/* routes are PUBLIC (nav-guard PUBLIC_PATTERNS)
+// so a signed-out visitor can browse the read-only mockup. But a signed-in
+// operator has real data — landing on a demo route sends them to the real
+// equivalent instead (demoRedirect strips the /demo prefix). The handler renders
+// the SAME view as the real route, passing { demo: true, fixtures: demoStore }
+// so the view swaps its data source and gates every mutation to login WITHOUT
+// forking the view. Bare (unguarded) registration is intentional and enforced
+// as allowed by the nav-guard source-structure test.
+function demoRoute(pattern, render) {
+  return (params) => {
+    const redirect = demoRedirect(pattern, isSessionLive());
+    if (redirect) { navigate(redirect, { replace: true }); return; }
+    render(params);
   };
 }
 
@@ -103,6 +120,18 @@ function boot() {
   route('/memory', guarded('/memory', () => { setLandingMode(false); renderMemory(mainContent()); renderSidebar(); }));
   route('/dashboard', guarded('/dashboard', () => { setLandingMode(false); renderDashboard(mainContent()); renderSidebar(); }));
 
+  // Public demo surface (/demo/*). Read-only mockup rendered from obviously-fake
+  // fixtures; no agent calls, every CTA routes to login. A signed-in operator is
+  // redirected to the real screen by demoRoute(). Views take { demo, fixtures }.
+  const demoOpts = { demo: true, fixtures: demoStore };
+  route('/demo', demoRoute('/demo', () => { setLandingMode(false); renderDashboard(mainContent(), demoOpts); renderSidebar(); }));
+  route('/demo/dashboard', demoRoute('/demo/dashboard', () => { setLandingMode(false); renderDashboard(mainContent(), demoOpts); renderSidebar(); }));
+  route('/demo/projects', demoRoute('/demo/projects', () => { setLandingMode(false); renderProjects(mainContent(), demoOpts); renderSidebar(); }));
+  route('/demo/projects/:slug', demoRoute('/demo/projects/:slug', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug, demoOpts); renderSidebar(); }));
+  route('/demo/marketplace', demoRoute('/demo/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent(), demoOpts); renderSidebar(); }));
+  route('/demo/routstr', demoRoute('/demo/routstr', () => { setLandingMode(false); renderRoutstr(mainContent(), demoOpts); renderSidebar(); }));
+  route('/demo/team', demoRoute('/demo/team', () => { setLandingMode(false); renderTeam(mainContent(), demoOpts); renderSidebar(); }));
+
   startRouter();
   mountChat(root);
 
@@ -133,6 +162,19 @@ function boot() {
   // the live session and bounce a logged-out visitor off any protected view.
   window.addEventListener('popstate', enforceRouteAuth);
   window.addEventListener('pageshow', (e) => { if (e && e.persisted) enforceRouteAuth(); });
+
+  // Multi-tab sign-out: when Sign Out fires in another tab it writes the
+  // sign-out sentinel to localStorage, which fires a `storage` event HERE (the
+  // event never fires in the writing tab). React by ending THIS tab's session
+  // localOnly (so we don't re-broadcast and loop) and bouncing to login. The
+  // localOnly endSession also dispatches continuum:session-changed, but the
+  // explicit replace-navigate guarantees the bounce even if that handler order
+  // ever changes.
+  window.addEventListener('storage', (e) => {
+    if (!isSignoutBroadcast(e)) return;
+    endSession({ localOnly: true });
+    navigate('/', { replace: true });
+  });
 
   // Prevent double-tap zoom on the chat button on iOS
   document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });

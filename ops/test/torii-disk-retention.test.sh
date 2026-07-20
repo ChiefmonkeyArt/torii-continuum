@@ -245,6 +245,83 @@ out="$(ret_prune_app_staging "$WORK/home/app.staging" 2>&1 || true)"
   && ok "app.staging removal refuses a symlink (no follow into protected)" || bad "followed a symlinked staging path"
 rm -f "$WORK/home/app.staging"
 
+# ── 7f. app.quarantine-* pruning (age > RET_QUARANTINE_AGE_DAYS, keep floor) ───
+# The cutover role moves the previous live app aside as app.quarantine-<UTC>/.
+# Retain the newest RET_QUARANTINE_KEEP unconditionally; prune the rest only once
+# they age past RET_QUARANTINE_AGE_DAYS. Uses %T@ mtime (touch -d 'N days ago').
+QPARENT="$WORK/qhome"
+seed_quarantines_aged() {   # args: ages-in-days; one unique app.quarantine-* dir per arg
+  rm -rf "$QPARENT"; mkdir -p "$QPARENT"
+  local a i=0 d
+  for a in "$@"; do
+    i=$(( i + 1 ))
+    d="$QPARENT/app.quarantine-i${i}-age${a}d"
+    mkdir -p "$d"
+    touch -d "${a} days ago" "$d"
+  done
+}
+qcount() { find "$QPARENT" -maxdepth 1 -type d -name 'app.quarantine-*' | wc -l | tr -d ' '; }
+
+# (a) The 5.5 GiB bug: nine dirs aged 1..9 days, defaults (age 3 / keep 3) →
+#     keep the three newest (aged 1,2,3), prune the six older-than-3-days.
+seed_quarantines_aged 1 2 3 4 5 6 7 8 9
+reset_accum
+ret_prune_app_quarantines "$QPARENT" >/dev/null
+[[ "$(qcount)" -eq 3 ]] && ok "quarantine prune keeps exactly the newest 3 (kept=$(qcount))" || bad "quarantine prune kept wrong count ($(qcount))"
+[[ "$RET_PRUNED_COUNT" -eq 6 ]] && ok "quarantine prune reclaims the 6 older-than-3-days" || bad "quarantine prune count wrong (${RET_PRUNED_COUNT})"
+[[ -d "$QPARENT/app.quarantine-i1-age1d" && -d "$QPARENT/app.quarantine-i2-age2d" && -d "$QPARENT/app.quarantine-i3-age3d" ]] \
+  && ok "quarantine prune keeps the three newest by mtime" || bad "quarantine prune removed a newest dir"
+[[ ! -d "$QPARENT/app.quarantine-i4-age4d" && ! -d "$QPARENT/app.quarantine-i9-age9d" ]] \
+  && ok "quarantine prune removes the aged (>3d) dirs (5.5 GiB bug fixed)" || bad "quarantine prune kept an aged dir"
+# Idempotent: a second pass reclaims nothing.
+reset_accum
+ret_prune_app_quarantines "$QPARENT" >/dev/null
+[[ "$RET_PRUNED_COUNT" -eq 0 ]] && ok "quarantine prune is idempotent (2nd run reclaims 0)" || bad "quarantine prune not idempotent"
+
+# (b) All quarantines younger than the age threshold → keep everything.
+seed_quarantines_aged 0 1 1 2 2   # five dirs, all < 3 days old
+reset_accum
+ret_prune_app_quarantines "$QPARENT" >/dev/null
+[[ "$RET_PRUNED_COUNT" -eq 0 && "$(qcount)" -eq 5 ]] \
+  && ok "quarantine prune keeps all when every dir is younger than the age threshold" || bad "quarantine prune dropped a young dir"
+
+# (c) Keep-newest-N floor: only 2 quarantines, BOTH aged 30 days → keep both
+#     (never drop below the floor even when all violate the age threshold).
+seed_quarantines_aged 30 30
+reset_accum
+ret_prune_app_quarantines "$QPARENT" >/dev/null
+[[ "$RET_PRUNED_COUNT" -eq 0 && "$(qcount)" -eq 2 ]] \
+  && ok "quarantine prune keep-newest-N floor retains both aged dirs (never below floor)" || bad "quarantine prune dropped below the keep floor"
+
+# (d) %T@ mtime: a single aged dir BEYOND the floor (touch -d '4 days ago')
+#     qualifies as prunable; the floor keeps the three newest.
+seed_quarantines_aged 1 2 3
+mkdir -p "$QPARENT/app.quarantine-prunable"; touch -d '4 days ago' "$QPARENT/app.quarantine-prunable"
+reset_accum
+ret_prune_app_quarantines "$QPARENT" >/dev/null
+[[ ! -d "$QPARENT/app.quarantine-prunable" && "$RET_PRUNED_COUNT" -eq 1 ]] \
+  && ok "quarantine prune drops a 4-days-ago dir beyond the floor (%T@ mtime)" || bad "quarantine prune did not drop the 4-day dir"
+
+# (e) Refuses to touch the live app tree even via a symlinked app.quarantine-evil
+#     pointing at it (safety re-check + protected-path list catch it).
+seed_quarantines_aged 10 20 30 40   # aged enough that non-symlinks would prune
+ln -s "$WORK/home/app" "$QPARENT/app.quarantine-evil"   # points at a PROTECTED path
+touch -d '40 days ago' "$WORK/home/app" 2>/dev/null || true
+reset_accum
+ret_prune_app_quarantines "$QPARENT" >/dev/null 2>&1
+[[ -d "$WORK/home/app" ]] && ok "quarantine prune never follows a symlink into the protected live app tree" || bad "followed symlink and deleted the live app tree!"
+[[ -L "$QPARENT/app.quarantine-evil" ]] && ok "quarantine prune leaves the symlink entry itself untouched (not enumerated)" || bad "quarantine prune deleted/followed the symlink entry"
+rm -f "$QPARENT/app.quarantine-evil"
+
+# (f) Refuses when a candidate is itself a symlink out of the parent (no follow).
+seed_quarantines_aged 15
+ln -s "$WORK/protected" "$QPARENT/app.quarantine-link"
+reset_accum
+ret_prune_app_quarantines "$QPARENT" >/dev/null 2>&1
+[[ -d "$WORK/protected" ]] && ok "quarantine prune never follows a symlink candidate out of the parent" || bad "followed a symlink candidate and deleted its target"
+[[ -L "$QPARENT/app.quarantine-link" ]] && ok "quarantine prune leaves a symlink candidate in place" || bad "quarantine prune removed a symlink candidate"
+rm -f "$QPARENT/app.quarantine-link"
+
 # ── 8. Deploy-log rotation (never touches system/audit logs) ─────────────────
 rm -rf "$RET_LOG_DIR"; mkdir -p "$RET_LOG_DIR"
 # oversized live log gets truncated in place (inode preserved)
@@ -325,6 +402,11 @@ grep -qF 'ret_prune_backups' "$TOOL" && ok "tool defines ret_prune_backups (back
 grep -qF 'ret_prune_app_staging' "$TOOL" && ok "tool defines ret_prune_app_staging (residue removal)" || bad "missing ret_prune_app_staging"
 # app.staging removal is name-anchored so it can never hit the live 'app' tree.
 grep -qF "!= \"app.staging\"" "$TOOL" && ok "app.staging removal is strictly name-anchored" || bad "app.staging removal not name-anchored"
+# v0.2.85-alpha additions: app.quarantine-* pruning, anchored + wired + belt-and-suspenders.
+grep -qF 'ret_prune_app_quarantines' "$TOOL" && ok "tool defines ret_prune_app_quarantines (quarantine retention)" || bad "missing ret_prune_app_quarantines"
+grep -qF 'app.quarantine-*' "$TOOL" && ok "tool anchors quarantine prune to app.quarantine-*" || bad "quarantine glob not anchored"
+grep -qE 'ret_prune_app_quarantines "\$RET_QUARANTINE_PARENT"' "$TOOL" && ok "quarantine prune is wired into the sweep" || bad "quarantine prune not wired into retention_sweep"
+grep -qE 'app\|app\.staging\|\.config\|\.local\|memory\|\.ssh' "$TOOL" && ok "quarantine prune hard-refuses protected basenames (belt + suspenders)" || bad "quarantine prune missing protected-basename refusal"
 
 printf '\n[torii-disk-retention.test] pass=%d fail=%d\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || exit 1

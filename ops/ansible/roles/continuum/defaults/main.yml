@@ -95,9 +95,18 @@ continuum_webroot_backup: "/var/www/torii/continuum.backup-{{ continuum_stamp }}
 #                  pinned clone is ALWAYS kept on top of this; default 1 keeps the
 #                  pinned clone ONLY (a non-current tag is re-cloned on rollback).
 #   keep_backups — newest /root/continuum-backup-* dirs to keep, by mtime.
+#   quarantine_* — the cutover role parks the previous live tree as
+#                  /home/continuum/app.quarantine-<UTC>/ (~617 MiB each) on every
+#                  deploy; nothing pruned them centrally and nine (~5.5 GiB) filled
+#                  /dev/sda1 and broke the v0.2.84-alpha deploy (2026-07-20). The
+#                  sweep now keeps the newest `keep` regardless of age and prunes
+#                  the rest only once older than `age_days`.
 continuum_retention_enabled: true
 continuum_retention_keep_sources: 1
 continuum_retention_keep_backups: 3
+continuum_retention_quarantine_parent: "/home/continuum"
+continuum_retention_quarantine_age_days: 3
+continuum_retention_quarantine_keep: 3
 
 # Anchored roots the post-success sweep is allowed to prune, plus the pin file it
 # reads (line-wise, never sourced) to resolve the current target tag. These MUST

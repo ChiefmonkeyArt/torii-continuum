@@ -614,3 +614,14 @@
 .session-btn.logged-in { border-color: hsl(var(--good) / .35); color: hsl(var(--good)); }
 .session-btn.logged-in:hover { border-color: hsl(var(--destructive) / .55); color: hsl(var(--destructive)); }
 .session-icon { display: inline-flex; align-items: center; }
+
+/* Login card — subtle public demo peek (the ONLY link off the login card).
+   Routes to the read-only /demo mockup; the real app routes stay default-deny. */
+.login-demo-peek { margin-top: 10px; text-align: center; font-size: 12.5px; }
+.login-demo-link {
+  color: hsl(var(--muted-foreground));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color var(--dur) var(--ease);
+}
+.login-demo-link:hover { color: hsl(var(--primary)); }

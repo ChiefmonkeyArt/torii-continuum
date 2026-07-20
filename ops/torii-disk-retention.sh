@@ -74,6 +74,14 @@ set -euo pipefail
 # successful cutover). On success it is normally gone (renamed to the app tree);
 # this is the belt-and-suspenders sweep of any failed-clone residue.
 : "${RET_APP_STAGING:=/home/continuum/app.staging}"
+# The cutover role moves the previous live app aside as
+# <parent>/app.quarantine-<UTC>/ (one per deploy, ~617 MiB each). Never pruned
+# centrally before v0.2.85-alpha, so nine of them (~5.5 GiB) filled the disk and
+# broke the v0.2.84-alpha deploy. Retain the newest KEEP unconditionally; prune
+# the rest only once they age past AGE_DAYS.
+: "${RET_QUARANTINE_PARENT:=/home/continuum}"
+: "${RET_QUARANTINE_AGE_DAYS:=3}"
+: "${RET_QUARANTINE_KEEP:=3}"
 # Keep policy (configurable via the deploy role vars, see defaults/main.yml):
 #   sources  — how many /opt/deploy/torii-continuum-* clones to keep. The current
 #              PINNED clone is ALWAYS kept on top of this; the default 1 means the
@@ -97,6 +105,7 @@ set -euo pipefail
 readonly RET_STAGING_GLOB='torii-final-cutover-*'
 readonly RET_SOURCE_GLOB='torii-continuum-*'
 readonly RET_BACKUP_GLOB='continuum-backup-*'
+readonly RET_QUARANTINE_GLOB='app.quarantine-*'
 # A cutover run is VERIFIED (successful) iff this completed-summary marker exists.
 readonly RET_SUCCESS_MARKER='cutover-summary.txt'
 
@@ -364,6 +373,47 @@ ret_prune_app_staging() {
   ret_reclaim "$real" "$parent" "failed-clone staging residue"
 }
 
+# ret_prune_app_quarantines <parent> [age_days] [keep_newest] — prune the previous
+# live-app trees the cutover role moves aside as <parent>/app.quarantine-<UTC>/.
+# Enumerate depth-1 app.quarantine-* dirs newest-first by mtime (NUL-safe). ALWAYS
+# retain the newest <keep_newest> regardless of age (rollback floor); for every
+# remaining candidate, reclaim it ONLY if its mtime is older than <age_days> days,
+# otherwise retain and log. age_days/keep_newest default to
+# RET_QUARANTINE_AGE_DAYS (3) / RET_QUARANTINE_KEEP (3). Deletion goes through the
+# same ret_safe_target re-check as every other reclaim (never a symlink, parent is
+# exactly the approved parent, never a protected path); additionally, a basename
+# that ever equals a live/state name (app, app.staging, .config, .local, memory,
+# .ssh) is hard-refused as belt + suspenders.
+ret_prune_app_quarantines() {
+  local parent="${1:?}" age_days="${2:-$RET_QUARANTINE_AGE_DAYS}" keep="${3:-$RET_QUARANTINE_KEEP}"
+  [[ -d "$parent" ]] || return 0
+  [[ "$age_days" =~ ^[0-9]+$ ]] || age_days=3
+  [[ "$keep" =~ ^[0-9]+$ ]] || keep=3
+  local now cutoff; now="$(date +%s)"; cutoff=$(( now - age_days * 86400 ))
+  local mtime path base kept=0 mt_int
+  # Newest-first by mtime so the retained floor is the most recent quarantines.
+  while IFS=$'\t' read -r -d '' mtime path; do
+    [[ -n "$path" ]] || continue
+    base="$(basename -- "$path")"
+    case "$base" in
+      app|app.staging|.config|.local|memory|.ssh)
+        ret_warn "refusing to prune a protected-name quarantine entry: ${path}"
+        continue ;;
+    esac
+    kept=$(( kept + 1 ))
+    if (( kept <= keep )); then
+      ret_log "retaining recent app.quarantine (${kept}/${keep}): ${path}"
+      continue
+    fi
+    mt_int="${mtime%.*}"
+    if [[ "$mt_int" =~ ^[0-9]+$ ]] && (( mt_int < cutoff )); then
+      ret_reclaim "$path" "$parent" "aged app.quarantine"
+    else
+      ret_log "retaining app.quarantine newer than ${age_days}d: ${path}"
+    fi
+  done < <(find "$parent" -maxdepth 1 -type d -name "$RET_QUARANTINE_GLOB" -printf '%T@\t%p\0' 2>/dev/null | sort -zrn)
+}
+
 # ret_rotate_logs <dir> — cap deployment-specific logs. Refuses any dir that is
 # not the approved log dir or that resolves onto/under a protected path, so a
 # misconfiguration can never rotate/weaken system or audit logs. Keeps the newest
@@ -471,6 +521,7 @@ retention_sweep() {
   ret_prune_superseded_staging "$RET_STAGING_PARENT"
   ret_prune_backups "$RET_BACKUP_PARENT"
   ret_prune_app_staging "$RET_APP_STAGING"
+  ret_prune_app_quarantines "$RET_QUARANTINE_PARENT"
   ret_rotate_logs "$RET_LOG_DIR"
   ret_report
   ret_log "retention sweep complete."

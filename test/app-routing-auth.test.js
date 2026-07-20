@@ -99,8 +99,8 @@ describe('nav-guard: no redirect loop', () => {
 });
 
 describe('full-app gating: only the login page is public (default-deny)', () => {
-  it('the public allowlist is exactly the root/login path', () => {
-    expect(PUBLIC_PATTERNS).toEqual(['/']);
+  it('the public allowlist is the root/login path plus the demo subtree', () => {
+    expect(PUBLIC_PATTERNS).toEqual(['/', '/demo', '/demo/*']);
     expect(isPublicPattern('/')).toBe(true);
     expect(guardRedirect('/', false)).toBeNull();
   });
