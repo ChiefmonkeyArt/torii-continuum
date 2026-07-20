@@ -275,10 +275,12 @@ describe('wiring: main.js maps the application-first shell (source lock)', () =>
   });
 
   it('every non-root route is wrapped in the central guard() helper', () => {
-    // The guard() wrapper runs guardRedirect(pattern, isSessionLive()) and bails
-    // before the wrapped renderer, so a logged-out visitor never sees the view.
+    // The guard() wrapper rehydrates from persistent storage, then runs
+    // guardRedirect(pattern, live) and bails before the wrapped renderer, so a
+    // logged-out visitor never sees the view.
     expect(main).toMatch(/function guarded\(pattern, handler\)/);
-    expect(main).toMatch(/guardRedirect\(pattern, isSessionLive\(\)\)/);
+    expect(main).toMatch(/const \{ live \} = rehydrateSession\(\)/);
+    expect(main).toMatch(/guardRedirect\(pattern, live\)/);
     for (const p of ['/about', '/projects', '/marketplace', '/routstr', '/team', '/dashboard']) {
       expect(main).toMatch(new RegExp(`route\\(\\s*'${p.replace(/\//g, '\\/')}'\\s*,\\s*guarded\\(\\s*'${p.replace(/\//g, '\\/')}'`));
     }

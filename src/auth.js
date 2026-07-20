@@ -28,6 +28,7 @@ import {
   isLoggedIn,
   logout as clearSession,
   isAgentConfigured,
+  getStoredToken,
 } from './data/agent.js';
 
 const NIP42_KIND = 22242;
@@ -41,15 +42,99 @@ const SIGNER_TIMEOUT_MS = 90_000;
 // only the write itself matters. Never holds a token or any secret.
 export const SIGNOUT_SENTINEL_KEY = 'continuum.signout.v1';
 
+// Non-secret session marker (SESSION-REHYDRATE-1). Written the moment a session
+// becomes active so a freshly-opened tab (or a bfcache restore) can render the
+// authenticated shell immediately from persistent storage instead of flashing a
+// blank right-hand region. The actual HMAC session token lives in
+// continuum.session.v1 (agent.js); that slot already holds a signed string, so
+// this display-only marker { npub, connected_at } gets its OWN key rather than
+// clobbering the token. npub is the signer pubkey hex (display shortcode source,
+// no bech32 dep); connected_at is unix seconds. Never a secret key.
+export const SESSION_MARKER_KEY = 'continuum.session.meta.v1';
+
 /**
- * Is this `storage` event a cross-tab sign-out broadcast? True only for a write
- * (newValue set) to the sentinel key — a removeItem/clear (newValue null) is
- * ignored so clearing storage never spuriously signs a tab out. Pure + exported
- * so the listener contract is unit-tested without a real StorageEvent.
+ * Persist (or with a null/falsey arg, clear) the session marker. Storage-only,
+ * failure-swallowing so a blocked localStorage never breaks auth flow.
+ * @param {{npub?: string, connected_at?: number}|null} marker
+ */
+export function writeSessionMarker(marker) {
+  try {
+    if (!marker) { localStorage.removeItem(SESSION_MARKER_KEY); return; }
+    localStorage.setItem(SESSION_MARKER_KEY, JSON.stringify({
+      npub: String(marker.npub || ''),
+      connected_at: Number(marker.connected_at) || Math.floor(Date.now() / 1000),
+    }));
+  } catch (_e) {}
+}
+
+/**
+ * Read the session marker back, or null when absent/corrupt. Pure w.r.t.
+ * storage; never throws.
+ * @returns {{npub: string, connected_at: number}|null}
+ */
+export function readSessionMarker() {
+  try {
+    const raw = localStorage.getItem(SESSION_MARKER_KEY);
+    if (!raw) return null;
+    const m = JSON.parse(raw);
+    if (!m || typeof m !== 'object') return null;
+    return { npub: String(m.npub || ''), connected_at: Number(m.connected_at) || 0 };
+  } catch { return null; }
+}
+
+/**
+ * Rehydrate session view-state from persistent storage. Run on every top-level
+ * view mount and on a bfcache pageshow restore so a fresh tab is authoritative
+ * immediately: liveness derives from the persisted token (isSessionLive reads
+ * localStorage), and the display marker is returned alongside so a guarded view
+ * renders the authenticated shell with no blank flash. A marker with no live
+ * token is stale (token expired, or cleared by another tab) and is dropped so
+ * the UI never claims a session it cannot back.
+ * @returns {{live: boolean, marker: ({npub: string, connected_at: number}|null)}}
+ */
+export function rehydrateSession() {
+  const live = isSessionLive();
+  const marker = readSessionMarker();
+  if (marker && !live) { writeSessionMarker(null); }
+  return { live, marker: live ? marker : null };
+}
+
+/**
+ * Is this `storage` event a cross-tab sign-out broadcast? True for a write
+ * (newValue set) to the sign-out sentinel key, OR for the session marker being
+ * cleared (newValue null) — both mean another tab ended the session and this
+ * one must follow. A write to the marker (a fresh sign-in elsewhere) is NOT a
+ * sign-out. Pure + exported so the listener contract is unit-tested without a
+ * real StorageEvent.
  * @param {{key?: string|null, newValue?: string|null}} event
  */
 export function isSignoutBroadcast(event) {
-  return !!event && event.key === SIGNOUT_SENTINEL_KEY && event.newValue != null;
+  if (!event) return false;
+  if (event.key === SIGNOUT_SENTINEL_KEY && event.newValue != null) return true;
+  if (event.key === SESSION_MARKER_KEY && event.newValue == null) return true;
+  return false;
+}
+
+// Browsers never fire `storage` in the tab that wrote the key — the event is
+// delivered only to OTHER same-origin tabs. So a sign-out in the writer tab that
+// relied purely on the storage listener would do nothing locally. We already
+// dispatch continuum:session-changed for the same-tab path, but we ALSO dispatch
+// a synthetic same-tab `storage` event so the identical listener runs in the
+// writer, keeping the sign-out path uniform across every tab. Guarded for the
+// jsdom-free/test environment where window or StorageEvent may be absent.
+function dispatchSameTabSignout() {
+  try {
+    if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+    let ev;
+    if (typeof StorageEvent === 'function') {
+      ev = new StorageEvent('storage', { key: SIGNOUT_SENTINEL_KEY, newValue: String(Date.now()) });
+    } else if (typeof Event === 'function') {
+      ev = new Event('storage');
+      ev.key = SIGNOUT_SENTINEL_KEY;
+      ev.newValue = String(Date.now());
+    } else { return; }
+    window.dispatchEvent(ev);
+  } catch (_e) {}
 }
 
 // Race guard: at most one login attempt in flight across ALL surfaces.
@@ -77,8 +162,12 @@ export function isSessionLive() { return isLoggedIn(); }
  */
 export function endSession(opts = {}) {
   clearSession();
+  writeSessionMarker(null);
   if (!opts.localOnly) {
     try { localStorage.setItem(SIGNOUT_SENTINEL_KEY, String(Date.now())); } catch (_e) {}
+    // Fire the same-tab storage fallback so the writer tab's own storage
+    // listener runs (browsers suppress the native event on the writer).
+    dispatchSameTabSignout();
   }
   document.dispatchEvent(new CustomEvent('continuum:session-changed'));
 }
@@ -189,7 +278,12 @@ export async function startLogin(opts = {}) {
       return;
     }
 
-    // 4. Success → let the router navigate to the dashboard.
+    // 4. Success → persist the non-secret session marker (so a fresh tab can
+    // rehydrate the authenticated shell) then let the router navigate to the
+    // dashboard. The pubkey is the third field of the HMAC token
+    // (iat.exp.pubkey.sig) — display-only, never the secret key.
+    const pubkey = (getStoredToken() || '').split('.')[2] || '';
+    writeSessionMarker({ npub: pubkey, connected_at: Math.floor(Date.now() / 1000) });
     say('done', 'Signed in.', { done: true });
     document.dispatchEvent(new CustomEvent('continuum:session-changed'));
   } finally {
