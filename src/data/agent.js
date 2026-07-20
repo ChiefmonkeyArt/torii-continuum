@@ -197,6 +197,22 @@ export async function walletReceive(token) {
   return req('POST', '/api/wallet/receive', { token });
 }
 
+// ─── Lightning-QR top-up (v0.2.83-alpha) ────────────────────
+//
+// Two funding sources for the Routstr top-up modal. The Cashu mint-quote path
+// mints proofs into the agent's Cashu wallet on payment (balance rises); the
+// NWC path issues an invoice on the linked NWC wallet (sats land there, NOT in
+// Cashu). All four share the same offline short-circuit as the wrappers above.
+
+/** POST /api/wallet/mint-quote — issue a Cashu mint-quote BOLT11 for `amountSats`. */
+export async function walletMintQuote(amountSats, mint)  { return req('POST', '/api/wallet/mint-quote', { amount_sats: amountSats, mint }); }
+/** GET /api/wallet/mint-quote/:quote — poll a mint quote; mints proofs on PAID. */
+export async function walletMintQuoteStatus(quote)       { return req('GET',  `/api/wallet/mint-quote/${encodeURIComponent(quote)}`); }
+/** POST /api/wallet/nwc-invoice — issue a BOLT11 on the connected NWC wallet. */
+export async function walletNwcInvoice(amountSats, memo) { return req('POST', '/api/wallet/nwc-invoice', { amount_sats: amountSats, memo }); }
+/** GET /api/wallet/nwc-invoice/:hash — poll NWC invoice settlement (never mints). */
+export async function walletNwcInvoiceStatus(hash)       { return req('GET',  `/api/wallet/nwc-invoice/${encodeURIComponent(hash)}`); }
+
 /**
  * GET /api/wallet/health — CONT-HEALTH-2. Non-mutating wallet + mint health.
  * Admin-gated; returns { configured, overall, checked_at, mints:[...] } with
