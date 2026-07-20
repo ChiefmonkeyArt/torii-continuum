@@ -6,9 +6,22 @@ import { getRoutstr, updateRoutstr } from '../data/store.js';
 import { setChatContext } from '../chat.js';
 import {
   walletBalance, walletReceive, isAgentConfigured,
+  walletMintQuote, walletMintQuoteStatus, walletNwcInvoice, walletNwcInvoiceStatus,
   nwcStatus, nwcConnect, nwcTest, nwcDisconnect,
 } from '../data/agent.js';
+import { renderQR } from './qr.js';
 import { isSessionLive, startLogin } from '../auth.js';
+
+// Lightning-QR top-up (v0.2.83-alpha). Preset amounts, default, and the hard
+// client-side cap. The agent independently re-enforces cashu.max_mint_sats, so
+// this cap is only a UX guard against fat-fingered amounts.
+const TOPUP_PRESETS = [500, 1000, 5000, 21000];
+const TOPUP_DEFAULT_SATS = 1000;
+const TOPUP_MAX_SATS = 100_000;
+// Poll the invoice every 2s; regenerate/expire the QR after this fallback when
+// the agent reports no explicit expiry.
+const TOPUP_POLL_MS = 2000;
+const TOPUP_FALLBACK_EXPIRY_SEC = 600;
 
 // The chat dock sets this sessionStorage flag before navigating here so the
 // operator lands straight on the Cashu receive form after tapping "Top Up".
@@ -147,12 +160,318 @@ function renderCashuCard(c) {
     h('h3', { text: 'Cashu balance' }),
     hero,
     h('div', { class: 'wallet-card-actions', style: 'margin-top: 14px;' }, [topUpBtn]),
-    renderTopUpForm(),
   ]);
 }
 
-// Inline Cashu-token receive form (POST /api/wallet/receive {token}). Hidden by
-// default; the "Top Up" button here (and the chat dock) reveals + focuses it.
+// ─── Top Up modal (v0.2.83-alpha): Lightning-QR primary, paste-token fallback ─
+//
+// State machine per the brief: idle → generating → waiting → paid → done, plus
+// expired and error. A single setInterval polls the invoice every 2s and is
+// always cleared on close/success/expiry. The primary path shows a QR of a
+// BOLT11 invoice (Cashu mint-quote OR NWC-issued); the secondary link reveals
+// the legacy paste-a-Cashu-token form so no prior behaviour regresses.
+
+// Live handle to the open top-up modal so toggleTopUp(false) and the chat-dock
+// handoff can address it without a re-render.
+let topUpModal = null;
+
+// The "Top Up" button (here and from the chat dock) opens the QR modal.
+function toggleTopUp(show) {
+  if (show) openTopUpModal();
+  else if (topUpModal) { topUpModal.close(); topUpModal = null; }
+}
+
+function maybeFocusTopUp() {
+  let flag = null;
+  try { flag = sessionStorage.getItem(FOCUS_TOPUP_KEY); } catch (_e) {}
+  if (!flag) return;
+  try { sessionStorage.removeItem(FOCUS_TOPUP_KEY); } catch (_e) {}
+  toggleTopUp(true);
+}
+
+function openTopUpModal() {
+  if (topUpModal) return; // already open
+  if (!isAgentConfigured() || !isSessionLive()) { startLogin(); return; }
+
+  // ── Mutable modal state ──
+  let source = 'cashu';        // 'cashu' | 'nwc'
+  let amount = TOPUP_DEFAULT_SATS;
+  let selectedMint = null;     // optional mint url (Cashu, when >1 configured)
+  let nwcConnected = false;    // gates the NWC source until a wallet is linked
+  let pollHandle = null;
+  let countdownHandle = null;
+
+  const stopTimers = () => {
+    if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
+    if (countdownHandle) { clearInterval(countdownHandle); countdownHandle = null; }
+  };
+
+  // ── Amount input + preset chips ──
+  const amountInput = h('input', {
+    type: 'number', min: 1, max: TOPUP_MAX_SATS, step: 100, value: String(amount),
+    class: 'topup-amount', style: 'width: 100%;',
+  });
+  const clampAmount = () => {
+    let v = parseInt(amountInput.value || '0', 10);
+    if (!Number.isFinite(v) || v < 1) v = 1;
+    if (v > TOPUP_MAX_SATS) v = TOPUP_MAX_SATS;
+    amount = v;
+    amountInput.value = String(v);
+    syncChips();
+  };
+  amountInput.addEventListener('change', clampAmount);
+
+  const chips = TOPUP_PRESETS.map((sats) => {
+    const chip = h('button', { class: 'topup-chip', type: 'button' }, [formatSats(sats)]);
+    chip.addEventListener('click', () => { amount = sats; amountInput.value = String(sats); syncChips(); });
+    return chip;
+  });
+  function syncChips() {
+    chips.forEach((chip, i) => {
+      chip.classList.toggle('active', TOPUP_PRESETS[i] === amount);
+    });
+  }
+  const chipRow = h('div', { class: 'topup-chips' }, chips);
+
+  // ── Optional mint selector (only shown when >1 mint is configured) ──
+  const mintSelect = h('select', { class: 'topup-mint', style: 'width: 100%;' });
+  const mintRow = h('div', { class: 'form-row', style: 'display:none;' }, [
+    h('label', { text: 'Mint' }), mintSelect,
+  ]);
+  mintSelect.addEventListener('change', () => { selectedMint = mintSelect.value || null; });
+
+  // ── Source selector (Cashu / NWC). NWC disabled until a wallet is linked. ──
+  const cashuRadio = h('input', { type: 'radio', name: 'topup-source', value: 'cashu', checked: true });
+  const nwcRadio = h('input', { type: 'radio', name: 'topup-source', value: 'nwc' });
+  const nwcLabel = h('label', { class: 'topup-source-opt', title: 'Link an NWC wallet on the NWC card to enable this.' }, [
+    nwcRadio, ' NWC wallet',
+  ]);
+  const setSource = (s) => { source = s; };
+  cashuRadio.addEventListener('change', () => { if (cashuRadio.checked) setSource('cashu'); });
+  nwcRadio.addEventListener('change', () => { if (nwcRadio.checked) setSource('nwc'); });
+  const sourceRow = h('div', { class: 'topup-sources' }, [
+    h('label', { class: 'topup-source-opt' }, [cashuRadio, ' Cashu mint invoice']),
+    nwcLabel,
+  ]);
+
+  // ── Invoice panel (QR + copy + countdown + status) ──
+  const qrWrap = h('div', { class: 'topup-qr' });
+  const copyBtn = h('button', { class: 'topup-copy', type: 'button', style: 'display:none;' }, ['Copy invoice']);
+  const countdownEl = h('div', { class: 'topup-countdown muted', style: 'display:none;' });
+  const invoicePanel = h('div', { class: 'topup-invoice', style: 'display:none;' }, [qrWrap, copyBtn, countdownEl]);
+
+  const status = h('div', { class: 'topup-status muted', style: 'min-height: 20px; margin-top: 10px;', text: '' });
+
+  const genBtn = h('button', { class: 'primary', type: 'button' }, ['Generate invoice']);
+  genBtn.addEventListener('click', () => { clampAmount(); startGenerate(); });
+
+  // ── Secondary: paste-a-Cashu-token fallback (legacy flow, preserved) ──
+  const pasteLink = h('button', { class: 'topup-paste-link linkish', type: 'button' }, ['Have a Cashu token? Paste it']);
+  const pasteForm = renderTopUpForm();
+  pasteLink.addEventListener('click', () => {
+    const showing = pasteForm.style.display !== 'none';
+    pasteForm.style.display = showing ? 'none' : 'block';
+    if (!showing && topUpInputEl) topUpInputEl.focus();
+  });
+
+  const idleControls = h('div', { class: 'topup-controls' }, [
+    sourceRow,
+    h('div', { class: 'form-row', style: 'margin-top: 12px;' }, [
+      h('label', { text: 'Amount (sats)' }), amountInput,
+    ]),
+    chipRow,
+    mintRow,
+    h('div', { style: 'display:flex; justify-content:flex-end; margin-top: 12px;' }, [genBtn]),
+  ]);
+
+  const body = h('div', { class: 'topup-modal-body' }, [
+    idleControls,
+    invoicePanel,
+    status,
+    h('div', { class: 'topup-fallback', style: 'margin-top: 16px; border-top: 1px solid hsl(var(--border)); padding-top: 12px;' }, [
+      pasteLink,
+      pasteForm,
+    ]),
+  ]);
+
+  syncChips();
+
+  topUpModal = openModal({
+    title: 'Top up Routstr balance',
+    subtitle: 'Scan the QR with a Lightning wallet, or paste a Cashu token.',
+    body,
+    onClose: () => { stopTimers(); topUpModal = null; },
+  });
+
+  // Discover mints + NWC capability so the source/mint controls reflect reality.
+  primeControls();
+
+  // ── State transitions ──
+
+  function setStatus(text, kind) {
+    status.textContent = text || '';
+    status.style.color = kind === 'error' ? 'hsl(var(--destructive))'
+      : kind === 'ok' ? 'hsl(var(--ok, 142 70% 45%))' : '';
+  }
+
+  async function primeControls() {
+    // NWC: enable the source only when a connected wallet can make invoices.
+    try {
+      const s = await nwcStatus();
+      const d = s.ok ? (s.data || {}) : {};
+      nwcConnected = d.connected === true && d.can_make_invoice !== false;
+      nwcRadio.disabled = !nwcConnected;
+      nwcLabel.classList.toggle('disabled', !nwcConnected);
+      nwcLabel.title = nwcConnected
+        ? 'Issue the invoice on your linked NWC wallet.'
+        : 'Link an NWC wallet on the NWC card to enable this.';
+    } catch (_e) { nwcRadio.disabled = true; }
+
+    // Cashu: offer a mint dropdown only when more than one mint is configured.
+    try {
+      const b = await walletBalance();
+      const perMint = b.ok && b.data && typeof b.data.per_mint === 'object' ? b.data.per_mint : null;
+      const mints = perMint ? Object.keys(perMint) : [];
+      if (mints.length > 1) {
+        clear(mintSelect);
+        mintSelect.appendChild(h('option', { value: '' }, ['Auto (recommended)']));
+        for (const m of mints) mintSelect.appendChild(h('option', { value: m }, [hostOf(m)]));
+        mintRow.style.display = '';
+      }
+    } catch (_e) {}
+  }
+
+  function toIdle() {
+    stopTimers();
+    invoicePanel.style.display = 'none';
+    copyBtn.style.display = 'none';
+    countdownEl.style.display = 'none';
+    clear(qrWrap);
+    idleControls.style.display = '';
+    genBtn.disabled = false;
+    setStatus('');
+  }
+
+  async function startGenerate() {
+    if (source === 'nwc' && !nwcConnected) { setStatus('Connect an NWC wallet first.', 'error'); return; }
+    genBtn.disabled = true;
+    idleControls.style.display = 'none';
+    setStatus('Requesting an invoice…');
+
+    const res = source === 'cashu'
+      ? await walletMintQuote(amount, selectedMint || undefined)
+      : await walletNwcInvoice(amount, 'Routstr top-up');
+
+    if (!res.ok) { setStatus(`Could not create invoice: ${res.reason}`, 'error'); addRetry(); return; }
+
+    const d = res.data || {};
+    const bolt11 = source === 'cashu' ? d.request : d.invoice;
+    const id = source === 'cashu' ? d.quote : d.payment_hash;
+    if (!bolt11 || !id) { setStatus('Agent returned an incomplete invoice.', 'error'); addRetry(); return; }
+
+    showInvoice(bolt11, id, d.expiry);
+  }
+
+  function showInvoice(bolt11, id, expiry) {
+    invoicePanel.style.display = '';
+    clear(qrWrap);
+    try {
+      // BOLT11 is uppercased so the QR uses the denser alphanumeric mode.
+      qrWrap.appendChild(renderQR(`lightning:${bolt11.toUpperCase()}`, { size: 240, ecl: 'M' }));
+    } catch (_e) {
+      qrWrap.appendChild(h('div', { class: 'muted', text: 'Could not render QR — copy the invoice instead.' }));
+    }
+    copyBtn.style.display = '';
+    copyBtn.textContent = 'Copy invoice';
+    copyBtn.onclick = async () => {
+      try { await navigator.clipboard.writeText(bolt11); copyBtn.textContent = 'Copied ✓'; }
+      catch (_e) { copyBtn.textContent = 'Copy failed'; }
+      setTimeout(() => { copyBtn.textContent = 'Copy invoice'; }, 1500);
+    };
+    setStatus('Waiting for payment…');
+    startCountdown(expiry);
+    startPoll(id);
+  }
+
+  function startCountdown(expiry) {
+    // Cashu expiry is an absolute unix timestamp; NWC may return a duration.
+    const now = Math.floor(Date.now() / 1000);
+    let deadline;
+    if (Number.isFinite(expiry) && expiry > now + 1) deadline = expiry;          // absolute
+    else if (Number.isFinite(expiry) && expiry > 0) deadline = now + expiry;      // duration
+    else deadline = now + TOPUP_FALLBACK_EXPIRY_SEC;
+
+    countdownEl.style.display = '';
+    const render = () => {
+      const left = deadline - Math.floor(Date.now() / 1000);
+      if (left <= 0) { toExpired(); return; }
+      const m = Math.floor(left / 60), s = left % 60;
+      countdownEl.textContent = `Expires in ${m}:${String(s).padStart(2, '0')}`;
+    };
+    render();
+    countdownHandle = setInterval(render, 1000);
+  }
+
+  function startPoll(id) {
+    pollHandle = setInterval(async () => {
+      const r = source === 'cashu'
+        ? await walletMintQuoteStatus(id)
+        : await walletNwcInvoiceStatus(id);
+      if (!r.ok) return; // transient; keep polling until expiry
+      if (r.data?.paid === true) toPaid(r.data);
+    }, TOPUP_POLL_MS);
+  }
+
+  async function toPaid(data) {
+    stopTimers();
+    countdownEl.style.display = 'none';
+    copyBtn.style.display = 'none';
+    setStatus('Payment received — updating balance…', 'ok');
+
+    // Prefer the server-reported new balance (Cashu); otherwise read it back.
+    let newBal = Number.isFinite(data?.new_balance_sats) ? data.new_balance_sats : null;
+    if (newBal == null) {
+      const b = await walletBalance();
+      newBal = b.ok ? readBalanceSats(b.data) : null;
+    }
+    if (newBal != null) {
+      updateRoutstr({ connected: true, cashuBalanceSats: newBal });
+      if (balanceNumEl && balanceNumEl.isConnected) balanceNumEl.textContent = formatSats(newBal);
+      setStatus(`Paid. New balance: ${formatSats(newBal)} sats.`, 'ok');
+    } else {
+      setStatus('Paid. Balance will refresh shortly.', 'ok');
+    }
+    // done: offer to close.
+    const doneBtn = h('button', { class: 'primary', type: 'button', style: 'margin-top: 12px;' }, ['Done']);
+    doneBtn.addEventListener('click', () => toggleTopUp(false));
+    invoicePanel.appendChild(doneBtn);
+  }
+
+  function toExpired() {
+    stopTimers();
+    countdownEl.textContent = 'Invoice expired';
+    countdownEl.style.display = '';
+    copyBtn.style.display = 'none';
+    setStatus('This invoice expired before payment.', 'error');
+    addRetry();
+  }
+
+  function addRetry() {
+    genBtn.disabled = false;
+    const retry = h('button', { class: 'primary', type: 'button', style: 'margin-top: 12px;' }, ['Generate a new invoice']);
+    retry.addEventListener('click', () => { retry.remove(); toIdle(); });
+    (invoicePanel.style.display === 'none' ? status.parentNode : invoicePanel).appendChild(retry);
+  }
+}
+
+function hostOf(u) {
+  try { return new URL(u).host; } catch { return String(u); }
+}
+
+// Legacy inline Cashu-token receive form (POST /api/wallet/receive {token}).
+// Retained as the secondary "paste a token" path inside the top-up modal so the
+// original redeem behaviour never regresses. Hidden until the paste link opens
+// it. Sets the module-level topUpInputEl so the modal can focus it.
 function renderTopUpForm() {
   topUpInputEl = h('textarea', {
     rows: 4,
@@ -161,8 +480,7 @@ function renderTopUpForm() {
   });
   const status = h('div', { class: 'muted', style: 'font-size: 12px; min-height: 18px; margin-top: 6px;', text: 'Paste a Cashu token from your wallet. Only whitelisted mints will be accepted.' });
   const submit = h('button', { class: 'primary' }, ['Redeem to agent']);
-  const cancel = h('button', { onClick: () => toggleTopUp(false) }, ['Cancel']);
-  const actions = h('div', { style: 'display:flex; gap: 8px; justify-content: flex-end; margin-top: 12px;' }, [cancel, submit]);
+  const actions = h('div', { style: 'display:flex; gap: 8px; justify-content: flex-end; margin-top: 12px;' }, [submit]);
 
   submit.addEventListener('click', async () => {
     const tok = (topUpInputEl.value || '').trim();
@@ -206,20 +524,6 @@ function renderTopUpForm() {
     actions,
   ]);
   return topUpSectionEl;
-}
-
-function toggleTopUp(show) {
-  if (!topUpSectionEl) return;
-  topUpSectionEl.style.display = show ? 'block' : 'none';
-  if (show && topUpInputEl) topUpInputEl.focus();
-}
-
-function maybeFocusTopUp() {
-  let flag = null;
-  try { flag = sessionStorage.getItem(FOCUS_TOPUP_KEY); } catch (_e) {}
-  if (!flag) return;
-  try { sessionStorage.removeItem(FOCUS_TOPUP_KEY); } catch (_e) {}
-  toggleTopUp(true);
 }
 
 // ─── Card 2: NWC wallet (NIP-47 Nostr Wallet Connect) ───────────────────────

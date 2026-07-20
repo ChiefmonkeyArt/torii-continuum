@@ -257,9 +257,24 @@ async function resolveBotId(ownerNpub) {
 // so the onboarding logic stays testable with an injected client.
 const secretStore = createSecretStore(cfg, { log: app.log });
 const routstrProvider = createRoutstrProvider(cfg, { log: app.log });
+
+// Disk-backed marker store for NWC-issued top-up invoices (v0.2.83-alpha). An
+// audit record only — the payment hash is validated hex before it is echoed into
+// a filename so a lookup param can never traverse the path.
+const NWC_INVOICE_DIR = join(AGENT_ROOT, 'memory', 'wallet', 'nwc-invoices');
+const HEX_HASH_RE = /^[0-9a-f]{16,128}$/i;
+const nwcInvoiceStore = {
+  async save(hash, data) {
+    if (!HEX_HASH_RE.test(String(hash || ''))) return;
+    await mkdir(NWC_INVOICE_DIR, { recursive: true, mode: 0o700 });
+    await writeFile(join(NWC_INVOICE_DIR, `${hash}.json`), JSON.stringify(data, null, 2), { mode: 0o600 });
+  },
+};
+
 const onboarding = createOnboarding({
   secretStore,
   routstrProvider,
+  nwcInvoices: nwcInvoiceStore,
   log: app.log,
   connectNwc: async (parsed) => {
     const transport = await createLiveNwcTransport(parsed, { log: app.log });
@@ -573,6 +588,52 @@ app.post('/api/wallet/receive', { preHandler: requireAdmin }, async (req, reply)
   if (!result.ok) return reply.code(400).send({ error: result.reason });
   return { ok: true, added_sats: result.added_sats, mint: result.mint };
 });
+
+// ─────────────────────────────────────────────────────────────
+// Lightning-QR top-up (v0.2.83-alpha) — admin-gated, same middleware +
+// rate-limit posture as the other /api/wallet/* and onboarding routes.
+//
+//   POST /api/wallet/mint-quote        — issue a Cashu mint-quote BOLT11
+//   GET  /api/wallet/mint-quote/:quote — poll it; mints proofs on PAID
+//   POST /api/wallet/nwc-invoice       — issue a BOLT11 on the NWC wallet
+//   GET  /api/wallet/nwc-invoice/:hash — poll NWC settlement (never mints)
+// ─────────────────────────────────────────────────────────────
+app.post(
+  '/api/wallet/mint-quote',
+  { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/wallet/mint-quote') },
+  async (req, reply) => {
+    const r = await wallet.createMintQuote({
+      amountSats: req.body?.amount_sats,
+      mintUrl: req.body?.mint,
+      sessionId: req.session?.npub || 'default',
+    });
+    if (!r.ok) return reply.code(400).send({ error: r.reason });
+    return { ok: true, quote: r.quote, request: r.request, expiry: r.expiry, mint: r.mint, amount_sats: r.amount_sats };
+  },
+);
+
+app.get('/api/wallet/mint-quote/:quote', { preHandler: requireAdmin }, async (req, reply) => {
+  const r = await wallet.checkMintQuote({ quote: req.params.quote, sessionId: req.session?.npub || 'default' });
+  if (!r.ok) return reply.code(400).send({ error: r.reason });
+  return r;
+});
+
+app.post(
+  '/api/wallet/nwc-invoice',
+  { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/wallet/nwc-invoice') },
+  async (req, reply) => sendOnboarding(
+    reply,
+    await onboarding.nwcMakeInvoice({
+      amountSats: req.body?.amount_sats,
+      memo: req.body?.memo,
+      maxSats: cfg.cashu?.max_mint_sats,
+    }),
+  ),
+);
+
+app.get('/api/wallet/nwc-invoice/:hash', { preHandler: requireAdmin }, async (req, reply) =>
+  sendOnboarding(reply, await onboarding.nwcLookupInvoice({ paymentHash: req.params.hash })),
+);
 
 // GET /api/wallet/health — CONT-HEALTH-2. Non-mutating wallet + mint health.
 // Admin-gated: it reveals mint identity + balance validation. Never spends,

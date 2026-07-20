@@ -24,7 +24,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { Mint, Wallet, getEncodedToken, getDecodedToken, CheckStateEnum } from '@cashu/cashu-ts';
+import { Mint, Wallet, getEncodedToken, getDecodedToken, CheckStateEnum, MintQuoteState } from '@cashu/cashu-ts';
 import { agentRoot } from './config.mjs';
 
 // Non-reversible short id for a mint URL — lets health output/logs reference a
@@ -51,6 +51,18 @@ function sanitizeReason(e) {
   if (/404|not found/i.test(msg)) return 'mint_not_found';
   if (/40[13]|unauthor|forbidden/i.test(msg)) return 'mint_refused';
   return 'mint_error';
+}
+
+// Redact a BOLT11 for logs: first 10 + last 6 chars only, never the full
+// invoice. A short/absent value collapses to a fixed label so nothing leaks.
+function redactBolt11(b) {
+  return typeof b === 'string' && b.length > 20 ? `${b.slice(0, 10)}…${b.slice(-6)}` : 'invoice';
+}
+
+// A mint quote id is echoed into a filename and a route param, so pin it to a
+// conservative charset before it ever touches disk (no path traversal).
+function isSafeQuoteId(q) {
+  return typeof q === 'string' && q.length > 0 && q.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(q);
 }
 
 const WALLET_DIR = join(agentRoot(), 'memory', 'wallet');
@@ -362,7 +374,167 @@ export async function createWallet(cfg, log, deps = {}) {
     return { configured: true, overall: deriveOverall(out), checked_at: checkedAt, mints: out };
   }
 
-  return { balance, receive, send, health, mints: [...mints.keys()] };
+  // ── Lightning-QR top-up: Cashu mint quotes (v0.2.83-alpha) ─────────────────
+  //
+  // A mint quote is a BOLT11 the operator pays from a phone; once the mint marks
+  // it PAID we mint proofs into that mint's proof store, so the Routstr balance
+  // rises. Storage: a minimal marker per quote at <walletDir>/quotes/<quote>.json
+  // (chmod 600) is the idempotency anchor — `minted:true` is written BEFORE the
+  // proofs are appended so a crash mid-mint costs one lost attempt, never a
+  // double-mint (the mint is also idempotent by quote id per NUT-04).
+
+  const quotesDir = join(walletDir, 'quotes');
+  const maxMintSats = Number.isFinite(cfg.cashu?.max_mint_sats) && cfg.cashu.max_mint_sats > 0
+    ? cfg.cashu.max_mint_sats
+    : 100_000;
+
+  // In-process, per-session rate limits (reset on restart, by design):
+  //   • at most 5 open (unsettled) quotes per session at once, and
+  //   • at most 1 status check per quote per 1.5s.
+  const openQuotesBySession = new Map(); // sessionId → Set<quote>
+  const lastCheckByQuote = new Map();    // quote → epoch ms
+
+  async function readQuoteMarker(quote) {
+    try {
+      const raw = await readFile(join(quotesDir, `${quote}.json`), 'utf8');
+      return JSON.parse(raw);
+    } catch (e) {
+      if (e.code === 'ENOENT') return null;
+      throw e;
+    }
+  }
+
+  async function writeQuoteMarker(quote, marker) {
+    await mkdir(quotesDir, { recursive: true, mode: 0o700 });
+    await writeFile(join(quotesDir, `${quote}.json`), JSON.stringify(marker, null, 2), { mode: 0o600 });
+  }
+
+  // Pick the mint to quote against: the caller's choice if whitelisted+loadable,
+  // else the first whitelisted mint that loads (reachable). Reuses ensureLoaded
+  // as the lightweight liveness signal so we never quote against a dead mint.
+  async function pickHealthyMint(preferredUrl) {
+    if (preferredUrl && mints.has(preferredUrl)) {
+      const w = mints.get(preferredUrl);
+      try { await ensureLoaded(w); return { url: preferredUrl, wallet: w }; } catch { /* fall through */ }
+    }
+    for (const [url, w] of mints) {
+      try { await ensureLoaded(w); return { url, wallet: w }; } catch { /* try next */ }
+    }
+    return null;
+  }
+
+  async function createMintQuote({ amountSats, mintUrl, sessionId = 'default' } = {}) {
+    if (!Number.isInteger(amountSats) || amountSats <= 0) {
+      return { ok: false, reason: 'amount_sats must be a positive integer' };
+    }
+    if (amountSats > maxMintSats) {
+      return { ok: false, reason: `amount exceeds the max of ${maxMintSats} sats` };
+    }
+    const openSet = openQuotesBySession.get(sessionId) || new Set();
+    if (openSet.size >= 5) {
+      return { ok: false, reason: 'too many open quotes; let one settle or expire first' };
+    }
+    const picked = await pickHealthyMint(mintUrl);
+    if (!picked) return { ok: false, reason: 'no healthy whitelisted mint is available' };
+
+    let resp;
+    try {
+      resp = await picked.wallet.createMintQuoteBolt11(amountSats);
+    } catch (e) {
+      return { ok: false, reason: `mint quote failed: ${sanitizeReason(e)}` };
+    }
+    if (!resp || !isSafeQuoteId(resp.quote) || typeof resp.request !== 'string') {
+      return { ok: false, reason: 'mint returned an unusable quote' };
+    }
+
+    const marker = {
+      quote: resp.quote,
+      mint: picked.url,
+      amount_sats: amountSats,
+      created_at: Date.now(),
+      minted: false,
+      session: sessionId,
+    };
+    await writeQuoteMarker(resp.quote, marker);
+    openSet.add(resp.quote);
+    openQuotesBySession.set(sessionId, openSet);
+    log.info(`[wallet] mint quote ${redactBolt11(resp.request)} amount=${amountSats} mint=${picked.url}`);
+    return { ok: true, quote: resp.quote, request: resp.request, expiry: resp.expiry ?? null, mint: picked.url, amount_sats: amountSats };
+  }
+
+  function dropOpenQuote(sessionId, quote) {
+    const set = openQuotesBySession.get(sessionId);
+    if (set) set.delete(quote);
+  }
+
+  async function checkMintQuote({ quote, sessionId = 'default' } = {}) {
+    if (!isSafeQuoteId(quote)) return { ok: false, reason: 'bad quote id' };
+    const marker = await readQuoteMarker(quote);
+    if (!marker) return { ok: false, reason: 'unknown quote' };
+
+    // Already minted → serve the cached result WITHOUT touching the mint.
+    if (marker.minted === true) {
+      const bal = await balance();
+      return { ok: true, state: 'ISSUED', paid: true, minted_sats: marker.amount_sats, new_balance_sats: bal.total };
+    }
+
+    // Per-quote status-check throttle. The next poll (2s cadence) resolves it.
+    const now = Date.now();
+    if (now - (lastCheckByQuote.get(quote) || 0) < 1500) {
+      return { ok: true, state: 'UNPAID', paid: false, throttled: true, expiry: marker.expiry ?? null };
+    }
+    lastCheckByQuote.set(quote, now);
+
+    const wallet = mints.get(marker.mint);
+    if (!wallet) return { ok: false, reason: 'quote mint is no longer configured' };
+    try {
+      await ensureLoaded(wallet);
+    } catch (e) {
+      return { ok: false, reason: `mint unavailable: ${sanitizeReason(e)}` };
+    }
+
+    let resp;
+    try {
+      resp = await wallet.checkMintQuoteBolt11(quote);
+    } catch (e) {
+      return { ok: false, reason: `quote check failed: ${sanitizeReason(e)}` };
+    }
+
+    if (resp.state === MintQuoteState.PAID) {
+      // Idempotent double-mint guard: mark minted BEFORE appending proofs, so a
+      // crash between the two loses one mint attempt rather than double-minting.
+      await writeQuoteMarker(quote, { ...marker, minted: true, minted_at: Date.now() });
+      let proofs;
+      try {
+        proofs = await wallet.mintProofsBolt11(marker.amount_sats, quote);
+      } catch (e) {
+        // A CAUGHT (non-crash) failure: nothing was appended, so revert the
+        // marker to allow a safe retry — the mint is idempotent by quote id.
+        await writeQuoteMarker(quote, { ...marker, minted: false });
+        return { ok: false, reason: `mint proofs failed: ${sanitizeReason(e)}` };
+      }
+      const existing = await readProofs(walletDir, marker.mint);
+      await writeProofs(walletDir, marker.mint, [...existing, ...proofs]);
+      const minted = proofs.reduce((s, p) => s + (p.amount || 0), 0);
+      const bal = await balance();
+      dropOpenQuote(marker.session || sessionId, quote);
+      log.info(`[wallet] minted ${minted} sats from quote mint=${marker.mint} new_balance=${bal.total}`);
+      return { ok: true, state: 'PAID', paid: true, minted_sats: minted, new_balance_sats: bal.total };
+    }
+
+    if (resp.state === MintQuoteState.ISSUED) {
+      // The mint already issued proofs for this quote but our marker missed it;
+      // record minted and do NOT re-mint (avoids a double-mint on ISSUED).
+      await writeQuoteMarker(quote, { ...marker, minted: true });
+      dropOpenQuote(marker.session || sessionId, quote);
+      const bal = await balance();
+      return { ok: true, state: 'ISSUED', paid: true, minted_sats: marker.amount_sats, new_balance_sats: bal.total };
+    }
+
+    return { ok: true, state: 'UNPAID', paid: false, expiry: resp.expiry ?? marker.expiry ?? null };
+  }
+
+  return { balance, receive, send, health, createMintQuote, checkMintQuote, mints: [...mints.keys()] };
 }
 
 /**

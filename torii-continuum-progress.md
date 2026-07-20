@@ -9,6 +9,24 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.84-alpha — Routstr Lightning-QR top-up (2026-07-20)
+
+Funding the Routstr Cashu balance no longer requires pasting a Cashu token. The Routstr page's **Top Up** button now opens a modal that renders a **Lightning-invoice QR** payable from any phone wallet, with the paste-a-token flow preserved as a secondary link so nothing regresses.
+
+**Two funding sources, one modal.** A source toggle picks between a **Cashu mint-quote** invoice (BOLT11 from the agent's first healthy whitelisted mint; paying it mints proofs into the Cashu wallet so the balance rises) and an **NWC-issued** invoice (BOLT11 on the linked NIP-47 wallet; sats land there, not in Cashu). The NWC option is disabled with a tooltip until a wallet with `make_invoice` is connected.
+
+**Amount UX.** Editable sats input with preset chips 500 / 1000 / 5000 / 21000 (default 1000), hard-capped client-side at 100 000 and independently re-enforced by the agent (`cashu.max_mint_sats`, default 100 000). A mint dropdown appears only when more than one mint is configured.
+
+**State machine.** `idle → generating → waiting → paid → done`, plus `expired` and `error`. A single 2s `setInterval` polls the invoice and is always cleared on close/success/expiry; an expiry countdown drives the `expired` transition. Click-to-copy BOLT11; QR encodes `lightning:<BOLT11 uppercased>` for the denser alphanumeric mode.
+
+**Agent surface.** `wallet.createMintQuote` / `wallet.checkMintQuote` (core/wallet.mjs) with an **idempotent double-mint guard** — the per-quote marker is flipped `minted:true` BEFORE proofs are appended, so a crash mid-mint costs one attempt, never a double-mint (mint is also idempotent by quote id per NUT-04); ISSUED short-circuits without re-minting. `onboarding.nwcMakeInvoice` / `nwcLookupInvoice` wrap NIP-47 `make_invoice` / `lookup_invoice`. Four new admin-gated routes (`POST/GET /api/wallet/mint-quote`, `POST/GET /api/wallet/nwc-invoice`) reuse the existing `requireAdmin` + rate-limit posture. Full BOLT11 is never logged (first 10 + last 6 only); preimages are never logged.
+
+**Zero new dependencies.** QR is a vendored MIT Nayuki QR-Code-generator ES module (`src/views/qr.js`, ~9.4 KB min / 3.5 KB gz), exporting `renderQR(text,{size,ecl})`.
+
+**Tests.** Root vitest **1320 passed** (adds `src/views/qr.test.js`, Routstr test markers preserved); agent `node --test` **307 passed** (adds `wallet-mint-quote.test.js` for the double-mint guard and `wallet-nwc-invoice.test.js` for the NWC paths). `npm run build` succeeds. *(Counts reflect the post-merge tree after main's v0.2.83-alpha MEMORY-1 privacy correction landed; this slice ships forward-only as v0.2.84-alpha to avoid the version collision.)*
+
+## v0.2.82-alpha — secure persistent memory: encrypted-at-rest, consent-gated, owner-scoped, signed portability (MEMORY-1)
+
 ## v0.2.83-alpha — MEMORY-1 privacy correction: ciphertext-only from proposal creation onward (supersedes v0.2.82-alpha)
 
 **Root cause.** v0.2.82-alpha's `consent.propose()` persisted a **plaintext** `payload` (and `evidence`) inside `memory/owners/<ownerHex>/bots/<botId>/pending/<id>.json`. That contradicted the encrypted-at-rest guarantee and the report's "plaintext preview client-side only" claim: private memory text sat unencrypted on the server filesystem between proposal and approval. **v0.2.82-alpha is superseded.**

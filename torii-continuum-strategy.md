@@ -144,6 +144,8 @@ Adds a **sealed, local-first character stack** so the agent has a stable identit
 
 ## What Is Shipping vs Mocked
 
+**Routstr QR top-up shipped v0.2.84-alpha** — the Routstr page funds the Cashu balance via a scannable Lightning-invoice QR (Cashu mint-quote or NWC-issued), with the paste-a-token flow kept as a fallback and an idempotent double-mint guard on the agent. Zero new deps (vendored MIT QR encoder).
+
 **Live today (mockup / read-only):**
 - Continuum Console page at `https://continuum-torii.pplx.app` — read-only dashboard mockup demonstrating the MVP loop (NAP zone status, gateway state, leaderboard preview, Plebeian product panel, GitHub update check).
 - `mdPatch-2` pipeline shared with Quest — `torii-continuum-todo.md` in the whitelist, safe assistant-editable notes / appends / replaces.

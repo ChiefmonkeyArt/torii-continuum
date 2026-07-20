@@ -141,6 +141,10 @@ export function loadConfig(path) {
   cfg.session_ttl_sec ??= 86400;
   cfg.server.cors_origins ??= [];
   cfg.cashu ??= { mints: [], low_balance_warn_sats: 500, hard_floor_sats: 100 };
+  // Hard cap on a single Lightning-QR top-up mint quote (v0.2.83-alpha). Applied
+  // to both the Cashu mint-quote and the NWC-issued invoice paths so neither can
+  // request an unbounded invoice from a stolen session.
+  cfg.cashu.max_mint_sats ??= 100_000;
   cfg.routstr.limits ??= { max_tokens_out: 2048, max_sats_per_request: 50 };
   cfg.routstr.fallback ??= { enabled: false };
   cfg.skills ??= {};
