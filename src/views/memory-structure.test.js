@@ -106,3 +106,54 @@ describe('memory view — owner-facing state handling', () => {
     expect(src).toMatch(/Code of Practice/);
   });
 });
+
+describe('memory view — first-run activation gate (MEMORY-ACTIVATION-1)', () => {
+  it('reads the AUTHORITATIVE per-owner state before rendering anything', () => {
+    // load() gates on memoryState().unlocked_for_owner, not an inferred flag.
+    expect(src).toMatch(/memoryState\(/);
+    expect(src).toMatch(/unlocked_for_owner/);
+  });
+
+  it('shows the activation panel when locked and the console when unlocked', () => {
+    expect(src).toMatch(/activationCard\(/);
+    expect(src).toMatch(/renderConsole\(/);
+  });
+
+  it('drives activation through the shared pure controller (no parallel protocol)', () => {
+    expect(src).toMatch(/runActivation\(/);
+    expect(src).toMatch(/from '\.\/memory-activation\.js'/);
+  });
+
+  it('offers a single clear primary CTA with a stable test id', () => {
+    expect(src).toMatch(/Activate private memory/);
+    expect(src).toMatch(/data-testid.*activate-memory|activate-memory.*data-testid/);
+    expect(src).toMatch(/class:\s*'primary'/);
+  });
+
+  it('explains owner-control, browser-encryption, and the signature requirement', () => {
+    expect(src).toMatch(/Owner-controlled/i);
+    expect(src).toMatch(/Encrypted in this browser/i);
+    expect(src).toMatch(/signature/i);
+  });
+
+  it('reveals the console on success WITHOUT a page reload', () => {
+    // Success path calls renderConsole in place; never reloads the document.
+    expect(src).toMatch(/if \(result\.ok\)[\s\S]*renderConsole\(body\)/);
+    expect(src).not.toMatch(/location\.reload/);
+    expect(src).not.toMatch(/window\.location\s*=/);
+  });
+
+  it('exposes accessible live-status and error regions with test ids', () => {
+    expect(src).toMatch(/aria-live/);
+    expect(src).toMatch(/role:\s*'status'/);
+    expect(src).toMatch(/role:\s*'alert'/);
+    expect(src).toMatch(/activation-status/);
+    expect(src).toMatch(/activation-error/);
+  });
+
+  it('never logs or posts plaintext/keys from the activation panel', () => {
+    // The panel delegates all signer I/O to runActivation; it must not stash
+    // a decrypted plaintext or key of its own or console.log during the flow.
+    expect(src).not.toMatch(/console\.log/);
+  });
+});

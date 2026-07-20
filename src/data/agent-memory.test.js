@@ -16,6 +16,7 @@ import {
   memoryWorkingValues, memoryUsage, memoryScoped, memoryVerify, memoryDelete,
   memoryProposals, memoryPropose, memoryApprove, memoryReject,
   memoryExport, memoryImport, memoryQuarantine, memoryQuarantineApprove, memoryQuarantineReject,
+  memoryState, memoryCiphertexts, memoryActivateChallenge, memoryActivate,
 } from './agent.js';
 
 function makeStorageStub() {
@@ -160,6 +161,37 @@ describe('MEMORY-1 client fns — request shapes', () => {
     expect(calls[0].url).toBe('https://agent.example/api/memory/quarantine/deadbeef/reject');
     expect(calls[0].opts.method).toBe('POST');
   });
+
+  // ── MEMORY-ACTIVATION-1 ──
+  it('memoryState GETs /api/memory with no body', async () => {
+    await memoryState();
+    expect(calls[0].url).toBe('https://agent.example/api/memory');
+    expect(calls[0].opts.method).toBe('GET');
+    expect(calls[0].opts.body).toBeUndefined();
+  });
+
+  it('memoryCiphertexts GETs /api/memory/ciphertexts', async () => {
+    await memoryCiphertexts();
+    expect(calls[0].url).toBe('https://agent.example/api/memory/ciphertexts');
+    expect(calls[0].opts.method).toBe('GET');
+  });
+
+  it('memoryActivateChallenge POSTs /api/memory/activate/challenge with no body', async () => {
+    await memoryActivateChallenge();
+    expect(calls[0].url).toBe('https://agent.example/api/memory/activate/challenge');
+    expect(calls[0].opts.method).toBe('POST');
+    // Bodyless POST — no Content-Type, no JSON body (Fastify empty-body rule).
+    expect(calls[0].opts.body).toBeUndefined();
+  });
+
+  it('memoryActivate POSTs the signed event + entries', async () => {
+    const event = { kind: 22242, id: 'e', sig: 's', pubkey: 'p', tags: [['challenge', 'c']] };
+    const entries = [{ kind: 30091, content: {}, d_tag: 'x' }];
+    await memoryActivate({ event, entries });
+    expect(calls[0].url).toBe('https://agent.example/api/memory/activate');
+    expect(calls[0].opts.method).toBe('POST');
+    expect(body()).toEqual({ event, entries });
+  });
 });
 
 describe('MEMORY-1 client fns — offline short-circuit (no fetch, no leak)', () => {
@@ -182,6 +214,8 @@ describe('MEMORY-1 client fns — offline short-circuit (no fetch, no leak)', ()
       memoryApprove('id', { payload_sha256: 'h', approval_nonce: 'n', ciphertext: 'c' }),
       memoryReject('id', { approval_nonce: 'n' }), memoryExport(), memoryImport({}),
       memoryQuarantine(), memoryQuarantineApprove('s', {}), memoryQuarantineReject('s'),
+      memoryState(), memoryCiphertexts(), memoryActivateChallenge(),
+      memoryActivate({ event: {}, entries: [] }),
     ]);
     expect(fetched).toBe(0);
     for (const r of results) expect(r.offline).toBe(true);

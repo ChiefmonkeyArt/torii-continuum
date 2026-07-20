@@ -243,10 +243,43 @@ for MEMORY-1 (deferred). The bundle format is the forward-compatible foundation.
 | GET  | `/api/memory/quarantine` | imported, untrusted items awaiting approval |
 | POST | `/api/memory/quarantine/:sha/approve` | promote a reviewed item into live memory |
 | POST | `/api/memory/quarantine/:sha/reject` | discard a quarantine item |
+| GET  | `/api/memory` | authoritative status incl. `unlocked_for_owner` (per-owner activation signal) |
+| GET  | `/api/memory/ciphertexts` | encrypted-at-rest blobs for the browser to decrypt (never plaintext) |
+| POST | `/api/memory/activate/challenge` | one-time challenge for the owner to sign (MEMORY-ACTIVATION-1) |
+| POST | `/api/memory/activate` | verify owner-signed challenge → unlock via `memoryCache.unlock()` + audit |
 
 Client wrappers live in `src/data/agent.js`; the owner console is
 `src/views/memory.js` (route `/memory`, sidebar "Memory"). All rendering is via
 the XSS-safe `h()` builder (textContent only, no raw HTML).
+
+### 6.1 First-run activation (MEMORY-ACTIVATION-1)
+
+Durable memory is **locked** until the owner explicitly activates it. `GET
+/api/memory` returns `unlocked_for_owner` — the single authoritative signal the
+console trusts (the RAM cache is unlocked for exactly one owner at a time, so the
+field is true only when unlocked for THIS session's owner; a session can never
+mistake another owner's unlocked cache for its own). When locked, the console
+renders a guided, dominant activation panel with one primary CTA. Activation:
+
+1. `POST /api/memory/activate/challenge` → one-time challenge (reuses the login
+   challenge pool: single-use + 5-min TTL).
+2. The owner signs a **kind-22242** event in their own NIP-07 signer — the SAME
+   authorization shape as login, not a memory-only protocol and never a
+   hand-constructed event.
+3. `GET /api/memory/ciphertexts` → the browser NIP-44-decrypts each blob with the
+   owner's key.
+4. `POST /api/memory/activate {event, entries}` → the agent calls
+   `auth.verifyActionSignature()` (owner-bound to the session pubkey, single-use
+   challenge consumed → replay protection), unlocks via the SAME
+   `memoryCache.unlock()` path (no parallel protocol), and appends a
+   metadata-only `memory.activate` audit line (owner-prefix + entry count).
+
+The controller (`src/views/memory-activation.js`) is a pure, DOM-free state
+machine with eight states (`ready`, `requesting-signature`, `activating`,
+`success`, `signer-rejected`, `signer-unavailable`, `error`) and all I/O
+injected. Success is confirmed **only** by re-reading `unlocked_for_owner:true`
+— never the optimistic activate result — after which the console is revealed in
+place with no reload. No plaintext or key ever reaches the agent.
 
 ---
 
@@ -259,6 +292,7 @@ the XSS-safe `h()` builder (textContent only, no raw HTML).
 | Plaintext/key exposure at agent | NIP-44 sealing in browser; agent stores ciphertext only; no key material on host |
 | Silent memory persistence | proposals never auto-persist; approval bound to exact hash + single-use nonce |
 | Replay / CSRF on approval | single-use nonce; idempotent approve; admin session gate |
+| Unauthorized / replayed memory activation | owner-signed kind-22242 challenge (`verifyActionSignature`); single-use challenge (replay protection); owner-bound to session pubkey; metadata-only audit; "unlocked" shown only after authoritative `unlocked_for_owner:true` re-read |
 | Tampering / corruption | per-item sha256; `read()`/`verifyScope()` fail closed; hash-chained audit |
 | Prompt injection / memory poisoning | working-values header outranks memory; retrieved text fenced as untrusted data |
 | Cross-project leakage | project is a required scope segment; `_global` is explicit, never implicit |
@@ -282,9 +316,16 @@ the XSS-safe `h()` builder (textContent only, no raw HTML).
   `confirm:true`, path segments encoded, offline short-circuits with no fetch);
   `src/views/memory-structure.test.js` locks XSS-safe rendering, browser-side
   sealing, explicit-consent wording, browser-signed non-published portability,
-  and quarantine-on-import.
+  quarantine-on-import, and the first-run activation gate (authoritative-state
+  read, single primary CTA + test ids, accessible live regions, no-reload reveal).
+- **Activation (MEMORY-ACTIVATION-1):** `agent/test/memory-activation.test.js`
+  covers `verifyActionSignature` (valid + single-use replay, owner-mismatch
+  reject, unknown challenge, wrong kind, missing owner binding, tamper, and
+  no-token-minted). `src/views/memory-activation.test.js` drives the controller
+  through all eight states, proves it never shows unlocked without an
+  authoritative `unlocked_for_owner:true`, and that a failed run can be retried.
 
-Full suites green at ship: agent `node --test` (286), frontend `vitest` (401),
+Full suites green at ship: agent `node --test` (314), frontend `vitest` (1353),
 production `vite build` clean.
 
 ---

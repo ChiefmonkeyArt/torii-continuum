@@ -21,6 +21,20 @@ Test counts this release: root vitest **1348 pass**, agent node:test **307 pass*
 
 ## v0.2.84-alpha — Routstr Lightning-QR top-up (2026-07-20)
 
+## v0.2.84-alpha — MEMORY-ACTIVATION-1: guided owner-signed first-run memory activation (2026-07-20)
+
+**What.** Closed the first-run gap where a signed-in owner on `#/memory` with `unlocked_for_owner:false` saw no obvious way to turn memory on. The Memory view now gates on the **authoritative** per-owner state (`GET /api/memory.data.unlocked_for_owner`) and, when locked, shows a dominant, guided activation panel with a single primary CTA **"Activate private memory"**; unlocked owners bypass it entirely and success reveals the console **in place with no reload**.
+
+**How (frontend).** New pure, DOM-free controller `src/views/memory-activation.js` — an eight-state machine (`ready`, `requesting-signature`, `activating`, `success`, `signer-rejected`, `signer-unavailable`, `error`) with every I/O dependency injected, so all states are unit-tested without a DOM/network/signer. `src/views/memory.js` wires it to `window.nostr` + the agent client and renders each transition with accessible `role="status"`/`role="alert"` live regions and stable `data-testid`s. New client fns in `src/data/agent.js`: `memoryState`, `memoryCiphertexts`, `memoryActivateChallenge`, `memoryActivate`.
+
+**How (agent).** New `auth.verifyActionSignature()` reuses the login challenge pool (single-use + 5-min TTL → replay protection) and full NIP-07 signature crypto, but binds the signature to the already-authenticated session owner and mints nothing. `POST /api/memory/activate/challenge` issues the one-time challenge; `POST /api/memory/activate {event, entries}` verifies it (owner-bound, replay-safe), unlocks via the SAME `memoryCache.unlock()` path (no parallel protocol), and appends a metadata-only `memory.activate` audit line (owner-prefix + entry count — never plaintext). `GET /api/memory` gained `unlocked_for_owner` (true only when the cache is unlocked for THIS session's owner).
+
+**Security.** Ciphertext-only MEMORY-1 guarantees preserved: NIP-44 decryption happens in the browser with the owner's key; no plaintext or key ever reaches the agent. "Unlocked" is only ever shown after an authoritative `unlocked_for_owner:true` re-read — never on the optimistic activate result.
+
+**Tests/build.** Agent 314 pass (new `verifyActionSignature` suite: valid/owner-mismatch/unknown-challenge/wrong-kind/no-binding/tamper/no-token-minted + replay). Frontend 1353 pass (controller all-states + never-falsely-unlocked + retry; client request-shapes; view-structure guardrails). `npm run build` clean. Not deployed at authoring time.
+
+## v0.2.83-alpha line — Routstr Lightning-QR top-up (2026-07-20)
+
 Funding the Routstr Cashu balance no longer requires pasting a Cashu token. The Routstr page's **Top Up** button now opens a modal that renders a **Lightning-invoice QR** payable from any phone wallet, with the paste-a-token flow preserved as a secondary link so nothing regresses.
 
 **Two funding sources, one modal.** A source toggle picks between a **Cashu mint-quote** invoice (BOLT11 from the agent's first healthy whitelisted mint; paying it mints proofs into the Cashu wallet so the balance rises) and an **NWC-issued** invoice (BOLT11 on the linked NIP-47 wallet; sats land there, not in Cashu). The NWC option is disabled with a tooltip until a wallet with `make_invoice` is connected.
