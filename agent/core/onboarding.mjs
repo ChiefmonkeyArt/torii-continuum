@@ -33,6 +33,13 @@ const ROUTSTR_PENDING = 'routstr_pending';
 export function createOnboarding(deps = {}) {
   const { secretStore, routstrProvider, connectNwc } = deps;
   const log = deps.log || { info() {}, warn() {}, error() {} };
+  // Optional marker store for NWC-issued top-up invoices (v0.2.83-alpha). The
+  // agent wires a disk-backed impl (memory/wallet/nwc-invoices/<hash>.json);
+  // tests may omit it (default no-op) since the invoice/lookup logic does not
+  // depend on the marker — it is an audit record only.
+  const nwcInvoices = deps.nwcInvoices && typeof deps.nwcInvoices.save === 'function'
+    ? deps.nwcInvoices
+    : { async save() {} };
   if (!secretStore) throw new Error('createOnboarding: secretStore required');
   if (!routstrProvider) throw new Error('createOnboarding: routstrProvider required');
   if (typeof connectNwc !== 'function') throw new Error('createOnboarding: connectNwc required');
@@ -215,6 +222,87 @@ export function createOnboarding(deps = {}) {
       code: 200,
       body: { ok: true, wallet: redactNwc(parsed), capabilities, can_fund_routstr: capabilities.can_fund_routstr },
     };
+  }
+
+  // ── Lightning-QR top-up: NWC-issued invoice (v0.2.83-alpha) ────────────
+  //
+  // The alternative funding source in the Routstr top-up modal. Issues a BOLT11
+  // on the connected NWC wallet via make_invoice; the sats land in the NWC
+  // wallet, NOT in Cashu — so this path NEVER mints proofs. Reuses the same
+  // stored NWC envelope + live client as /api/onboarding/wallet/*.
+
+  async function nwcMakeInvoice({ amountSats, memo, maxSats } = {}) {
+    if (!Number.isInteger(amountSats) || amountSats <= 0) {
+      return { code: 400, body: { ok: false, error: 'amount_sats must be a positive integer' } };
+    }
+    const cap = Number.isFinite(maxSats) && maxSats > 0 ? maxSats : 100_000;
+    if (amountSats > cap) {
+      return { code: 400, body: { ok: false, error: `amount exceeds the max of ${cap} sats` } };
+    }
+    const env = await loadEnvelope(NWC_SECRET);
+    if (env === null || env.error) return { code: 409, body: { ok: false, error: 'no wallet connected' } };
+    if (env.capabilities?.can_make_invoice !== true) {
+      return { code: 409, body: { ok: false, error: 'connected wallet cannot make invoices' } };
+    }
+    const parsed = parseNwcUri(env.uri);
+    if (!parsed.ok) return { code: 409, body: { ok: false, error: 'stored wallet is unusable' } };
+
+    let client;
+    try {
+      client = await connectNwc(parsed);
+    } catch {
+      return { code: 503, body: { ok: false, error: 'live NWC path unavailable on this runtime' } };
+    }
+    let made;
+    try {
+      made = await client.makeInvoice({ amountSats, memo });
+    } catch (e) {
+      log.warn(`[onboarding] make_invoice threw: ${sanitizeReason(e)}`);
+      made = { ok: false, reason: 'wallet did not complete make_invoice' };
+    } finally {
+      await client.close?.();
+    }
+    if (!made.ok) return { code: 502, body: { ok: false, error: made.reason } };
+
+    const hash = made.payment_hash || null;
+    if (hash) {
+      try {
+        await nwcInvoices.save(hash, { payment_hash: hash, amount_sats: amountSats, created_at: new Date().toISOString() });
+      } catch (e) {
+        log.warn(`[onboarding] nwc invoice marker save failed: ${sanitizeReason(e)}`);
+      }
+    }
+    return { code: 200, body: { ok: true, invoice: made.invoice, payment_hash: hash, expiry: made.expiry ?? null, amount_sats: amountSats } };
+  }
+
+  async function nwcLookupInvoice({ paymentHash } = {}) {
+    if (typeof paymentHash !== 'string' || paymentHash.length === 0) {
+      return { code: 400, body: { ok: false, error: 'payment hash required' } };
+    }
+    const env = await loadEnvelope(NWC_SECRET);
+    if (env === null || env.error) return { code: 409, body: { ok: false, error: 'no wallet connected' } };
+    const parsed = parseNwcUri(env.uri);
+    if (!parsed.ok) return { code: 409, body: { ok: false, error: 'stored wallet is unusable' } };
+
+    let client;
+    try {
+      client = await connectNwc(parsed);
+    } catch {
+      return { code: 503, body: { ok: false, error: 'live NWC path unavailable on this runtime' } };
+    }
+    let look;
+    try {
+      look = await client.lookupInvoice({ paymentHash });
+    } catch (e) {
+      log.warn(`[onboarding] lookup_invoice threw: ${sanitizeReason(e)}`);
+      look = { ok: false, reason: 'wallet did not complete lookup_invoice' };
+    } finally {
+      await client.close?.();
+    }
+    if (!look.ok) return { code: 502, body: { ok: false, error: look.reason } };
+    const body = { ok: true, state: look.state, paid: look.paid };
+    if (look.settled_at != null) body.settled_at = look.settled_at;
+    return { code: 200, body };
   }
 
   // ── Step 3: Routstr ────────────────────────────────────────────────────
@@ -596,6 +684,8 @@ export function createOnboarding(deps = {}) {
     walletStatus,
     walletDisconnect,
     walletTest,
+    nwcMakeInvoice,
+    nwcLookupInvoice,
     routstrKey,
     routstrStatus,
     routstrDisconnect,

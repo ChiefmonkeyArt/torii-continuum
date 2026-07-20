@@ -53,6 +53,12 @@ const KNOWN_METHODS = [
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
+// Redact a BOLT11 for logs: first 10 + last 6 chars only. Mirrors the wallet
+// module so no full invoice ever reaches a log line.
+function redactBolt11(b) {
+  return typeof b === 'string' && b.length > 20 ? `${b.slice(0, 10)}…${b.slice(-6)}` : 'invoice';
+}
+
 /**
  * Parse + validate an NWC connection URI. Fails closed on anything malformed.
  *
@@ -261,13 +267,72 @@ export function createNwcClient(parsed, deps = {}) {
     };
   }
 
+  /**
+   * make_invoice (NIP-47). Issues a BOLT11 on the connected wallet so the
+   * operator can be paid into that wallet. Amount is sats here; NIP-47 wants
+   * millisats on the wire. Returns only non-secret fields; never a preimage.
+   *
+   * @param {{ amountSats:number, memo?:string, expirySec?:number, timeoutMs?:number }} opts
+   */
+  async function makeInvoice({ amountSats, memo, expirySec, timeoutMs } = {}) {
+    if (!Number.isInteger(amountSats) || amountSats <= 0) {
+      return { ok: false, reason: 'amount must be a positive integer (sats)' };
+    }
+    const t = Number.isFinite(timeoutMs) ? timeoutMs : defaultTimeout;
+    const params = { amount: amountSats * 1000 };
+    if (typeof memo === 'string' && memo.trim()) params.description = memo.trim().slice(0, 128);
+    if (Number.isFinite(expirySec) && expirySec > 0) params.expiry = expirySec;
+    const res = await transport.request({ method: 'make_invoice', params, timeoutMs: t });
+    if (!res.ok) {
+      log.warn(`[nwc] make_invoice failed (code=${res.code || 'none'})`);
+      return { ok: false, reason: sanitize(res), code: res.code || null };
+    }
+    const r = res.result || {};
+    const invoice = r.invoice || r.bolt11 || r.payment_request;
+    if (typeof invoice !== 'string' || invoice.length === 0) {
+      return { ok: false, reason: 'wallet returned no invoice' };
+    }
+    log.info(`[nwc] make_invoice ok (${redactBolt11(invoice)})`);
+    return {
+      ok: true,
+      invoice,
+      payment_hash: typeof r.payment_hash === 'string' ? r.payment_hash : null,
+      amount_sats: amountSats,
+      expiry: Number.isFinite(r.expiry) ? r.expiry : null,
+    };
+  }
+
+  /**
+   * lookup_invoice (NIP-47). Reports settlement of an invoice this wallet
+   * issued. Paid is derived from a positive `settled_at` OR an explicit settled
+   * state. Never returns the preimage over this surface.
+   *
+   * @param {{ paymentHash?:string, invoice?:string, timeoutMs?:number }} opts
+   */
+  async function lookupInvoice({ paymentHash, invoice, timeoutMs } = {}) {
+    const t = Number.isFinite(timeoutMs) ? timeoutMs : defaultTimeout;
+    const params = {};
+    if (typeof paymentHash === 'string' && paymentHash) params.payment_hash = paymentHash;
+    else if (typeof invoice === 'string' && invoice) params.invoice = invoice;
+    else return { ok: false, reason: 'payment_hash or invoice required' };
+    const res = await transport.request({ method: 'lookup_invoice', params, timeoutMs: t });
+    if (!res.ok) {
+      log.warn(`[nwc] lookup_invoice failed (code=${res.code || 'none'})`);
+      return { ok: false, reason: sanitize(res), code: res.code || null };
+    }
+    const r = res.result || {};
+    const settledAt = Number.isFinite(r.settled_at) && r.settled_at > 0 ? r.settled_at : null;
+    const paid = settledAt !== null || r.state === 'settled' || r.settled === true;
+    return { ok: true, paid, state: paid ? 'PAID' : 'UNPAID', settled_at: settledAt };
+  }
+
   async function close() {
     if (typeof transport.close === 'function') {
       try { await transport.close(); } catch { /* best effort */ }
     }
   }
 
-  return { getInfo, payInvoice, close };
+  return { getInfo, payInvoice, makeInvoice, lookupInvoice, close };
 }
 
 // A short, allow-listed reason string for NIP-47 error codes. We never echo a
