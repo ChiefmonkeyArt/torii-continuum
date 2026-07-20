@@ -12,7 +12,7 @@ import {
 } from '../data/agent.js';
 import { renderQR } from './qr.js';
 import { isSessionLive, startLogin } from '../auth.js';
-import { isDemo, demoSource, demoBanner, goToLogin } from '../demo/demo-mode.js';
+import { isDemo, demoSource, demoBanner, demoIntercept } from '../demo/demo-mode.js';
 
 // Lightning-QR top-up (v0.2.83-alpha). Preset amounts, default, and the hard
 // client-side cap. The agent independently re-enforces cashu.max_mint_sats, so
@@ -84,8 +84,8 @@ export function renderRoutstr(mount, opts = {}) {
     ]),
     h('div', { class: 'page-actions' }, [
       c.connected
-        ? h('button', { onClick: () => (demo ? goToLogin() : disconnect()) }, ['Disconnect'])
-        : h('button', { class: 'primary', onClick: () => (demo ? goToLogin() : connect()) }, ['Connect Cashu wallet']),
+        ? h('button', { onClick: demoIntercept(demo, disconnect) }, ['Disconnect'])
+        : h('button', { class: 'primary', onClick: demoIntercept(demo, connect) }, ['Connect Cashu wallet']),
     ]),
   ]);
   mount.appendChild(header);
@@ -116,7 +116,7 @@ export function renderRoutstr(mount, opts = {}) {
       h('label', { text: 'Routstr URL' }),
       (() => {
         const inp = h('input', { type: 'text', value: c.endpoint });
-        inp.addEventListener('change', () => (demo ? goToLogin() : updateRoutstr({ endpoint: inp.value.trim() || 'https://api.routstr.com' })));
+        inp.addEventListener('change', demoIntercept(demo, () => updateRoutstr({ endpoint: inp.value.trim() || 'https://api.routstr.com' })));
         return inp;
       })(),
     ]),
@@ -124,7 +124,7 @@ export function renderRoutstr(mount, opts = {}) {
       h('label', { text: 'Monthly Cashu budget (sats)' }),
       (() => {
         const inp = h('input', { type: 'number', value: c.usage.monthlyBudget, min: 0, step: 1000 });
-        inp.addEventListener('change', () => (demo ? goToLogin() : updateRoutstr({ usage: { ...c.usage, monthlyBudget: Math.max(0, parseInt(inp.value || '0', 10)) } })));
+        inp.addEventListener('change', demoIntercept(demo, () => updateRoutstr({ usage: { ...c.usage, monthlyBudget: Math.max(0, parseInt(inp.value || '0', 10)) } })));
         return inp;
       })(),
     ]),
@@ -163,7 +163,7 @@ function renderCashuCard(c, demo) {
     ]),
   ]);
 
-  const topUpBtn = h('button', { class: 'primary', onClick: () => (demo ? goToLogin() : toggleTopUp(true)) }, ['Top Up']);
+  const topUpBtn = h('button', { class: 'primary', onClick: demoIntercept(demo, () => toggleTopUp(true)) }, ['Top Up']);
 
   return h('div', { class: 'card hot' }, [
     h('h3', { text: 'Cashu balance' }),
@@ -553,7 +553,7 @@ function renderNwcCard(live, demo) {
   if (live) loadNwcStatus(body);
   else {
     body.appendChild(h('div', { class: 'wallet-card-actions', style: 'margin-top: 12px;' }, [
-      h('button', { class: 'primary', onClick: () => (demo ? goToLogin() : startLogin()) }, ['Sign in']),
+      h('button', { class: 'primary', onClick: demoIntercept(demo, () => startLogin()) }, ['Sign in']),
     ]));
   }
   return card;
@@ -670,11 +670,10 @@ function renderModelPicker(c, demo) {
       m.badge ? h('span', { class: 'badge', text: m.badge }) : null,
       h('span', { class: 'price', text: `${m.pricePer1kSats} sats/1k tok` }),
     ]);
-    row.addEventListener('click', () => {
-      if (demo) { goToLogin(); return; }
+    row.addEventListener('click', demoIntercept(demo, () => {
       updateRoutstr({ selectedModel: m.id });
       renderRoutstr(document.getElementById('main-content'));
-    });
+    }));
     list.appendChild(row);
   }
   return h('div', { class: 'card' }, [

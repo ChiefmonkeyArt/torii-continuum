@@ -17,7 +17,7 @@
  * Nothing here touches the network or the real store. Demo views never call
  * agent.* — the mockup is a static, obviously-fake snapshot.
  */
-import { h } from '../views/util.js';
+import { h, clear } from '../views/util.js';
 import { navigate } from '../router.js';
 import { demoStore } from './demo-fixtures.js';
 
@@ -41,6 +41,81 @@ export function demoSource(opts, realStore) {
 /** Route to the real login surface (rendered in place at root). */
 export function goToLogin() {
   navigate('/');
+}
+
+/**
+ * Open the real login surface. Every mutating CTA inside a demo view routes
+ * here instead of firing its handler — the mockup can be explored but never
+ * writes anything. (Alias of goToLogin with the name the views read as intent.)
+ */
+export function openLoginModal() {
+  navigate('/');
+}
+
+/**
+ * Wrap a mutating view action so that, while browsing the demo, it opens the
+ * login surface instead of firing. Outside demo mode the original action runs
+ * unchanged. Returns an event handler the views attach uniformly (Save,
+ * Publish, Top Up, Connect, Delete, …) so no demo CTA can reach the network or
+ * the real store.
+ * @param {{demo?: boolean}|boolean} opts the view opts bag (or a bare demo flag)
+ * @param {(...args: any[]) => any} action the real handler
+ */
+export function demoIntercept(opts, action) {
+  const demo = typeof opts === 'boolean' ? opts : isDemo(opts);
+  return (...args) => {
+    if (demo) { openLoginModal(); return; }
+    return typeof action === 'function' ? action(...args) : undefined;
+  };
+}
+
+/**
+ * Keep a hash href inside the /demo subtree while the current view is a demo
+ * screen, so hover URLs, right-click "open in new tab" and ⌘-click all land on
+ * the mockup rather than a guarded route (which would bounce to login). Reads
+ * the LIVE location hash — unlike demoPath(opts, …) which is driven by the
+ * render opts — so it can be composed at anchor-construction time (Item 3).
+ *   • not on a demo screen                → href unchanged;
+ *   • non-hash / external href            → unchanged;
+ *   • root '#/' (the login CTA)           → unchanged;
+ *   • already '#/demo…'                   → unchanged;
+ *   • otherwise '#/x' → '#/demo/x'.
+ * @param {string} href e.g. '#/projects'
+ */
+export function demoAware(href) {
+  if (typeof href !== 'string') return href;
+  const hash = (typeof document !== 'undefined' && document.location && document.location.hash) || '';
+  if (!hash.startsWith('#/demo')) return href;
+  if (!href.startsWith('#/')) return href;
+  if (href === '#/') return href;
+  if (href.startsWith('#/demo')) return href;
+  return '#/demo' + href.slice(1);
+}
+
+/**
+ * A minimal demo view stub: the persistent banner plus one obviously-fake card
+ * with a sign-in CTA. Registered for demo routes that have no bespoke mockup
+ * view yet (e.g. /demo/settings, /demo/health) so the whole /demo/* subtree is
+ * navigable without a single guarded bounce or network call.
+ * @param {HTMLElement} mount
+ * @param {{demo?: boolean}} opts
+ * @param {{title?: string, blurb?: string}} [meta]
+ */
+export function renderDemoStub(mount, opts, meta = {}) {
+  clear(mount);
+  if (isDemo(opts)) mount.appendChild(demoBanner());
+  const title = meta.title || 'Demo';
+  mount.appendChild(h('div', { class: 'page-header' }, [
+    h('div', {}, [
+      h('h1', { class: 'page-title', text: title }),
+      h('div', { class: 'page-sub', text: meta.blurb || 'A preview of this screen with sample data.' }),
+    ]),
+  ]));
+  mount.appendChild(h('div', { class: 'card' }, [
+    h('h3', { text: `${title} · sample` }),
+    h('p', { class: 'muted', text: 'This is fake demo content. Sign in to see your real data.' }),
+    h('button', { class: 'primary linkish', type: 'button', onClick: openLoginModal }, ['Sign in for real data']),
+  ]));
 }
 
 /**

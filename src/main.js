@@ -17,6 +17,7 @@ import { mountChat } from './chat.js';
 import { isSessionLive, endSession, isSignoutBroadcast, rehydrateSession, SIGNOUT_SENTINEL_KEY } from './auth.js';
 import { rootTarget, guardRedirect, sessionChangeTarget, restoreTarget, demoRedirect } from './nav-guard.js';
 import { demoStore } from './demo/demo-fixtures.js';
+import { renderDemoStub } from './demo/demo-mode.js';
 
 import { renderAbout } from './views/landing.js';
 import { renderLogin } from './views/login.js';
@@ -137,6 +138,15 @@ function boot() {
   route('/demo/marketplace', demoRoute('/demo/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent(), demoOpts); renderSidebar(); }));
   route('/demo/routstr', demoRoute('/demo/routstr', () => { setLandingMode(false); renderRoutstr(mainContent(), demoOpts); renderSidebar(); }));
   route('/demo/team', demoRoute('/demo/team', () => { setLandingMode(false); renderTeam(mainContent(), demoOpts); renderSidebar(); }));
+  // Demo equivalents for every remaining sidebar/real route. These have no
+  // bespoke mockup view, so they render the shared demo stub (banner + one fake
+  // card): the whole /demo/* subtree is navigable with zero guarded bounces and
+  // zero network. genesis/memory mirror real routes; settings/health are
+  // demo-only preview screens per the v0.2.86 brief.
+  route('/demo/genesis',  demoRoute('/demo/genesis',  () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Genesis' }); renderSidebar(); }));
+  route('/demo/memory',   demoRoute('/demo/memory',   () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Memory' }); renderSidebar(); }));
+  route('/demo/settings', demoRoute('/demo/settings', () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Settings' }); renderSidebar(); }));
+  route('/demo/health',   demoRoute('/demo/health',   () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Health' }); renderSidebar(); }));
 
   startRouter();
   mountChat(root);

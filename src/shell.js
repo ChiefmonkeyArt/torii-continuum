@@ -9,6 +9,7 @@ import { isSessionLive, startLogin, endSession } from './auth.js';
 import { isAgentConfigured, versionInfo, requestUpdate } from './data/agent.js';
 import { describeVersionState, updateTargetTag } from './data/release.js';
 import { h, openModal } from './views/util.js';
+import { demoAware } from './demo/demo-mode.js';
 
 const NAV_ITEMS = [
   { id: 'projects',    label: 'Projects',    icon: iconProjects,    path: '/projects' },
@@ -116,7 +117,14 @@ export function renderSidebar() {
     else { startLogin({ onStatus: (s) => renderLoginStatus(loginStatusEl, s) }); }
   });
   sidebarEl.querySelectorAll('.nav-item').forEach((el) => {
-    el.addEventListener('click', () => navigate(el.dataset.path.replace(/\?.*/, '')));
+    el.addEventListener('click', () => {
+      // While browsing the demo, keep sidebar navigation inside the /demo
+      // subtree — otherwise a click lands on a guarded route and bounces to the
+      // login modal (the v0.2.85 demo-nav regression). demoAware is a no-op
+      // outside demo mode.
+      const path = el.dataset.path.replace(/\?.*/, '');
+      navigate(demoAware('#' + path).slice(1));
+    });
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
     });
