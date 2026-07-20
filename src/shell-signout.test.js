@@ -21,6 +21,7 @@ import { dirname, join } from 'node:path';
 
 import { confirmSignOut, signOutOutcomes } from './shell.js';
 import { sessionChangeTarget, ROOT_PATH } from './nav-guard.js';
+import { endSession, isSignoutBroadcast, SIGNOUT_SENTINEL_KEY } from './auth.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(here, p), 'utf8');
@@ -180,6 +181,55 @@ describe('signOutOutcomes — pure decision logic', () => {
     expect(end).not.toHaveBeenCalled();
     onConfirm();
     expect(end).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('multi-tab sign-out — localStorage sentinel broadcast', () => {
+  it('endSession() clears both keys, writes the sign-out sentinel, and dispatches once', () => {
+    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.sig');
+    localStorage.setItem(ONBOARDING_KEY, JSON.stringify({ token: 't' }));
+    const onChange = vi.fn();
+    document.addEventListener('continuum:session-changed', onChange);
+
+    endSession();
+
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+    expect(localStorage.getItem(ONBOARDING_KEY)).toBeNull();
+    // The sentinel was written so OTHER tabs see a storage event and bounce.
+    expect(localStorage.getItem(SIGNOUT_SENTINEL_KEY)).not.toBeNull();
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('endSession({localOnly:true}) clears + dispatches but does NOT re-broadcast', () => {
+    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.sig');
+    const onChange = vi.fn();
+    document.addEventListener('continuum:session-changed', onChange);
+
+    endSession({ localOnly: true });
+
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+    // No sentinel write → the tab that reacted to a broadcast cannot loop.
+    expect(localStorage.getItem(SIGNOUT_SENTINEL_KEY)).toBeNull();
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('isSignoutBroadcast: true only for a WRITE to the sentinel key', () => {
+    expect(isSignoutBroadcast({ key: SIGNOUT_SENTINEL_KEY, newValue: '171' })).toBe(true);
+    // A removeItem/clear (newValue null) must not sign a tab out.
+    expect(isSignoutBroadcast({ key: SIGNOUT_SENTINEL_KEY, newValue: null })).toBe(false);
+    // Unrelated keys (e.g. the token slot or theme) are ignored.
+    expect(isSignoutBroadcast({ key: TOKEN_KEY, newValue: 'x' })).toBe(false);
+    expect(isSignoutBroadcast({ key: 'continuum.theme', newValue: 'dark' })).toBe(false);
+    expect(isSignoutBroadcast(null)).toBe(false);
+  });
+});
+
+describe('src/main.js — multi-tab storage listener wiring (source structure)', () => {
+  const main = read('main.js');
+  it('registers a storage listener that reacts to the sign-out broadcast', () => {
+    expect(main).toMatch(/addEventListener\('storage'/);
+    expect(main).toContain('isSignoutBroadcast');
+    expect(main).toMatch(/endSession\(\{\s*localOnly:\s*true\s*\}\)/);
   });
 });
 

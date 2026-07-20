@@ -232,6 +232,38 @@ describe('logout from a protected route → login modal', () => {
   });
 });
 
+// ── Source-structure guard: the route table is default-deny by construction ──
+// A future author who adds an unguarded protected route must fail CI here.
+describe('src/main.js — every registered route is public-root or guarded()', () => {
+  it('no route escapes the guard except the public patterns', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join } = await import('node:path');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(join(here, 'main.js'), 'utf8');
+
+    // Public patterns that are allowed to register a bare (unguarded) handler:
+    // the root/login page renders in place, and the demo surface is explicitly
+    // public (nav-guard PUBLIC_PATTERNS) with its own in-view session gating.
+    const PUBLIC_OK = (pattern) =>
+      pattern === '/' || pattern === '/demo' || pattern.startsWith('/demo/');
+
+    // Match every `route('<pattern>', <rest-of-line>)` registration.
+    const re = /route\(\s*'([^']+)'\s*,([^\n]*)/g;
+    const seen = [];
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      const [, pattern, rest] = m;
+      seen.push(pattern);
+      if (PUBLIC_OK(pattern)) continue;
+      expect(rest.includes(`guarded('${pattern}'`)).toBe(true);
+    }
+    // Sanity: we actually parsed the table (guards nothing-matched false-pass).
+    expect(seen).toContain('/dashboard');
+    expect(seen.length).toBeGreaterThanOrEqual(8);
+  });
+});
+
 // ── Source-structure guard: login surface exposes no unauthenticated entry ──
 describe('login surface no longer exposes an unauthenticated demo entry point', () => {
   it('src/views/login.js contains no "Explore the demo" affordance', async () => {

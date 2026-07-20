@@ -14,7 +14,7 @@ import { initStore } from './data/store.js';
 import { mountShell, mainContent, renderSidebar, applyStoredTheme } from './shell.js';
 import { route, startRouter, navigate, currentRoute, resolveCurrent } from './router.js';
 import { mountChat } from './chat.js';
-import { isSessionLive } from './auth.js';
+import { isSessionLive, endSession, isSignoutBroadcast } from './auth.js';
 import { rootTarget, guardRedirect, sessionChangeTarget, restoreTarget } from './nav-guard.js';
 
 import { renderAbout } from './views/landing.js';
@@ -133,6 +133,19 @@ function boot() {
   // the live session and bounce a logged-out visitor off any protected view.
   window.addEventListener('popstate', enforceRouteAuth);
   window.addEventListener('pageshow', (e) => { if (e && e.persisted) enforceRouteAuth(); });
+
+  // Multi-tab sign-out: when Sign Out fires in another tab it writes the
+  // sign-out sentinel to localStorage, which fires a `storage` event HERE (the
+  // event never fires in the writing tab). React by ending THIS tab's session
+  // localOnly (so we don't re-broadcast and loop) and bouncing to login. The
+  // localOnly endSession also dispatches continuum:session-changed, but the
+  // explicit replace-navigate guarantees the bounce even if that handler order
+  // ever changes.
+  window.addEventListener('storage', (e) => {
+    if (!isSignoutBroadcast(e)) return;
+    endSession({ localOnly: true });
+    navigate('/', { replace: true });
+  });
 
   // Prevent double-tap zoom on the chat button on iOS
   document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
