@@ -86,6 +86,10 @@ Paste this whole block at the start of a new Perplexity Computer session to resu
 - `src/styles/pages.css` — cards, milestones, todos, marketplace rows.
 - `src/styles/chat.css` — bottom chat dock (mock).
 
+## Disk retention
+
+- `ops/torii-disk-retention.sh` — post-success sweep run by the cutover role. Prunes source clones, cutover staging, state backups, `app.staging` residue, rotates logs, and (v0.2.85-alpha) **prunes `/home/continuum/app.quarantine-*`**: keeps the newest `RET_QUARANTINE_KEEP` (default 3) regardless of age, deletes the rest only once older than `RET_QUARANTINE_AGE_DAYS` (default 3). Fix for the 2026-07-20 incident where nine quarantines (~5.5 GiB) filled `/dev/sda1` and broke the v0.2.84-alpha deploy. Ansible knobs: `continuum_retention_quarantine_{parent,age_days,keep}`.
+
 ## Build + deploy commands
 
 ```bash
