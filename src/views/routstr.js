@@ -2,6 +2,7 @@
  *  All UI-only for MVP; wire real endpoint later.
  */
 import { h, clear, formatSats, openModal } from './util.js';
+import * as store from '../data/store.js';
 import { getRoutstr, updateRoutstr } from '../data/store.js';
 import { setChatContext } from '../chat.js';
 import {
@@ -11,6 +12,7 @@ import {
 } from '../data/agent.js';
 import { renderQR } from './qr.js';
 import { isSessionLive, startLogin } from '../auth.js';
+import { isDemo, demoSource, demoBanner, goToLogin } from '../demo/demo-mode.js';
 
 // Lightning-QR top-up (v0.2.83-alpha). Preset amounts, default, and the hard
 // client-side cap. The agent independently re-enforces cashu.max_mint_sats, so
@@ -56,13 +58,20 @@ export function readBalanceSats(data) {
   return null;
 }
 
-export function renderRoutstr(mount) {
+export function renderRoutstr(mount, opts = {}) {
+  const demo = isDemo(opts);
+  const S = demoSource(opts, store);
   setChatContext({ label: 'Routstr', where: 'routstr' });
   clear(mount);
 
-  const r = getRoutstr();
+  const r = S.getRoutstr();
   const c = r.content;
-  const live = isSessionLive();
+  // A demo visitor is signed out, so live is false and no poll/network runs;
+  // the extra `!demo` guard keeps that explicit even if the fixtures ever flip
+  // a connected flag.
+  const live = !demo && isSessionLive();
+
+  if (demo) mount.appendChild(demoBanner());
 
   // Kick off (or refresh) live balance polling when logged in.
   if (live) startBalancePoll(mount);
@@ -75,16 +84,16 @@ export function renderRoutstr(mount) {
     ]),
     h('div', { class: 'page-actions' }, [
       c.connected
-        ? h('button', { onClick: disconnect }, ['Disconnect'])
-        : h('button', { class: 'primary', onClick: connect }, ['Connect Cashu wallet']),
+        ? h('button', { onClick: () => (demo ? goToLogin() : disconnect()) }, ['Disconnect'])
+        : h('button', { class: 'primary', onClick: () => (demo ? goToLogin() : connect()) }, ['Connect Cashu wallet']),
     ]),
   ]);
   mount.appendChild(header);
 
   // Two matching horizontal wallet cards: Cashu (left) + NWC (right).
   const walletCards = h('div', { class: 'grid-2' }, [
-    renderCashuCard(c),
-    renderNwcCard(live),
+    renderCashuCard(c, demo),
+    renderNwcCard(live, demo),
   ]);
   mount.appendChild(walletCards);
 
@@ -92,7 +101,7 @@ export function renderRoutstr(mount) {
 
   // Grid: model list + usage
   const grid = h('div', { class: 'grid-2' }, [
-    renderModelPicker(c),
+    renderModelPicker(c, demo),
     renderUsage(c),
   ]);
   mount.appendChild(grid);
@@ -107,7 +116,7 @@ export function renderRoutstr(mount) {
       h('label', { text: 'Routstr URL' }),
       (() => {
         const inp = h('input', { type: 'text', value: c.endpoint });
-        inp.addEventListener('change', () => updateRoutstr({ endpoint: inp.value.trim() || 'https://api.routstr.com' }));
+        inp.addEventListener('change', () => (demo ? goToLogin() : updateRoutstr({ endpoint: inp.value.trim() || 'https://api.routstr.com' })));
         return inp;
       })(),
     ]),
@@ -115,7 +124,7 @@ export function renderRoutstr(mount) {
       h('label', { text: 'Monthly Cashu budget (sats)' }),
       (() => {
         const inp = h('input', { type: 'number', value: c.usage.monthlyBudget, min: 0, step: 1000 });
-        inp.addEventListener('change', () => updateRoutstr({ usage: { ...c.usage, monthlyBudget: Math.max(0, parseInt(inp.value || '0', 10)) } }));
+        inp.addEventListener('change', () => (demo ? goToLogin() : updateRoutstr({ usage: { ...c.usage, monthlyBudget: Math.max(0, parseInt(inp.value || '0', 10)) } })));
         return inp;
       })(),
     ]),
@@ -123,13 +132,13 @@ export function renderRoutstr(mount) {
   mount.appendChild(settings);
 
   // If we arrived here from the chat dock's "Top Up" button, reveal + focus the
-  // Cashu receive form so funding is one paste away.
-  maybeFocusTopUp();
+  // Cashu receive form so funding is one paste away. Never in demo (no session).
+  if (!demo) maybeFocusTopUp();
 }
 
 // ─── Card 1: Cashu / Routstr balance ────────────────────────────────────────
 
-function renderCashuCard(c) {
+function renderCashuCard(c, demo) {
   balanceNumEl = h('span', { class: 'bal-num', text: formatSats(c.cashuBalanceSats) });
 
   const hero = h('div', { class: 'routstr-hero' }, [
@@ -154,7 +163,7 @@ function renderCashuCard(c) {
     ]),
   ]);
 
-  const topUpBtn = h('button', { class: 'primary', onClick: () => toggleTopUp(true) }, ['Top Up']);
+  const topUpBtn = h('button', { class: 'primary', onClick: () => (demo ? goToLogin() : toggleTopUp(true)) }, ['Top Up']);
 
   return h('div', { class: 'card hot' }, [
     h('h3', { text: 'Cashu balance' }),
@@ -532,7 +541,7 @@ function renderTopUpForm() {
 // labelled "NWC wallet". It reuses the existing onboarding wallet endpoints
 // (status/connect/test/disconnect) rather than adding any new protocol support.
 
-function renderNwcCard(live) {
+function renderNwcCard(live, demo) {
   const body = h('div', { class: 'nwc-body' }, [
     h('div', { class: 'muted', text: live ? 'Checking wallet…' : 'Sign in to connect a Lightning wallet.' }),
   ]);
@@ -544,7 +553,7 @@ function renderNwcCard(live) {
   if (live) loadNwcStatus(body);
   else {
     body.appendChild(h('div', { class: 'wallet-card-actions', style: 'margin-top: 12px;' }, [
-      h('button', { class: 'primary', onClick: startLogin }, ['Sign in']),
+      h('button', { class: 'primary', onClick: () => (demo ? goToLogin() : startLogin()) }, ['Sign in']),
     ]));
   }
   return card;
@@ -650,7 +659,7 @@ function openNwcConnectModal(body) {
   });
 }
 
-function renderModelPicker(c) {
+function renderModelPicker(c, demo) {
   const list = h('div', { class: 'model-list' });
   for (const m of c.models) {
     const row = h('div', { class: 'model ' + (m.id === c.selectedModel ? 'selected' : '') }, [
@@ -662,6 +671,7 @@ function renderModelPicker(c) {
       h('span', { class: 'price', text: `${m.pricePer1kSats} sats/1k tok` }),
     ]);
     row.addEventListener('click', () => {
+      if (demo) { goToLogin(); return; }
       updateRoutstr({ selectedModel: m.id });
       renderRoutstr(document.getElementById('main-content'));
     });

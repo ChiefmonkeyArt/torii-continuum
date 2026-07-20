@@ -71,7 +71,7 @@ describe('routstr.js — two matching wallet cards (v0.2.70-alpha)', () => {
 
   it('lays the two wallet cards out in a matching grid-2 of .card elements', () => {
     // Both cards are built and placed side by side in a grid-2 container.
-    expect(routstrSrc).toMatch(/grid-2[\s\S]*renderCashuCard\(c\)[\s\S]*renderNwcCard/);
+    expect(routstrSrc).toMatch(/grid-2[\s\S]*renderCashuCard\(c(,\s*demo)?\)[\s\S]*renderNwcCard/);
     expect(routstrSrc).toMatch(/renderCashuCard[\s\S]*class:\s*'card hot'/);
     expect(routstrSrc).toMatch(/renderNwcCard[\s\S]*class:\s*'card'/);
   });

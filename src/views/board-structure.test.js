@@ -25,7 +25,8 @@ describe('project view tabs — link/nav semantics, not the ARIA tab pattern', (
 
   it('uses real anchors with hash hrefs for routing', () => {
     expect(projectHomeSrc).toMatch(/h\('a',\s*attrs/);
-    expect(projectHomeSrc).toMatch(/href:\s*`#\$\{path\}`/);
+    // Hash href, optionally routed through demoPath() to keep demo tabs on /demo.
+    expect(projectHomeSrc).toMatch(/href:\s*`#\$\{(demoPath\(opts,\s*path\)|path)\}`/);
   });
 
   it('marks the active tab with aria-current="page"', () => {

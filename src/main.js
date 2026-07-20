@@ -15,7 +15,8 @@ import { mountShell, mainContent, renderSidebar, applyStoredTheme } from './shel
 import { route, startRouter, navigate, currentRoute, resolveCurrent } from './router.js';
 import { mountChat } from './chat.js';
 import { isSessionLive, endSession, isSignoutBroadcast } from './auth.js';
-import { rootTarget, guardRedirect, sessionChangeTarget, restoreTarget } from './nav-guard.js';
+import { rootTarget, guardRedirect, sessionChangeTarget, restoreTarget, demoRedirect } from './nav-guard.js';
+import { demoStore } from './demo/demo-fixtures.js';
 
 import { renderAbout } from './views/landing.js';
 import { renderLogin } from './views/login.js';
@@ -49,6 +50,22 @@ function guarded(pattern, handler) {
     // WITHOUT leaving that protected hash sitting in history to return to.
     if (redirect) { navigate(redirect, { replace: true }); return; }
     handler(params);
+  };
+}
+
+// Demo surface wiring. The /demo/* routes are PUBLIC (nav-guard PUBLIC_PATTERNS)
+// so a signed-out visitor can browse the read-only mockup. But a signed-in
+// operator has real data — landing on a demo route sends them to the real
+// equivalent instead (demoRedirect strips the /demo prefix). The handler renders
+// the SAME view as the real route, passing { demo: true, fixtures: demoStore }
+// so the view swaps its data source and gates every mutation to login WITHOUT
+// forking the view. Bare (unguarded) registration is intentional and enforced
+// as allowed by the nav-guard source-structure test.
+function demoRoute(pattern, render) {
+  return (params) => {
+    const redirect = demoRedirect(pattern, isSessionLive());
+    if (redirect) { navigate(redirect, { replace: true }); return; }
+    render(params);
   };
 }
 
@@ -102,6 +119,18 @@ function boot() {
   route('/genesis', guarded('/genesis', () => { setLandingMode(false); renderGenesis(mainContent()); renderSidebar(); }));
   route('/memory', guarded('/memory', () => { setLandingMode(false); renderMemory(mainContent()); renderSidebar(); }));
   route('/dashboard', guarded('/dashboard', () => { setLandingMode(false); renderDashboard(mainContent()); renderSidebar(); }));
+
+  // Public demo surface (/demo/*). Read-only mockup rendered from obviously-fake
+  // fixtures; no agent calls, every CTA routes to login. A signed-in operator is
+  // redirected to the real screen by demoRoute(). Views take { demo, fixtures }.
+  const demoOpts = { demo: true, fixtures: demoStore };
+  route('/demo', demoRoute('/demo', () => { setLandingMode(false); renderDashboard(mainContent(), demoOpts); renderSidebar(); }));
+  route('/demo/dashboard', demoRoute('/demo/dashboard', () => { setLandingMode(false); renderDashboard(mainContent(), demoOpts); renderSidebar(); }));
+  route('/demo/projects', demoRoute('/demo/projects', () => { setLandingMode(false); renderProjects(mainContent(), demoOpts); renderSidebar(); }));
+  route('/demo/projects/:slug', demoRoute('/demo/projects/:slug', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug, demoOpts); renderSidebar(); }));
+  route('/demo/marketplace', demoRoute('/demo/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent(), demoOpts); renderSidebar(); }));
+  route('/demo/routstr', demoRoute('/demo/routstr', () => { setLandingMode(false); renderRoutstr(mainContent(), demoOpts); renderSidebar(); }));
+  route('/demo/team', demoRoute('/demo/team', () => { setLandingMode(false); renderTeam(mainContent(), demoOpts); renderSidebar(); }));
 
   startRouter();
   mountChat(root);

@@ -1,13 +1,17 @@
 /** Marketplace — tasks available for AI work. Ours highlighted in amber. */
 import { h, clear, formatSats, timeAgo } from './util.js';
-import { listMarketTasks } from '../data/store.js';
+import * as store from '../data/store.js';
 import { setChatContext } from '../chat.js';
+import { isDemo, demoSource, demoBanner } from '../demo/demo-mode.js';
 
-export function renderMarketplace(mount) {
+export function renderMarketplace(mount, opts = {}) {
+  const S = demoSource(opts, store);
   setChatContext({ label: 'Marketplace', where: 'marketplace' });
   clear(mount);
 
-  const all = listMarketTasks();
+  if (isDemo(opts)) mount.appendChild(demoBanner());
+
+  const all = S.listMarketTasks();
   const ours = all.filter((t) => t.content.ours);
 
   let filter = { query: '', complexity: 'all', oursOnly: false };

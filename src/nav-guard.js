@@ -20,18 +20,72 @@
  * to `#/dashboard` triggers — so refresh/deep-link behaviour is guarded too.
  */
 
-// The only public route: the login page, rendered in place at root. Everything
-// not listed here is protected (default-deny).
-export const PUBLIC_PATTERNS = Object.freeze(['/']);
+// Public routes, exempt from default-deny. The login page renders in place at
+// root; the demo surface (/demo and everything under it) is a signed-out mockup
+// with its own in-view session gating (fake data, every CTA routes to login).
+// A trailing '/*' entry matches that pattern's whole subtree. Everything not
+// covered here is protected.
+export const PUBLIC_PATTERNS = Object.freeze(['/', '/demo', '/demo/*']);
 
 // The root path. When unauthenticated this renders the login page in place;
 // when authenticated it redirects to the dashboard.
 export const ROOT_PATH = '/';
 export const LOGIN_PATH = '/'; // login is rendered at root, no separate hash
 export const DASHBOARD_PATH = '/dashboard';
+export const DEMO_ROOT = '/demo';
+
+/**
+ * Does a public entry match a route pattern? A plain entry matches exactly; an
+ * entry ending in '/*' matches that prefix and its whole subtree (so '/demo/*'
+ * covers '/demo/projects', '/demo/projects/:slug', …). Pure so the contract is
+ * unit-tested directly.
+ * @param {string} entry a PUBLIC_PATTERNS element
+ * @param {string} pattern the route pattern being resolved
+ */
+function publicEntryMatches(entry, pattern) {
+  if (entry.endsWith('/*')) {
+    const prefix = entry.slice(0, -2); // '/demo/*' → '/demo'
+    return pattern === prefix || pattern.startsWith(prefix + '/');
+  }
+  return entry === pattern;
+}
 
 export function isPublicPattern(pattern) {
-  return PUBLIC_PATTERNS.includes(pattern);
+  return PUBLIC_PATTERNS.some((entry) => publicEntryMatches(entry, pattern));
+}
+
+/** Is this route pattern part of the demo surface (`/demo` or `/demo/...`)? */
+export function isDemoPattern(pattern) {
+  return pattern === DEMO_ROOT || pattern.startsWith(DEMO_ROOT + '/');
+}
+
+/**
+ * Map a demo route pattern to its real, protected equivalent by stripping the
+ * `/demo` prefix. `/demo` and `/demo/dashboard` both map to `/dashboard`; other
+ * demo routes map to their bare counterpart ('/demo/projects' → '/projects').
+ * Pure + exported so the mapping is unit-tested directly.
+ * @param {string} pattern a demo route pattern
+ * @returns {string} the real route pattern
+ */
+export function realEquivalent(pattern) {
+  if (!isDemoPattern(pattern)) return pattern;
+  const rest = pattern.slice(DEMO_ROOT.length); // '' | '/projects' | '/dashboard' | …
+  if (rest === '' || rest === '/' || rest === '/dashboard') return DASHBOARD_PATH;
+  return rest;
+}
+
+/**
+ * When an AUTHENTICATED operator lands on a demo route, send them to the real
+ * screen instead of the mockup — real data beats fake data for a signed-in user.
+ * Returns a redirect path for an authed visitor on a demo pattern, else null
+ * (signed-out visitors keep browsing the demo). Pure + exported.
+ * @param {string} pattern route pattern being resolved
+ * @param {boolean} isAuthed
+ * @returns {string|null}
+ */
+export function demoRedirect(pattern, isAuthed) {
+  if (isAuthed && isDemoPattern(pattern)) return realEquivalent(pattern);
+  return null;
 }
 
 // Default-deny: any pattern that is not explicitly public is protected.
