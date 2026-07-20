@@ -9,7 +9,7 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
-## v0.2.83-alpha — Routstr Lightning-QR top-up (2026-07-20)
+## v0.2.84-alpha — Routstr Lightning-QR top-up (2026-07-20)
 
 Funding the Routstr Cashu balance no longer requires pasting a Cashu token. The Routstr page's **Top Up** button now opens a modal that renders a **Lightning-invoice QR** payable from any phone wallet, with the paste-a-token flow preserved as a secondary link so nothing regresses.
 
@@ -23,9 +23,25 @@ Funding the Routstr Cashu balance no longer requires pasting a Cashu token. The 
 
 **Zero new dependencies.** QR is a vendored MIT Nayuki QR-Code-generator ES module (`src/views/qr.js`, ~9.4 KB min / 3.5 KB gz), exporting `renderQR(text,{size,ecl})`.
 
-**Tests.** Root vitest **1318 passed** (adds `src/views/qr.test.js`, Routstr test markers preserved); agent `node --test` **302 passed** (adds `wallet-mint-quote.test.js` for the double-mint guard and `wallet-nwc-invoice.test.js` for the NWC paths). `npm run build` succeeds.
+**Tests.** Root vitest **1320 passed** (adds `src/views/qr.test.js`, Routstr test markers preserved); agent `node --test` **307 passed** (adds `wallet-mint-quote.test.js` for the double-mint guard and `wallet-nwc-invoice.test.js` for the NWC paths). `npm run build` succeeds. *(Counts reflect the post-merge tree after main's v0.2.83-alpha MEMORY-1 privacy correction landed; this slice ships forward-only as v0.2.84-alpha to avoid the version collision.)*
 
 ## v0.2.82-alpha — secure persistent memory: encrypted-at-rest, consent-gated, owner-scoped, signed portability (MEMORY-1)
+
+## v0.2.83-alpha — MEMORY-1 privacy correction: ciphertext-only from proposal creation onward (supersedes v0.2.82-alpha)
+
+**Root cause.** v0.2.82-alpha's `consent.propose()` persisted a **plaintext** `payload` (and `evidence`) inside `memory/owners/<ownerHex>/bots/<botId>/pending/<id>.json`. That contradicted the encrypted-at-rest guarantee and the report's "plaintext preview client-side only" claim: private memory text sat unencrypted on the server filesystem between proposal and approval. **v0.2.82-alpha is superseded.**
+
+**Fix — sealed before it ever reaches the agent (`agent/lib/consent.mjs`, schema `torii.continuum.memory_proposal/2`).** The browser seals the proposed payload **NIP-44 v2 to the owner's own key before proposal persistence** (`sealProposalPayload()` in `src/views/memory.js` → `window.nostr.nip44.encrypt` + a canonical `payload_sha256`) and sends the agent only `{ciphertext, payload_sha256, scope, d_tag, source}`. `propose()` **refuses any plaintext** (`code:'plaintext_refused'` when `'payload' in params`), requires a sealed `ciphertext` (`isSealedString`, ≤131072 B) + a 64-hex `payload_sha256`, and writes a pending file containing **only** ciphertext + hashes + scope + slug `d_tag` + `source` enum + single-use `approval_nonce` + status. No `payload`/`evidence`/title/description/preview field exists at any stage.
+
+**Review decrypts client-side; approval re-sends nothing.** The owner console decrypts the stored ciphertext with `window.nostr.nip44.decrypt`, recomputes `canonicalSha256Hex`, and enables approve only when the recomputation equals `p.payload_sha256` (`hashVerified`). `approve({expectPayloadSha256, approvalNonce})` takes **no ciphertext parameter**: it binds to the exact reviewed hash + single-use nonce, then **atomically promotes the already-sealed ciphertext** into the durable scoped store via `memstore.put({ciphertext, expectSha256: ciphertext_sha256})` and drops the pending blob. The server never sees plaintext or a key. `reject()` securely unlinks the pending ciphertext (metadata-only audit).
+
+**Defensive migration (`migratePlaintextProposals()`, run once at startup in `agent/index.mjs`).** Detects any retired `memory_proposal/1` file or stray `payload`/`evidence` field, unlinks it **without reading or logging its content**, and appends a metadata-only `memory.migrate.purge_plaintext_proposal` audit line. Legacy proposals are never surfaced through any API (`listPending`/`get`/`approve` deny them).
+
+**Safe-metadata surface (spec §3.1).** The only owner-supplied free-form value is the payload, which is always sealed. `d_tag`/`project` are slugs (`^[a-z0-9][a-z0-9_-]{0,63}$`), `class`/`kind`/`source` are enums, and both hashes are opaque 64-hex — the metadata plane cannot smuggle memory text. Import/quarantine stay ciphertext-only (unchanged from MEMORY-1).
+
+**Tests.** Agent `node --test` **291 pass**: `memory1.test.js` adds propose-refuses-plaintext, stores-only-ciphertext (asserts the on-disk pending file has no `payload`/`evidence`), approve-binds-hash+nonce+promotes, reject-unlinks-file, approve-fails-on-corrupt-ciphertext, proposals-survive-restart, migration-purges-legacy (audit has `purge_plaintext_proposal`, never the leaked marker), plus a **recursive plaintext-marker scan** walking the pending/quarantine/audit/index/`.enc` trees asserting a known plaintext marker never appears on disk. Frontend `vitest` **403 pass**: `agent-memory.test.js` locks approve → hash+nonce+event_id only (no payload/ciphertext/key); `memory-structure.test.js` locks browser sealing, client-side decrypt, `hashVerified`, and approval-re-sends-nothing. `npm run build` clean. Version → 0.2.83-alpha (root+agent package.json + both lockfiles). Annotated tag v0.2.83-alpha; **NOT deployed** — enabled deploy timer + live production pin unchanged.
+
+## v0.2.82-alpha — secure persistent memory: encrypted-at-rest, consent-gated, owner-scoped, signed portability (MEMORY-1) — SUPERSEDED by v0.2.83-alpha
 
 First persistent-memory slice. A sovereign bot gains durable memory that is **encrypted at rest (NIP-44, sealed in the browser — the agent never sees plaintext or a key)**, **consent-gated** (nothing durable is saved without explicit owner approval), and **isolated by owner + bot + project**. No vector DB or embeddings are introduced — similarity retrieval stays deferred to RAG-1; MEMORY-1 does exact-scope fetch only and does not fake vector RAG. Kind 30092 stays identity/policy/provenance only and is untouched.
 

@@ -1,6 +1,13 @@
 # Torii Continuum — Sovereign AI: MEMORY-1 Technical Specification
 
-Status: **Implementation-grade** · Shipped: **MEMORY-1** (v0.2.82-alpha) · Full embeddings / vector retrieval: **deferred to RAG-1** · Relay publication & automatic multi-device sync: **deferred/disabled**
+Status: **Implementation-grade** · Shipped: **MEMORY-1** (v0.2.82-alpha) · Privacy patch: **v0.2.83-alpha — ciphertext-only proposals** (supersedes v0.2.82-alpha; see §3) · Full embeddings / vector retrieval: **deferred to RAG-1** · Relay publication & automatic multi-device sync: **deferred/disabled**
+
+> **v0.2.83-alpha correction.** v0.2.82-alpha's `propose()` persisted a pending
+> proposal that contained the **plaintext** payload on the server filesystem,
+> contradicting the encrypted-at-rest guarantee. That is fixed: proposals are now
+> **ciphertext-only from creation onward** (sealed in the browser before they
+> reach the agent), reviewed by client-side decryption, and any legacy plaintext
+> proposal is purged on startup. Treat v0.2.82-alpha as **superseded**.
 
 > This document is the durable design contract for Torii Continuum's persistent
 > memory slice. MEMORY-1 gives a sovereign bot **encrypted-at-rest, owner-
@@ -23,10 +30,15 @@ a surveillance surface. MEMORY-1 resolves the tension with four hard rules:
 1. **Encrypted at rest, sealed in the browser.** Every durable memory is
    NIP-44-encrypted client-side. The agent stores and returns **ciphertext
    only** — it never sees plaintext and never holds a key.
-2. **Nothing durable without explicit consent.** AI (or "remember this")
-   suggestions are **proposals**. They are never auto-persisted. The owner
-   reviews the exact plaintext and approves by sealing it; approval is bound to
-   the exact reviewed payload hash and a single-use nonce.
+2. **Nothing durable without explicit consent — and proposals are ciphertext
+   too.** AI (or "remember this") suggestions are **proposals**. They are never
+   auto-persisted, and they are **sealed from the moment they are created**: the
+   browser NIP-44-encrypts the proposed payload to the owner's own key and sends
+   the agent only the ciphertext + a canonical-plaintext hash + minimal metadata.
+   The owner reviews by **decrypting the ciphertext client-side**; approval is
+   bound to the exact reviewed payload hash and a single-use nonce, and promotes
+   the already-sealed blob. No plaintext memory is written at any stage — at
+   proposal creation, in the pending store, in logs, or in the audit ledger.
 3. **Isolated by owner + bot + project.** Continuum is a project engine. Memory
    in project *A* is invisible to project *B*, one owner's memory is invisible to
    another, and one bot's memory is invisible to another — enforced by
@@ -60,9 +72,18 @@ pre-MEMORY-1 ciphertext is still discoverable for read-time re-homing.
 memory/
   owners/<ownerHex>/bots/<botId>/projects/<projectSlug>/<class>/<id>.enc
   owners/<ownerHex>/bots/<botId>/quarantine/<sha256>.json
-  owners/<ownerHex>/proposals/<id>.json
+  owners/<ownerHex>/bots/<botId>/pending/<id>.json    # ciphertext-only proposal
+  owners/<ownerHex>/bots/<botId>/tombstones/<id>.json
   audit.jsonl                         # hash-chained tamper-evident ledger
 ```
+
+A pending proposal file (`pending/<id>.json`) holds **only** the sealed
+`ciphertext`, its `ciphertext_sha256`, the client-computed `payload_sha256`, the
+scope (owner/bot/project/class/kind), a slug `d_tag`, the single-use
+`approval_nonce`, and status timestamps. It **never** contains a `payload`,
+`evidence`, or any other plaintext field. (The pre-`v0.2.83-alpha` schema
+`memory_proposal/1` did carry a plaintext `payload`; it is retired and actively
+purged on startup — see §3.)
 
 - `ownerHex` is the strict 64-hex pubkey derived from the **verified session**
   via `ownerHexFromNpub()` — never from the request body.
@@ -110,24 +131,58 @@ The UI states these limits plainly.
 
 ## 3. Consent & audit (`agent/lib/consent.mjs`)
 
-The proposal → approval state machine is the only path to durable memory:
+The proposal → approval state machine is the only path to durable memory, and
+it is **ciphertext-only from proposal creation onward** — the server never
+receives, stores, logs, or audits memory plaintext at any stage.
 
-1. `propose()` writes a pending proposal (plaintext payload, `payload_sha256`,
-   fresh `approval_nonce`). **Nothing durable is written.**
-2. `approve({ expectPayloadSha256, approvalNonce, ciphertext })`:
-   - **Hash binding** — `expectPayloadSha256` must equal the stored hash, else
-     `code:'hash_mismatch'`. The owner can only ratify the exact bytes reviewed.
+1. `propose({ ciphertext, payloadSha256, … })` writes a pending proposal
+   containing **only** the browser-sealed `ciphertext`, its `ciphertext_sha256`,
+   the client-computed `payload_sha256`, scope metadata, a slug `d_tag`, and a
+   fresh `approval_nonce`. A plaintext `payload` in the request is **refused**
+   (`code:'plaintext_refused'`). **Nothing durable is written.**
+2. `approve({ expectPayloadSha256, approvalNonce })` — note there is **no
+   `ciphertext` parameter**; the sealed blob is already on the proposal:
+   - **Hash binding** — `expectPayloadSha256` must equal the stored
+     `payload_sha256`, else `code:'hash_mismatch'`. The owner can only ratify the
+     exact bytes reviewed (reviewed by decrypting the ciphertext client-side).
    - **Single-use nonce** — a spent nonce cannot be replayed; a second approve on
      an already-approved proposal short-circuits `idempotent:true` (no double
      store).
-   - **Browser-sealed** — the client NIP-44-encrypts the payload and sends
-     ciphertext + hash + nonce; the server stores the ciphertext via `memstore`.
-     The server never receives plaintext or a key.
-3. `reject()` marks the proposal rejected (audited) and never stores.
+   - **Atomic promotion** — the agent moves the already-sealed ciphertext into
+     the durable scoped store via `memstore.put`, pinned by `expectSha256 =
+     ciphertext_sha256`; the pending ciphertext is then dropped. The server never
+     sees plaintext or a key.
+3. `reject()` **securely unlinks** the pending ciphertext file (no rejected shell
+   left on disk) and audits metadata/hashes only.
+4. `migratePlaintextProposals()` runs once at startup: it detects any retired
+   `memory_proposal/1` file (or a stray `payload`/`evidence` field), unlinks it
+   **without reading or logging its content**, records a metadata-only audit
+   entry, and never surfaces it through any API.
 
 Cross-owner/bot/project approval is **default-deny** (owner from session, scope
-from the proposal). Every proposal/approve/reject/delete/export/import action
-appends to the hash-chained `memory/audit.jsonl` (`agent/lib/audit.mjs`).
+from the proposal). Every proposal/approve/reject/delete/export/import/migrate
+action appends only non-sensitive hashes + metadata to the hash-chained
+`memory/audit.jsonl` (`agent/lib/audit.mjs`) — never memory plaintext.
+
+### 3.1 Safe metadata fields & limits
+
+Because proposal/stored metadata is not encrypted, the surface that could leak
+memory text is deliberately minimal and constrained:
+
+| field              | source            | constraint                                   |
+|--------------------|-------------------|----------------------------------------------|
+| `d_tag`            | caller            | slug `^[a-z0-9][a-z0-9_-]{0,63}$` (no free text) |
+| `project`          | caller            | slug (same charset) or `_global`             |
+| `class` / `kind`   | fixed enum        | one of the known classes / 30094-30097       |
+| `payload_sha256`   | browser           | 64-hex digest (opaque)                        |
+| `ciphertext_sha256`| agent             | 64-hex digest (opaque)                        |
+| `source`           | fixed enum        | `reflect` \| `owner-command`                  |
+| timestamps/nonce   | agent             | integers / hex (opaque)                       |
+
+No title, description, preview, or evidence field exists on the proposal. The
+only owner-supplied free-form value is the payload itself — which is always
+sealed. `d_tag` is intentionally a slug so it cannot smuggle memory text through
+the metadata plane.
 
 ---
 

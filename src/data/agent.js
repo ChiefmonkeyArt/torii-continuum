@@ -353,18 +353,24 @@ export async function memoryProposals() {
   return req('GET', '/api/memory/proposals');
 }
 
-/** POST /api/memory/proposals — create a pending proposal (never auto-persisted). */
-export async function memoryPropose({ project, kind, cls, d_tag, payload, evidence, source } = {}) {
-  return req('POST', '/api/memory/proposals', { project, kind, cls, d_tag, payload, evidence, source });
+/**
+ * POST /api/memory/proposals — create a pending proposal (never auto-persisted).
+ * Ciphertext-only: the caller seals the proposed payload with NIP-44 v2 in the
+ * browser and sends ONLY the ciphertext + a canonical-plaintext hash. No
+ * plaintext ever reaches the agent — a `payload` field is refused server-side.
+ */
+export async function memoryPropose({ project, kind, cls, d_tag, ciphertext, payload_sha256, source } = {}) {
+  return req('POST', '/api/memory/proposals', { project, kind, cls, d_tag, ciphertext, payload_sha256, source });
 }
 
 /**
  * POST /api/memory/proposals/:id/approve — ratify the EXACT reviewed payload.
- * The browser first NIP-44-encrypts the approved payload; only the ciphertext
- * plus the reviewed payload hash + single-use nonce are sent.
+ * The ciphertext is ALREADY sealed on the pending proposal (stored at creation),
+ * so approval sends ONLY the reviewed payload hash + single-use nonce — never a
+ * re-sent ciphertext or plaintext.
  */
-export async function memoryApprove(id, { payload_sha256, approval_nonce, ciphertext, event_id } = {}) {
-  return req('POST', `/api/memory/proposals/${encodeURIComponent(id)}/approve`, { payload_sha256, approval_nonce, ciphertext, event_id });
+export async function memoryApprove(id, { payload_sha256, approval_nonce, event_id } = {}) {
+  return req('POST', `/api/memory/proposals/${encodeURIComponent(id)}/approve`, { payload_sha256, approval_nonce, event_id });
 }
 
 /** POST /api/memory/proposals/:id/reject — explicit, audited rejection. */

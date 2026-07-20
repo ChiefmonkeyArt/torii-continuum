@@ -159,11 +159,16 @@ Privacy is a positive capability, not secrecy. Operationalised as:
   tombstone + audit; owner-signed encrypted export; consent proposals are
   reject-able and never auto-persisted. Honest limit: deletion cannot recall an
   already-downloaded bundle — stated in the console.)*
-- **Consent before durable memory (no silent persistence).** AI/"remember this"
-  memories are proposals, never auto-saved; the owner reviews the exact plaintext
-  and approves by sealing it, bound to the exact payload hash + a single-use
-  nonce; imports are quarantined (default-deny), never trusted automatically.
-  *(Shipped MEMORY-1; Acceptance: `memory1.test.js` consent + portability
+- **Consent before durable memory (no silent persistence), ciphertext-only from
+  proposal creation.** AI/"remember this" memories are proposals, never
+  auto-saved. As of v0.2.83-alpha the proposal itself is **sealed in the browser
+  before it reaches the agent** — the agent stores ciphertext + a canonical hash,
+  never plaintext. The owner reviews by **decrypting client-side**, and approval
+  (bound to the reviewed payload hash + single-use nonce) promotes the
+  already-sealed blob; reject securely unlinks it. Legacy plaintext proposals from
+  v0.2.82-alpha are purged on startup. Imports are quarantined (default-deny),
+  never trusted automatically. *(Shipped MEMORY-1, privacy-corrected v0.2.83-alpha;
+  Acceptance: `memory1.test.js` consent, migration, no-plaintext-marker + portability
   default-deny suites.)*
 - **Permission-filtered retrieval.** (RAG-1 gate) A query only searches corpora
   the current action is authorised to touch; default-deny where scope is unclear;

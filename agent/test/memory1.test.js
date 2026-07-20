@@ -21,7 +21,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
-import { writeFile, readFile, readdir } from 'node:fs/promises';
+import { writeFile, readFile, readdir, mkdir } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getPublicKey, finalizeEvent } from 'nostr-tools/pure';
@@ -150,55 +151,191 @@ test('memstore retention reaps non-permanent conversation items past their windo
   h.cleanup();
 });
 
-// ── consent ───────────────────────────────────────────────────────────────
+// ── consent (ciphertext-only from proposal creation onward) ─────────────────
 
-test('consent: a proposal is never auto-persisted; approval binds to the exact payload + nonce', async () => {
+// Simulate the browser's NIP-44 seal: produce an OPAQUE ciphertext that does
+// not encode the plaintext, plus the canonical-plaintext hash the browser would
+// compute. The agent never sees plaintext — it only ever receives these two.
+function seal(consent, payload) {
+  return { ciphertext: randomBytes(80).toString('base64'), payloadSha256: consent.payloadHash(payload) };
+}
+
+test('consent: propose REFUSES plaintext payload (ciphertext-only)', async () => {
+  const h = harness();
+  const bad = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'k', payload: { text: 'secret' } });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.code, 'plaintext_refused');
+  // Missing ciphertext is also refused.
+  const noCt = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'k', payloadSha256: 'a'.repeat(64) });
+  assert.equal(noCt.ok, false);
+  assert.equal(noCt.code, 'ciphertext');
+  h.cleanup();
+});
+
+test('consent: propose stores ONLY ciphertext + hash; publicView exposes no payload', async () => {
   const h = harness();
   const payload = { text: 'owner prefers dark mode' };
-  const p = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'ui-pref', payload });
+  const { ciphertext, payloadSha256 } = seal(h.consent, payload);
+  const p = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'ui-pref', ciphertext, payloadSha256 });
   assert.equal(p.ok, true);
-  const pending = await h.consent.listPending({ ownerNpub: NPUB_A, botId: BOT });
-  assert.equal(pending.count, 1);
-  // Nothing durable yet.
+  assert.equal('payload' in p.proposal, false);
+  assert.equal(p.proposal.ciphertext, ciphertext);
+  assert.equal(p.proposal.payload_sha256, payloadSha256);
+  // The on-disk proposal file must also carry no plaintext payload field.
+  const ownerHex = PK_A;
+  const dir = join(h.memoryRoot, 'owners', ownerHex, 'bots', BOT, 'pending');
+  const files = await readdir(dir);
+  const raw = JSON.parse(await readFile(join(dir, files[0]), 'utf8'));
+  assert.equal('payload' in raw, false);
+  assert.equal('evidence' in raw, false);
+  assert.equal(raw.ciphertext, ciphertext);
+  h.cleanup();
+});
+
+test('consent: approval binds to the reviewed hash + nonce; promotes the sealed ciphertext', async () => {
+  const h = harness();
+  const payload = { text: 'owner prefers dark mode' };
+  const { ciphertext, payloadSha256 } = seal(h.consent, payload);
+  const p = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'ui-pref', ciphertext, payloadSha256 });
   const before = await h.memstore.list({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p' });
   assert.equal(before.count, 0);
 
-  // Wrong hash → reject.
-  const badHash = await h.consent.approve({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id, expectPayloadSha256: 'deadbeef', approvalNonce: p.proposal.approval_nonce, ciphertext: 'CT' });
+  // Wrong reviewed hash → fail closed.
+  const badHash = await h.consent.approve({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id, expectPayloadSha256: 'deadbeef', approvalNonce: p.proposal.approval_nonce });
   assert.equal(badHash.ok, false);
   assert.equal(badHash.code, 'hash_mismatch');
 
-  // Correct hash + nonce + ciphertext → stored.
-  const ok = await h.consent.approve({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id, expectPayloadSha256: p.proposal.payload_sha256, approvalNonce: p.proposal.approval_nonce, ciphertext: 'SEALED-CT' });
+  // Correct hash + nonce → the already-sealed ciphertext is promoted (no re-send).
+  const ok = await h.consent.approve({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id, expectPayloadSha256: p.proposal.payload_sha256, approvalNonce: p.proposal.approval_nonce });
   assert.equal(ok.ok, true);
-  const after = await h.memstore.list({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p' });
-  assert.equal(after.count, 1);
+  const after = await h.memstore.read({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', id: ok.stored.id });
+  assert.equal(after.ok, true);
+  assert.equal(after.ciphertext, ciphertext); // exact sealed blob promoted
 
-  // Idempotent replay returns the same stored result, no double store.
-  const again = await h.consent.approve({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id, expectPayloadSha256: p.proposal.payload_sha256, approvalNonce: p.proposal.approval_nonce, ciphertext: 'SEALED-CT' });
-  assert.equal(again.ok, true);
+  // Pending ciphertext dropped after promotion.
+  const pv = await h.consent.get({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id });
+  assert.equal(pv.proposal.ciphertext, undefined);
+
+  // Idempotent replay — no second store.
+  const again = await h.consent.approve({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id, expectPayloadSha256: p.proposal.payload_sha256, approvalNonce: p.proposal.approval_nonce });
   assert.equal(again.idempotent, true);
   h.cleanup();
 });
 
-test('consent: a spent nonce cannot be replayed on a fresh proposal', async () => {
+test('consent: reject securely UNLINKS the pending ciphertext file and never stores', async () => {
   const h = harness();
-  const p = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'k', payload: { a: 1 } });
-  await h.consent.approve({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id, expectPayloadSha256: p.proposal.payload_sha256, approvalNonce: p.proposal.approval_nonce, ciphertext: 'CT' });
-  // Re-approve with the (now null) nonce value must not create a second store.
-  const replay = await h.consent.approve({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id, expectPayloadSha256: p.proposal.payload_sha256, approvalNonce: 'anything', ciphertext: 'CT2' });
-  assert.equal(replay.idempotent, true); // already approved, short-circuits
-  h.cleanup();
-});
-
-test('consent: reject marks the proposal rejected and never stores', async () => {
-  const h = harness();
-  const p = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'k', payload: { a: 1 } });
+  const { ciphertext, payloadSha256 } = seal(h.consent, { a: 1 });
+  const p = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'k', ciphertext, payloadSha256 });
+  const dir = join(h.memoryRoot, 'owners', PK_A, 'bots', BOT, 'pending');
+  assert.equal((await readdir(dir)).length, 1);
   const r = await h.consent.reject({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id, approvalNonce: p.proposal.approval_nonce });
   assert.equal(r.ok, true);
+  assert.equal((await readdir(dir)).length, 0); // file gone, no rejected shell left
   const stored = await h.memstore.list({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p' });
   assert.equal(stored.count, 0);
   h.cleanup();
+});
+
+test('consent: approve fails closed if the pending ciphertext is corrupt/missing', async () => {
+  const h = harness();
+  const { ciphertext, payloadSha256 } = seal(h.consent, { a: 1 });
+  const p = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'k', ciphertext, payloadSha256 });
+  // Corrupt the ciphertext on disk.
+  const dir = join(h.memoryRoot, 'owners', PK_A, 'bots', BOT, 'pending');
+  const files = await readdir(dir);
+  const full = join(dir, files[0]);
+  const raw = JSON.parse(await readFile(full, 'utf8'));
+  delete raw.ciphertext;
+  await writeFile(full, JSON.stringify(raw), 'utf8');
+  const r = await h.consent.approve({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id, expectPayloadSha256: payloadSha256, approvalNonce: p.proposal.approval_nonce });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'corrupt');
+  h.cleanup();
+});
+
+test('consent: proposals survive a restart (new instance over same root)', async () => {
+  const h = harness();
+  const { ciphertext, payloadSha256 } = seal(h.consent, { a: 1 });
+  const p = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'k', ciphertext, payloadSha256 });
+  // Simulate a daemon restart: brand-new consent/memstore over the same disk.
+  const memstore2 = createMemStore({ memoryRoot: h.memoryRoot, now: () => 1_700_000_000 });
+  const consent2 = createConsent({ memoryRoot: h.memoryRoot, memstore: memstore2, audit: h.audit, now: () => 1_700_000_000 });
+  const pending = await consent2.listPending({ ownerNpub: NPUB_A, botId: BOT });
+  assert.equal(pending.count, 1);
+  assert.equal(pending.proposals[0].id, p.proposal.id);
+  h.cleanup();
+});
+
+test('consent: migration purges legacy v0.2.82 plaintext proposals without exposing them', async () => {
+  const h = harness();
+  // Hand-write a retired v1 proposal that carries plaintext (the old bug).
+  const dir = join(h.memoryRoot, 'owners', PK_A, 'bots', BOT, 'pending');
+  await mkdir(dir, { recursive: true });
+  const legacyId = 'a'.repeat(32);
+  const legacy = {
+    schema: 'torii.continuum.memory_proposal/1', id: legacyId, status: 'pending',
+    owner_hex: PK_A, bot_id: BOT, project: 'p', kind: 30094, class: 'semantic', d_tag: 'k',
+    payload: { text: 'LEAKED_PLAINTEXT_MARKER' }, payload_sha256: 'b'.repeat(64),
+    evidence: ['LEAKED_PLAINTEXT_MARKER'], approval_nonce: 'c'.repeat(32), proposed_at: 1, decided_at: null,
+  };
+  await writeFile(join(dir, `${legacyId}.json`), JSON.stringify(legacy), 'utf8');
+  // A legacy proposal must NEVER be surfaced through the API.
+  assert.equal((await h.consent.listPending({ ownerNpub: NPUB_A, botId: BOT })).count, 0);
+  assert.equal((await h.consent.get({ ownerNpub: NPUB_A, botId: BOT, id: legacyId })).ok, false);
+  // Migration purges it and records a metadata-only audit entry.
+  const res = await h.consent.migratePlaintextProposals();
+  assert.equal(res.purged, 1);
+  assert.equal((await readdir(dir)).length, 0);
+  const auditRaw = await readFile(join(h.memoryRoot, 'audit.jsonl'), 'utf8').catch(() => '');
+  assert.ok(auditRaw.includes('purge_plaintext_proposal'));
+  assert.equal(auditRaw.includes('LEAKED_PLAINTEXT_MARKER'), false); // never logged content
+  h.cleanup();
+});
+
+// ── PRIVACY INVARIANT: no memory plaintext anywhere under memory/ ───────────
+
+async function walkFiles(dir) {
+  const out = [];
+  let entries;
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) out.push(...await walkFiles(full));
+    else out.push(full);
+  }
+  return out;
+}
+
+test('privacy: no memory plaintext marker persists in pending/quarantine/audit/index/enc trees', async () => {
+  const MARKER = 'TOP_SECRET_MEMORY_PLAINTEXT_MARKER';
+  const h = harness();
+  const payload = { text: MARKER, nested: { more: MARKER } };
+  const { ciphertext, payloadSha256 } = seal(h.consent, payload);
+
+  // 1) A pending proposal.
+  const p1 = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'k1', ciphertext, payloadSha256 });
+  // 2) An approved (promoted) durable item.
+  const p2 = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'k2', ...seal(h.consent, payload) });
+  await h.consent.approve({ ownerNpub: NPUB_A, botId: BOT, id: p2.proposal.id, expectPayloadSha256: p2.proposal.payload_sha256, approvalNonce: p2.proposal.approval_nonce });
+  // 3) A rejected proposal (file unlinked).
+  const p3 = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'k3', ...seal(h.consent, payload) });
+  await h.consent.reject({ ownerNpub: NPUB_A, botId: BOT, id: p3.proposal.id, approvalNonce: p3.proposal.approval_nonce });
+  // 4) A quarantined import.
+  const bundle = signBundle(await seedAndExport(h), SK_A);
+  const h2 = harness();
+  await h2.portability.importToQuarantine({ ownerNpub: NPUB_A, bundle });
+
+  for (const root of [h.memoryRoot, h2.memoryRoot]) {
+    for (const f of await walkFiles(root)) {
+      const body = await readFile(f, 'utf8').catch(() => '');
+      assert.equal(body.includes(MARKER), false, `plaintext marker leaked into ${f}`);
+    }
+  }
+  // Sanity: the pending proposal is still retrievable as ciphertext only.
+  const pv = await h.consent.get({ ownerNpub: NPUB_A, botId: BOT, id: p1.proposal.id });
+  assert.equal(pv.proposal.ciphertext, ciphertext);
+  assert.equal('payload' in pv.proposal, false);
+  h.cleanup(); h2.cleanup();
 });
 
 // ── portability ─────────────────────────────────────────────────────────────

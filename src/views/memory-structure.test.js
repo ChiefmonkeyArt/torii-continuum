@@ -4,9 +4,10 @@
  * lock in the security + consent invariants that must not regress:
  *
  *   1. XSS-safe rendering: h() with textContent only, no innerHTML / html:.
- *   2. Sealing is BROWSER-SIDE: approval NIP-44-encrypts the payload in the
- *      browser and posts only the ciphertext + reviewed hash + nonce. The view
- *      never posts plaintext, and never handles a private key.
+ *   2. Ciphertext-only at rest: proposals are sealed (NIP-44) in the browser at
+ *      creation; review DECRYPTS the stored ciphertext client-side and verifies
+ *      its canonical hash; approval posts only the reviewed hash + nonce. The
+ *      view never posts plaintext OR re-sends ciphertext, and never handles a key.
  *   3. Nothing is auto-saved: proposals & imports require explicit owner action,
  *      and the console says so.
  *   4. Portability signs the manifest digest in the browser (NIP-07), attaches
@@ -29,10 +30,20 @@ describe('memory view — XSS-safe rendering', () => {
   });
 });
 
-describe('memory view — approval seals in the browser, never sends plaintext', () => {
-  it('NIP-44-encrypts the reviewed payload in the browser before approving', () => {
+describe('memory view — ciphertext-only at rest; review decrypts, approval re-sends nothing', () => {
+  it('seals proposal payloads in the browser at creation (NIP-44 encrypt)', () => {
     expect(src).toMatch(/window\.nostr\.nip44\.encrypt/);
+    expect(src).toMatch(/sealProposalPayload/);
+  });
+
+  it('decrypts the stored ciphertext client-side for review (NIP-44 decrypt)', () => {
+    expect(src).toMatch(/window\.nostr\.nip44\.decrypt/);
     expect(src).toMatch(/memoryApprove\(/);
+  });
+
+  it('verifies the decrypted payload against the reviewed canonical hash', () => {
+    expect(src).toMatch(/canonicalSha256Hex/);
+    expect(src).toMatch(/hashVerified/);
   });
 
   it('binds approval to the exact reviewed payload hash + single-use nonce', () => {
@@ -40,10 +51,10 @@ describe('memory view — approval seals in the browser, never sends plaintext',
     expect(src).toMatch(/approval_nonce:\s*p\.approval_nonce/);
   });
 
-  it('sends the ciphertext, not the plaintext, to the agent', () => {
-    expect(src).toMatch(/ciphertext/);
-    // The payload plaintext must not be forwarded to memoryApprove.
+  it('approval re-sends neither plaintext nor ciphertext to the agent', () => {
+    // Approval forwards only the hash + nonce — never a payload or ciphertext.
     expect(src).not.toMatch(/memoryApprove\([^)]*payload:/);
+    expect(src).not.toMatch(/memoryApprove\([^)]*ciphertext:/);
   });
 
   it('requires a NIP-44-capable signer and fails closed without one', () => {
