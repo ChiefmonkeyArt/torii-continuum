@@ -16,18 +16,34 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // Spy on every agent client entry point the dashboard could reach. If demo mode
 // leaks a network call, one of these registers it. vi.hoisted so the object is
 // available inside the hoisted vi.mock factory below.
-const agentSpies = vi.hoisted(() => ({
-  isAgentConfigured: vi.fn(() => true),
-  isLoggedIn: vi.fn(() => false),
-  healthModels: vi.fn(() => Promise.resolve({ ok: false, reason: 'should-not-be-called' })),
-  walletHealth: vi.fn(() => Promise.resolve({ ok: false, reason: 'should-not-be-called' })),
-}));
+const agentSpies = vi.hoisted(() => {
+  const stub = () => vi.fn(() => Promise.resolve({ ok: false, reason: 'should-not-be-called' }));
+  return {
+    isAgentConfigured: vi.fn(() => true),
+    isLoggedIn: vi.fn(() => false),
+    healthModels: stub(),
+    walletHealth: stub(),
+    // Routstr-reachable client methods — every mutating CTA in the demo view
+    // must leave all of these untouched.
+    walletBalance: stub(),
+    walletReceive: stub(),
+    walletMintQuote: stub(),
+    walletMintQuoteStatus: stub(),
+    walletNwcInvoice: stub(),
+    walletNwcInvoiceStatus: stub(),
+    nwcStatus: stub(),
+    nwcConnect: stub(),
+    nwcTest: stub(),
+    nwcDisconnect: stub(),
+  };
+});
 vi.mock('../data/agent.js', () => agentSpies);
 vi.mock('../chat.js', () => ({ setChatContext: vi.fn() }));
 // The banner's sign-in control uses the router; stub it so no real hash write.
 vi.mock('../router.js', () => ({ navigate: vi.fn() }));
 
 import { renderDashboard } from '../views/dashboard.js';
+import { renderRoutstr } from '../views/routstr.js';
 import { demoStore } from './demo-fixtures.js';
 
 // ── Minimal DOM shim (only what h()/clear() call) ───────────────────
@@ -54,6 +70,7 @@ function makeEl(tag) {
     appendChild(child) { child.parentNode = this; this.children.push(child); return child; },
     removeChild(child) { this.children = this.children.filter((c) => c !== child); },
     remove() { if (this.parentNode) this.parentNode.removeChild(this); },
+    click() { (listeners.click || []).forEach((fn) => fn({ target: el, stopPropagation() {}, preventDefault() {} })); },
     get firstChild() { return this.children[0] || null; },
   };
   return el;
@@ -95,5 +112,26 @@ describe('renderDashboard in demo mode', () => {
     // And the fixture-derived heading is present.
     const title = walk(mount).find((e) => e.className === 'page-title');
     expect(title && title.textContent).toBe('Dashboard');
+  });
+});
+
+describe('renderRoutstr in demo mode — mutating CTAs never reach the agent', () => {
+  it('renders from fixtures and no CTA click invokes an agent client method', () => {
+    const mount = makeEl('div');
+    renderRoutstr(mount, { demo: true, fixtures: demoStore });
+
+    // The banner proves the demo view ran (not a short-circuit before the CTAs).
+    expect(walk(mount).find((e) => e.className === 'demo-banner')).toBeTruthy();
+
+    // Click every button on the view — Connect/Top Up/Sign in/Disconnect etc.
+    // In demo each is wrapped by demoIntercept, so it routes to login instead of
+    // firing a handler that would touch the agent.
+    for (const btn of walk(mount).filter((e) => e.tagName === 'BUTTON')) btn.click();
+
+    // Not one agent client method was called by the render or any CTA.
+    for (const [name, spy] of Object.entries(agentSpies)) {
+      if (name === 'isAgentConfigured' || name === 'isLoggedIn') continue; // pure guards
+      expect(spy, `agent.${name} must not be called in demo`).not.toHaveBeenCalled();
+    }
   });
 });

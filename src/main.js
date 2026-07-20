@@ -14,9 +14,10 @@ import { initStore } from './data/store.js';
 import { mountShell, mainContent, renderSidebar, applyStoredTheme } from './shell.js';
 import { route, startRouter, navigate, currentRoute, resolveCurrent } from './router.js';
 import { mountChat } from './chat.js';
-import { isSessionLive, endSession, isSignoutBroadcast } from './auth.js';
+import { isSessionLive, endSession, isSignoutBroadcast, rehydrateSession, SIGNOUT_SENTINEL_KEY } from './auth.js';
 import { rootTarget, guardRedirect, sessionChangeTarget, restoreTarget, demoRedirect } from './nav-guard.js';
 import { demoStore } from './demo/demo-fixtures.js';
+import { renderDemoStub } from './demo/demo-mode.js';
 
 import { renderAbout } from './views/landing.js';
 import { renderLogin } from './views/login.js';
@@ -44,7 +45,13 @@ function setLandingMode(on) {
 // wiring point that enforces them across every app route.
 function guarded(pattern, handler) {
   return (params) => {
-    const redirect = guardRedirect(pattern, isSessionLive());
+    // Rehydrate from persistent storage BEFORE the guard decision so a fresh
+    // tab (or bfcache restore) is authoritative from the token/marker rather
+    // than any stale in-tab state — this is what stops the second-tab blank
+    // right-hand region. rehydrateSession also drops a marker with no live
+    // token so the guard never trusts an expired session.
+    const { live } = rehydrateSession();
+    const redirect = guardRedirect(pattern, live);
     // Replace, not push: a logged-out visitor who reached a protected hash (a
     // deep link, or Back onto a stale authenticated entry) is bounced to login
     // WITHOUT leaving that protected hash sitting in history to return to.
@@ -131,6 +138,15 @@ function boot() {
   route('/demo/marketplace', demoRoute('/demo/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent(), demoOpts); renderSidebar(); }));
   route('/demo/routstr', demoRoute('/demo/routstr', () => { setLandingMode(false); renderRoutstr(mainContent(), demoOpts); renderSidebar(); }));
   route('/demo/team', demoRoute('/demo/team', () => { setLandingMode(false); renderTeam(mainContent(), demoOpts); renderSidebar(); }));
+  // Demo equivalents for every remaining sidebar/real route. These have no
+  // bespoke mockup view, so they render the shared demo stub (banner + one fake
+  // card): the whole /demo/* subtree is navigable with zero guarded bounces and
+  // zero network. genesis/memory mirror real routes; settings/health are
+  // demo-only preview screens per the v0.2.86 brief.
+  route('/demo/genesis',  demoRoute('/demo/genesis',  () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Genesis' }); renderSidebar(); }));
+  route('/demo/memory',   demoRoute('/demo/memory',   () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Memory' }); renderSidebar(); }));
+  route('/demo/settings', demoRoute('/demo/settings', () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Settings' }); renderSidebar(); }));
+  route('/demo/health',   demoRoute('/demo/health',   () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Health' }); renderSidebar(); }));
 
   startRouter();
   mountChat(root);
@@ -170,8 +186,16 @@ function boot() {
   // localOnly endSession also dispatches continuum:session-changed, but the
   // explicit replace-navigate guarantees the bounce even if that handler order
   // ever changes.
+  let lastSignoutTs = 0;
   window.addEventListener('storage', (e) => {
     if (!isSignoutBroadcast(e)) return;
+    // Deduplicate by the sentinel's timestamp so a burst of storage events (or
+    // the synthetic same-tab fallback landing alongside the native one) does not
+    // re-run the sign-out repeatedly. A marker-cleared event carries no value;
+    // treat it as a fresh signal only once per tick.
+    const ts = e && e.key === SIGNOUT_SENTINEL_KEY ? Number(e.newValue) || 0 : Date.now();
+    if (ts && ts === lastSignoutTs) return;
+    lastSignoutTs = ts;
     endSession({ localOnly: true });
     navigate('/', { replace: true });
   });

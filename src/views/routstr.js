@@ -12,7 +12,7 @@ import {
 } from '../data/agent.js';
 import { renderQR } from './qr.js';
 import { isSessionLive, startLogin } from '../auth.js';
-import { isDemo, demoSource, demoBanner, goToLogin } from '../demo/demo-mode.js';
+import { isDemo, demoSource, demoBanner, demoIntercept } from '../demo/demo-mode.js';
 
 // Lightning-QR top-up (v0.2.83-alpha). Preset amounts, default, and the hard
 // client-side cap. The agent independently re-enforces cashu.max_mint_sats, so
@@ -31,6 +31,19 @@ const FOCUS_TOPUP_KEY = 'continuum.routstr.focusTopUp';
 
 // Poll the agent for live wallet balance while the Routstr page is mounted.
 let balancePollHandle = null;
+
+// Live Usage Stats poll (v0.2.86-alpha). Refresh the usage counters in place
+// every USAGE_POLL_MS, but only while the tab is visible AND the view is still
+// mounted — so a backgrounded tab does no work and an unmounted view leaks no
+// timer. Changed cells flash the accent colour for 200ms.
+const USAGE_POLL_MS = 5000;
+let usagePollHandle = null;
+let usageVisibilityHandler = null;
+let usageMount = null;
+// Live handles to the usage stat value nodes + budget bar so the poll can
+// diff/update them in place without re-rendering (and tearing) the page.
+let usageStatEls = {};
+let usageBarEl = null;
 // Live handle to the balance number node so the poll can refresh it in place
 // without re-rendering (and tearing) the whole page.
 let balanceNumEl = null;
@@ -73,9 +86,9 @@ export function renderRoutstr(mount, opts = {}) {
 
   if (demo) mount.appendChild(demoBanner());
 
-  // Kick off (or refresh) live balance polling when logged in.
-  if (live) startBalancePoll(mount);
-  else stopBalancePoll();
+  // Kick off (or refresh) live balance + usage polling when logged in.
+  if (live) { startBalancePoll(mount); startUsagePoll(mount); }
+  else { stopBalancePoll(); stopUsagePoll(); }
 
   const header = h('div', { class: 'page-header' }, [
     h('div', {}, [
@@ -84,8 +97,8 @@ export function renderRoutstr(mount, opts = {}) {
     ]),
     h('div', { class: 'page-actions' }, [
       c.connected
-        ? h('button', { onClick: () => (demo ? goToLogin() : disconnect()) }, ['Disconnect'])
-        : h('button', { class: 'primary', onClick: () => (demo ? goToLogin() : connect()) }, ['Connect Cashu wallet']),
+        ? h('button', { onClick: demoIntercept(demo, disconnect) }, ['Disconnect'])
+        : h('button', { class: 'primary', onClick: demoIntercept(demo, connect) }, ['Connect Cashu wallet']),
     ]),
   ]);
   mount.appendChild(header);
@@ -116,7 +129,7 @@ export function renderRoutstr(mount, opts = {}) {
       h('label', { text: 'Routstr URL' }),
       (() => {
         const inp = h('input', { type: 'text', value: c.endpoint });
-        inp.addEventListener('change', () => (demo ? goToLogin() : updateRoutstr({ endpoint: inp.value.trim() || 'https://api.routstr.com' })));
+        inp.addEventListener('change', demoIntercept(demo, () => updateRoutstr({ endpoint: inp.value.trim() || 'https://api.routstr.com' })));
         return inp;
       })(),
     ]),
@@ -124,7 +137,7 @@ export function renderRoutstr(mount, opts = {}) {
       h('label', { text: 'Monthly Cashu budget (sats)' }),
       (() => {
         const inp = h('input', { type: 'number', value: c.usage.monthlyBudget, min: 0, step: 1000 });
-        inp.addEventListener('change', () => (demo ? goToLogin() : updateRoutstr({ usage: { ...c.usage, monthlyBudget: Math.max(0, parseInt(inp.value || '0', 10)) } })));
+        inp.addEventListener('change', demoIntercept(demo, () => updateRoutstr({ usage: { ...c.usage, monthlyBudget: Math.max(0, parseInt(inp.value || '0', 10)) } })));
         return inp;
       })(),
     ]),
@@ -163,12 +176,12 @@ function renderCashuCard(c, demo) {
     ]),
   ]);
 
-  const topUpBtn = h('button', { class: 'primary', onClick: () => (demo ? goToLogin() : toggleTopUp(true)) }, ['Top Up']);
+  const topUpBtn = h('button', { class: 'primary', onClick: demoIntercept(demo, () => toggleTopUp(true)) }, ['Top Up']);
 
   return h('div', { class: 'card hot' }, [
     h('h3', { text: 'Cashu balance' }),
     hero,
-    h('div', { class: 'wallet-card-actions', style: 'margin-top: 14px;' }, [topUpBtn]),
+    h('div', { class: 'wallet-card-actions' }, [topUpBtn]),
   ]);
 }
 
@@ -541,6 +554,73 @@ function renderTopUpForm() {
 // labelled "NWC wallet". It reuses the existing onboarding wallet endpoints
 // (status/connect/test/disconnect) rather than adding any new protocol support.
 
+// Case-insensitive substring fingerprint → wallet maker. Ordered so a more
+// specific needle (getalby, mutinywallet) is tried before its shorter alias,
+// though both map to the same maker. Source string is the alias + relay hosts
+// (see nwcFingerprint) — never the secret or full URI.
+const WALLET_MAKERS = [
+  ['getalby', 'Alby'],
+  ['alby', 'Alby'],
+  ['mutinywallet', 'Mutiny'],
+  ['mutiny', 'Mutiny'],
+  ['cashu.me', 'cashu.me'],
+  ['zeusln', 'Zeus'],
+  ['zeus', 'Zeus'],
+  ['coinos', 'Coinos'],
+  ['strike', 'Strike'],
+  ['phoenix', 'Phoenix'],
+];
+
+// Build the (non-secret) fingerprint string a maker is inferred from: the
+// wallet alias plus its relay hosts, lowercased. Never includes the secret,
+// the full URI, or the wallet pubkey.
+export function nwcFingerprint(d) {
+  const parts = [];
+  if (d && d.alias) parts.push(String(d.alias));
+  const relays = (d && d.wallet && d.wallet.relays) || [];
+  for (const r of relays) parts.push(String(r));
+  return parts.join(' ').toLowerCase();
+}
+
+// Infer the wallet maker from its fingerprint. Returns { maker, known }; an
+// unrecognised wallet is "Unknown wallet" (known:false) and the caller surfaces
+// the relay host instead.
+export function inferWalletMaker(fingerprint) {
+  const s = String(fingerprint || '').toLowerCase();
+  for (const [needle, maker] of WALLET_MAKERS) {
+    if (s.includes(needle)) return { maker, known: true };
+  }
+  return { maker: 'Unknown wallet', known: false };
+}
+
+// The connected-wallet identity block:
+//   line 1 — alias (or "Wallet")
+//   line 2 — inferred maker + a small badge (network, else "NWC")
+//   line 3 — muted pubkey shortcode
+// For an unrecognised maker, the relay host is shown so the operator still
+// knows where the wallet connects.
+export function renderNwcIdentity(d) {
+  const alias = (d && d.alias) ? String(d.alias) : 'Wallet';
+  const { maker, known } = inferWalletMaker(nwcFingerprint(d));
+  const relays = (d && d.wallet && d.wallet.relays) || [];
+  const prefix = d && d.wallet && d.wallet.wallet_pubkey_prefix;
+
+  const lines = [
+    h('div', { class: 'nwc-alias', style: 'font-weight: 600;', text: alias }),
+    h('div', { class: 'nwc-maker', style: 'display:flex; align-items:center; gap:6px; margin-top:2px;' }, [
+      h('span', { text: maker }),
+      h('span', { class: 'badge', text: d && d.network ? String(d.network) : 'NWC' }),
+    ]),
+  ];
+  if (!known && relays.length) {
+    lines.push(h('div', { class: 'muted', style: 'font-size: 11.5px;', text: String(relays[0]) }));
+  }
+  if (prefix) {
+    lines.push(h('div', { class: 'mono muted', style: 'font-size: 11.5px;', text: `${String(prefix)}…` }));
+  }
+  return h('div', { class: 'nwc-identity', style: 'margin-top: 8px;' }, lines);
+}
+
 function renderNwcCard(live, demo) {
   const body = h('div', { class: 'nwc-body' }, [
     h('div', { class: 'muted', text: live ? 'Checking wallet…' : 'Sign in to connect a Lightning wallet.' }),
@@ -552,8 +632,8 @@ function renderNwcCard(live, demo) {
   ]);
   if (live) loadNwcStatus(body);
   else {
-    body.appendChild(h('div', { class: 'wallet-card-actions', style: 'margin-top: 12px;' }, [
-      h('button', { class: 'primary', onClick: () => (demo ? goToLogin() : startLogin()) }, ['Sign in']),
+    body.appendChild(h('div', { class: 'wallet-card-actions' }, [
+      h('button', { class: 'primary', onClick: demoIntercept(demo, () => startLogin()) }, ['Sign in']),
     ]));
   }
   return card;
@@ -579,13 +659,17 @@ async function loadNwcStatus(body) {
   const head = h('div', {}, [
     h('span', { class: connected ? 'pill ok' : 'pill', text: connected ? 'connected' : 'not connected' }),
   ]);
-  if (connected && d.alias) { head.appendChild(document.createTextNode(' ')); head.appendChild(h('span', { class: 'mono muted', text: d.alias })); }
   body.appendChild(head);
 
   if (connected) {
+    body.appendChild(renderNwcIdentity(d));
     const bits = [];
     if (d.network) bits.push(`network: ${d.network}`);
     bits.push(d.can_fund_routstr ? 'can fund Routstr by payment' : 'cannot fund Routstr (no pay_invoice)');
+    // Preserve the make_invoice capability signal (used by the top-up-by-NWC
+    // flow) — it moved out of the connect step into the card's capability line.
+    const canInvoice = d.can_make_invoice != null ? d.can_make_invoice : d.capabilities?.can_make_invoice;
+    if (canInvoice != null) bits.push(canInvoice ? 'can make invoice' : 'cannot make invoice');
     body.appendChild(h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 8px;', text: bits.join(' · ') }));
   } else {
     body.appendChild(h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 8px;', text: 'No NWC wallet linked yet.' }));
@@ -597,7 +681,7 @@ async function loadNwcStatus(body) {
 }
 
 function renderNwcActions(connected, body, statusLine) {
-  const wrap = h('div', { class: 'wallet-card-actions', style: 'display:flex; gap: 8px; margin-top: 12px;' });
+  const wrap = h('div', { class: 'wallet-card-actions' });
   if (connected) {
     const test = h('button', {}, ['Test']);
     test.addEventListener('click', async () => {
@@ -670,11 +754,10 @@ function renderModelPicker(c, demo) {
       m.badge ? h('span', { class: 'badge', text: m.badge }) : null,
       h('span', { class: 'price', text: `${m.pricePer1kSats} sats/1k tok` }),
     ]);
-    row.addEventListener('click', () => {
-      if (demo) { goToLogin(); return; }
+    row.addEventListener('click', demoIntercept(demo, () => {
       updateRoutstr({ selectedModel: m.id });
       renderRoutstr(document.getElementById('main-content'));
-    });
+    }));
     list.appendChild(row);
   }
   return h('div', { class: 'card' }, [
@@ -684,35 +767,117 @@ function renderModelPicker(c, demo) {
   ]);
 }
 
+// The display strings for the usage card, derived from the stored usage object.
+// Pure + exported so the live-poll diff is unit-tested without a DOM.
+export function usageSnapshot(u = {}) {
+  const spent = u.satsSpent || 0;
+  const budget = u.monthlyBudget || 0;
+  return {
+    requests24h: String(u.requests24h ?? 0),
+    satsSpent: formatSats(spent) + ' sats',
+    tokensIn: formatSats(u.tokensIn ?? 0),
+    tokensOut: formatSats(u.tokensOut ?? 0),
+    budget: `${formatSats(spent)} / ${formatSats(budget)} sats`,
+    pct: budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : 0,
+  };
+}
+
+// Flash a value cell to the accent colour, then let the CSS transition ease it
+// back to its prior colour over 200ms — the visual cue that a counter changed.
+function flashCell(el) {
+  if (!el || !el.style) return;
+  const base = el.style.color || '';
+  el.style.transition = 'color 200ms ease';
+  el.style.color = 'var(--accent)';
+  setTimeout(() => { if (el && el.style) el.style.color = base; }, 200);
+}
+
+// Diff a fresh snapshot against the live cells: write + flash only the cells
+// whose text actually changed, and set the budget bar width. Returns the list
+// of changed keys. `flash` is injectable for testing. Exported for the same.
+export function applyUsage(els, barEl, snap, flash = flashCell) {
+  const changed = [];
+  for (const key of ['requests24h', 'satsSpent', 'tokensIn', 'tokensOut', 'budget']) {
+    const el = els && els[key];
+    if (!el || el.isConnected === false) continue;
+    const next = String(snap[key]);
+    if (el.textContent !== next) {
+      el.textContent = next;
+      flash(el);
+      changed.push(key);
+    }
+  }
+  if (barEl && barEl.isConnected !== false && barEl.style) barEl.style.width = snap.pct + '%';
+  return changed;
+}
+
 function renderUsage(c) {
-  const u = c.usage;
-  const pct = u.monthlyBudget > 0 ? Math.min(100, Math.round((u.satsSpent / u.monthlyBudget) * 100)) : 0;
+  const snap = usageSnapshot(c.usage);
+  usageStatEls = {};
+  const stat = (key, label) => {
+    const valueEl = h('div', {
+      class: 'mono',
+      style: 'font-size: 18px; color: var(--ink-hi); margin-top: 2px; transition: color 200ms ease;',
+      text: snap[key],
+    });
+    usageStatEls[key] = valueEl;
+    return h('div', {}, [
+      h('div', { class: 'label muted', style: 'font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;', text: label }),
+      valueEl,
+    ]);
+  };
+  const budgetEl = h('span', { text: snap.budget });
+  usageStatEls.budget = budgetEl;
+  usageBarEl = h('i', { style: `width: ${snap.pct}%` });
+
   return h('div', { class: 'card' }, [
     h('h3', { text: 'Usage stats' }),
     h('p', { class: 'muted', text: 'Last 24 hours. Live counters light up once you connect and start sending requests.' }),
     h('div', { class: 'grid-2', style: 'gap: 12px; margin-top: 8px;' }, [
-      renderStat('Requests · 24h', String(u.requests24h)),
-      renderStat('Sats spent · 24h', formatSats(u.satsSpent) + ' sats'),
-      renderStat('Tokens in',  formatSats(u.tokensIn)),
-      renderStat('Tokens out', formatSats(u.tokensOut)),
+      stat('requests24h', 'Requests · 24h'),
+      stat('satsSpent', 'Sats spent · 24h'),
+      stat('tokensIn', 'Tokens in'),
+      stat('tokensOut', 'Tokens out'),
     ]),
     h('div', { style: 'margin-top: 14px;' }, [
       h('div', { class: 'muted', style: 'font-size: 12px; display: flex; justify-content: space-between;' }, [
         h('span', { text: 'Monthly budget' }),
-        h('span', { text: `${formatSats(u.satsSpent)} / ${formatSats(u.monthlyBudget)} sats` }),
+        budgetEl,
       ]),
-      h('div', { class: 'usage-bar', style: 'margin-top: 6px;' }, [
-        h('i', { style: `width: ${pct}%` }),
-      ]),
+      h('div', { class: 'usage-bar', style: 'margin-top: 6px;' }, [ usageBarEl ]),
     ]),
   ]);
 }
 
-function renderStat(label, value) {
-  return h('div', {}, [
-    h('div', { class: 'label muted', style: 'font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;', text: label }),
-    h('div', { class: 'mono', style: 'font-size: 18px; color: var(--ink-hi); margin-top: 2px;', text: value }),
-  ]);
+// Refresh the usage cells from the store — the single gated tick body.
+function usageTick() {
+  // Gate 1: the tab must be visible (a backgrounded tab does no work).
+  if (typeof document !== 'undefined' && document.visibilityState && document.visibilityState !== 'visible') return;
+  // Gate 2: the view must still be mounted (no work + no tearing after unmount).
+  if (!usageMount || usageMount.isConnected === false) return;
+  applyUsage(usageStatEls, usageBarEl, usageSnapshot(getRoutstr().content.usage));
+}
+
+function startUsagePoll(mount) {
+  stopUsagePoll();
+  usageMount = mount;
+  usageVisibilityHandler = () => {
+    // Immediate refresh the moment the tab becomes visible again.
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') usageTick();
+  };
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', usageVisibilityHandler);
+  }
+  usagePollHandle = setInterval(usageTick, USAGE_POLL_MS);
+}
+
+function stopUsagePoll() {
+  if (usagePollHandle) { clearInterval(usagePollHandle); usagePollHandle = null; }
+  if (usageVisibilityHandler && typeof document !== 'undefined' && document.removeEventListener) {
+    document.removeEventListener('visibilitychange', usageVisibilityHandler);
+  }
+  usageVisibilityHandler = null;
+  usageMount = null;
 }
 
 function connect() {

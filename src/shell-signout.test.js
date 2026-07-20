@@ -21,7 +21,15 @@ import { dirname, join } from 'node:path';
 
 import { confirmSignOut, signOutOutcomes } from './shell.js';
 import { sessionChangeTarget, ROOT_PATH } from './nav-guard.js';
-import { endSession, isSignoutBroadcast, SIGNOUT_SENTINEL_KEY } from './auth.js';
+import {
+  endSession,
+  isSignoutBroadcast,
+  SIGNOUT_SENTINEL_KEY,
+  SESSION_MARKER_KEY,
+  writeSessionMarker,
+  readSessionMarker,
+  rehydrateSession,
+} from './auth.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(here, p), 'utf8');
@@ -213,14 +221,59 @@ describe('multi-tab sign-out — localStorage sentinel broadcast', () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
-  it('isSignoutBroadcast: true only for a WRITE to the sentinel key', () => {
+  it('isSignoutBroadcast: true for a sentinel WRITE or a session-marker CLEAR', () => {
     expect(isSignoutBroadcast({ key: SIGNOUT_SENTINEL_KEY, newValue: '171' })).toBe(true);
-    // A removeItem/clear (newValue null) must not sign a tab out.
+    // A removeItem/clear of the sentinel (newValue null) must not sign a tab out.
     expect(isSignoutBroadcast({ key: SIGNOUT_SENTINEL_KEY, newValue: null })).toBe(false);
+    // The session marker being cleared in another tab IS a sign-out signal.
+    expect(isSignoutBroadcast({ key: SESSION_MARKER_KEY, newValue: null })).toBe(true);
+    // …but a marker WRITE (a fresh sign-in elsewhere) is not a sign-out.
+    expect(isSignoutBroadcast({ key: SESSION_MARKER_KEY, newValue: '{"npub":"x"}' })).toBe(false);
     // Unrelated keys (e.g. the token slot or theme) are ignored.
     expect(isSignoutBroadcast({ key: TOKEN_KEY, newValue: 'x' })).toBe(false);
     expect(isSignoutBroadcast({ key: 'continuum.theme', newValue: 'dark' })).toBe(false);
     expect(isSignoutBroadcast(null)).toBe(false);
+  });
+});
+
+describe('session marker — non-secret rehydrate sentinel (SESSION-REHYDRATE-1)', () => {
+  it('writes and reads back { npub, connected_at }; clears on falsey arg', () => {
+    writeSessionMarker({ npub: 'pkhex', connected_at: 1_700_000_000 });
+    expect(readSessionMarker()).toEqual({ npub: 'pkhex', connected_at: 1_700_000_000 });
+    writeSessionMarker(null);
+    expect(readSessionMarker()).toBeNull();
+    expect(localStorage.getItem(SESSION_MARKER_KEY)).toBeNull();
+  });
+
+  it('readSessionMarker returns null for absent or corrupt storage', () => {
+    expect(readSessionMarker()).toBeNull();
+    localStorage.setItem(SESSION_MARKER_KEY, 'not json');
+    expect(readSessionMarker()).toBeNull();
+  });
+
+  it('endSession() also clears the session marker (writer-tab local clear)', () => {
+    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.sig');
+    writeSessionMarker({ npub: 'pk', connected_at: 1 });
+    endSession();
+    expect(readSessionMarker()).toBeNull();
+  });
+
+  it('rehydrateSession: a live token yields live=true and returns the marker', () => {
+    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.sig');
+    writeSessionMarker({ npub: 'pk', connected_at: 42 });
+    const r = rehydrateSession();
+    expect(r.live).toBe(true);
+    expect(r.marker).toEqual({ npub: 'pk', connected_at: 42 });
+  });
+
+  it('rehydrateSession: a marker with no live token is stale — dropped, live=false', () => {
+    // No token in storage → not live. A lingering marker must be discarded so a
+    // fresh tab never renders an authenticated shell it cannot back.
+    writeSessionMarker({ npub: 'pk', connected_at: 42 });
+    const r = rehydrateSession();
+    expect(r.live).toBe(false);
+    expect(r.marker).toBeNull();
+    expect(readSessionMarker()).toBeNull();
   });
 });
 
