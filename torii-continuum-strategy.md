@@ -144,6 +144,8 @@ Adds a **sealed, local-first character stack** so the agent has a stable identit
 
 ## What Is Shipping vs Mocked
 
+**Public demo surface shipped v0.2.85-alpha** — a signed-out visitor can browse a read-only mockup at `/demo/*` rendered from obviously-fake fixtures (every human-facing string carries DEMO/Sample). Architecture decision: demo mode is **not a view fork** — each demo route renders the SAME view as its real counterpart with `{ demo, fixtures }`, and views swap their data source through `demoSource()`. This keeps the demo and the real app from drifting apart (one code path, one set of tests) and lets `nav-guard`/`demoRedirect` treat `/demo/*` as public while a signed-in operator is bounced to real data. Demo makes zero agent/network calls by construction, and every CTA routes to login. Same release hardened sign-out into a cross-tab boundary (localStorage sentinel broadcast) and added quarantine pruning to the disk-retention sweep.
+
 **Routstr QR top-up shipped v0.2.84-alpha** — the Routstr page funds the Cashu balance via a scannable Lightning-invoice QR (Cashu mint-quote or NWC-issued), with the paste-a-token flow kept as a fallback and an idempotent double-mint guard on the agent. Zero new deps (vendored MIT QR encoder).
 
 **Live today (mockup / read-only):**
