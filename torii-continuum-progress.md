@@ -9,6 +9,34 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.87-alpha — MEMORY-ACTIVATION-1 clean re-version (release hygiene) (2026-07-20)
+
+**Release-hygiene only — no code behavior change.** The guided owner-signed first-run
+memory activation feature (MEMORY-ACTIVATION-1) was already merged to `main` (PR #98,
+merge `9bab202`, feature `a342eef`). Its intended `v0.2.84-alpha` tag name had been
+pre-consumed on the remote by the unrelated Routstr top-up release, and a stop-gap
+`v0.2.86-alpha` tag was cut on the merge commit. This release re-versions the feature
+cleanly to **`v0.2.87-alpha`** — the next free version above the `v0.2.85-alpha`
+retention/demo release — so the package manifests, runtime `/api/health` + frontend
+`__APP_VERSION__`, canonical docs, and the annotated tag all align at `0.2.87-alpha`.
+No published tag was rewritten or deleted; `v0.2.84-alpha`, `v0.2.85-alpha`, and
+`v0.2.86-alpha` remain intact. Manifests bumped `0.2.85-alpha → 0.2.87-alpha` (root +
+agent package.json + both lockfiles). Implementation on `main` is preserved verbatim.
+
+**Feature recap (MEMORY-ACTIVATION-1).** The Memory view gates on the **authoritative**
+per-owner state (`GET /api/memory.data.unlocked_for_owner`) and, when locked, shows a
+dominant guided activation panel with a single primary CTA **"Activate private memory"**;
+unlocked owners bypass it entirely and success reveals the console **in place with no
+reload**. Frontend: pure DOM-free eight-state controller `src/views/memory-activation.js`
+(`ready`, `requesting-signature`, `activating`, `success`, `signer-rejected`,
+`signer-unavailable`, `error`) with all I/O injected. Agent: `auth.verifyActionSignature()`
+reuses the login challenge pool (single-use + 5-min TTL → replay-safe), owner-bound,
+mints nothing; `POST /api/memory/activate/challenge` + `POST /api/memory/activate`
+unlock via the SAME `memoryCache.unlock()` path with a metadata-only `memory.activate`
+audit line. Ciphertext-only MEMORY-1 guarantees preserved: NIP-44 decryption happens in
+the browser with the owner's key; no plaintext or key ever reaches the agent. "Unlocked"
+is shown only after an authoritative `unlocked_for_owner:true` re-read.
+
 ## v0.2.85-alpha — retention prune + auth-gate hardening + public demo mode (2026-07-20)
 
 Three items in one release. **Not deployed from the subagent** — the parent hands the operator the deploy command block.
@@ -18,20 +46,6 @@ Three items in one release. **Not deployed from the subagent** — the parent ha
 - **Public demo mode.** A signed-out visitor can browse a read-only mockup at `/demo/*` rendered from obviously-fake fixtures (`src/demo/demo-fixtures.js`; every human-facing string carries DEMO/Sample; fake Cashu balance 21042 sats). `nav-guard` marks `/demo` + `/demo/*` public; a signed-in operator landing on a demo route is redirected to the real screen (`demoRedirect`). Views take `{ demo, fixtures }` and swap data source via `demoSource()` — no view fork. Demo makes **zero** agent/network calls (dashboard drops the ProviderCard poll, routstr drops its balance/NWC polls) and gates every CTA to login. Persistent orange "DEMO MODE — fake data" banner; subtle "View demo" peek on the login card. Tests: `demo-fixtures`, `demo-mode-banner`, `demo-no-network` (asserts zero agent calls when `demo:true`), plus nav-guard demo rules.
 
 Test counts this release: root vitest **1348 pass**, agent node:test **307 pass**, ops shell **97 pass**.
-
-## v0.2.84-alpha — Routstr Lightning-QR top-up (2026-07-20)
-
-## v0.2.84-alpha — MEMORY-ACTIVATION-1: guided owner-signed first-run memory activation (2026-07-20)
-
-**What.** Closed the first-run gap where a signed-in owner on `#/memory` with `unlocked_for_owner:false` saw no obvious way to turn memory on. The Memory view now gates on the **authoritative** per-owner state (`GET /api/memory.data.unlocked_for_owner`) and, when locked, shows a dominant, guided activation panel with a single primary CTA **"Activate private memory"**; unlocked owners bypass it entirely and success reveals the console **in place with no reload**.
-
-**How (frontend).** New pure, DOM-free controller `src/views/memory-activation.js` — an eight-state machine (`ready`, `requesting-signature`, `activating`, `success`, `signer-rejected`, `signer-unavailable`, `error`) with every I/O dependency injected, so all states are unit-tested without a DOM/network/signer. `src/views/memory.js` wires it to `window.nostr` + the agent client and renders each transition with accessible `role="status"`/`role="alert"` live regions and stable `data-testid`s. New client fns in `src/data/agent.js`: `memoryState`, `memoryCiphertexts`, `memoryActivateChallenge`, `memoryActivate`.
-
-**How (agent).** New `auth.verifyActionSignature()` reuses the login challenge pool (single-use + 5-min TTL → replay protection) and full NIP-07 signature crypto, but binds the signature to the already-authenticated session owner and mints nothing. `POST /api/memory/activate/challenge` issues the one-time challenge; `POST /api/memory/activate {event, entries}` verifies it (owner-bound, replay-safe), unlocks via the SAME `memoryCache.unlock()` path (no parallel protocol), and appends a metadata-only `memory.activate` audit line (owner-prefix + entry count — never plaintext). `GET /api/memory` gained `unlocked_for_owner` (true only when the cache is unlocked for THIS session's owner).
-
-**Security.** Ciphertext-only MEMORY-1 guarantees preserved: NIP-44 decryption happens in the browser with the owner's key; no plaintext or key ever reaches the agent. "Unlocked" is only ever shown after an authoritative `unlocked_for_owner:true` re-read — never on the optimistic activate result.
-
-**Tests/build.** Agent 314 pass (new `verifyActionSignature` suite: valid/owner-mismatch/unknown-challenge/wrong-kind/no-binding/tamper/no-token-minted + replay). Frontend 1353 pass (controller all-states + never-falsely-unlocked + retry; client request-shapes; view-structure guardrails). `npm run build` clean. Not deployed at authoring time.
 
 ## v0.2.83-alpha line — Routstr Lightning-QR top-up (2026-07-20)
 
