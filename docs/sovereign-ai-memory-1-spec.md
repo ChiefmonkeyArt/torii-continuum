@@ -254,6 +254,9 @@ the XSS-safe `h()` builder (textContent only, no raw HTML).
 
 ### 6.1 First-run activation (MEMORY-ACTIVATION-1)
 
+Shipped **v0.2.87-alpha** (feature merged as PR #98 / `a342eef`; cleanly re-versioned
+from the pre-consumed `v0.2.84-alpha` tag name — no published tag was rewritten).
+
 Durable memory is **locked** until the owner explicitly activates it. `GET
 /api/memory` returns `unlocked_for_owner` — the single authoritative signal the
 console trusts (the RAM cache is unlocked for exactly one owner at a time, so the
