@@ -541,6 +541,73 @@ function renderTopUpForm() {
 // labelled "NWC wallet". It reuses the existing onboarding wallet endpoints
 // (status/connect/test/disconnect) rather than adding any new protocol support.
 
+// Case-insensitive substring fingerprint → wallet maker. Ordered so a more
+// specific needle (getalby, mutinywallet) is tried before its shorter alias,
+// though both map to the same maker. Source string is the alias + relay hosts
+// (see nwcFingerprint) — never the secret or full URI.
+const WALLET_MAKERS = [
+  ['getalby', 'Alby'],
+  ['alby', 'Alby'],
+  ['mutinywallet', 'Mutiny'],
+  ['mutiny', 'Mutiny'],
+  ['cashu.me', 'cashu.me'],
+  ['zeusln', 'Zeus'],
+  ['zeus', 'Zeus'],
+  ['coinos', 'Coinos'],
+  ['strike', 'Strike'],
+  ['phoenix', 'Phoenix'],
+];
+
+// Build the (non-secret) fingerprint string a maker is inferred from: the
+// wallet alias plus its relay hosts, lowercased. Never includes the secret,
+// the full URI, or the wallet pubkey.
+export function nwcFingerprint(d) {
+  const parts = [];
+  if (d && d.alias) parts.push(String(d.alias));
+  const relays = (d && d.wallet && d.wallet.relays) || [];
+  for (const r of relays) parts.push(String(r));
+  return parts.join(' ').toLowerCase();
+}
+
+// Infer the wallet maker from its fingerprint. Returns { maker, known }; an
+// unrecognised wallet is "Unknown wallet" (known:false) and the caller surfaces
+// the relay host instead.
+export function inferWalletMaker(fingerprint) {
+  const s = String(fingerprint || '').toLowerCase();
+  for (const [needle, maker] of WALLET_MAKERS) {
+    if (s.includes(needle)) return { maker, known: true };
+  }
+  return { maker: 'Unknown wallet', known: false };
+}
+
+// The connected-wallet identity block:
+//   line 1 — alias (or "Wallet")
+//   line 2 — inferred maker + a small badge (network, else "NWC")
+//   line 3 — muted pubkey shortcode
+// For an unrecognised maker, the relay host is shown so the operator still
+// knows where the wallet connects.
+export function renderNwcIdentity(d) {
+  const alias = (d && d.alias) ? String(d.alias) : 'Wallet';
+  const { maker, known } = inferWalletMaker(nwcFingerprint(d));
+  const relays = (d && d.wallet && d.wallet.relays) || [];
+  const prefix = d && d.wallet && d.wallet.wallet_pubkey_prefix;
+
+  const lines = [
+    h('div', { class: 'nwc-alias', style: 'font-weight: 600;', text: alias }),
+    h('div', { class: 'nwc-maker', style: 'display:flex; align-items:center; gap:6px; margin-top:2px;' }, [
+      h('span', { text: maker }),
+      h('span', { class: 'badge', text: d && d.network ? String(d.network) : 'NWC' }),
+    ]),
+  ];
+  if (!known && relays.length) {
+    lines.push(h('div', { class: 'muted', style: 'font-size: 11.5px;', text: String(relays[0]) }));
+  }
+  if (prefix) {
+    lines.push(h('div', { class: 'mono muted', style: 'font-size: 11.5px;', text: `${String(prefix)}…` }));
+  }
+  return h('div', { class: 'nwc-identity', style: 'margin-top: 8px;' }, lines);
+}
+
 function renderNwcCard(live, demo) {
   const body = h('div', { class: 'nwc-body' }, [
     h('div', { class: 'muted', text: live ? 'Checking wallet…' : 'Sign in to connect a Lightning wallet.' }),
@@ -579,13 +646,17 @@ async function loadNwcStatus(body) {
   const head = h('div', {}, [
     h('span', { class: connected ? 'pill ok' : 'pill', text: connected ? 'connected' : 'not connected' }),
   ]);
-  if (connected && d.alias) { head.appendChild(document.createTextNode(' ')); head.appendChild(h('span', { class: 'mono muted', text: d.alias })); }
   body.appendChild(head);
 
   if (connected) {
+    body.appendChild(renderNwcIdentity(d));
     const bits = [];
     if (d.network) bits.push(`network: ${d.network}`);
     bits.push(d.can_fund_routstr ? 'can fund Routstr by payment' : 'cannot fund Routstr (no pay_invoice)');
+    // Preserve the make_invoice capability signal (used by the top-up-by-NWC
+    // flow) — it moved out of the connect step into the card's capability line.
+    const canInvoice = d.can_make_invoice != null ? d.can_make_invoice : d.capabilities?.can_make_invoice;
+    if (canInvoice != null) bits.push(canInvoice ? 'can make invoice' : 'cannot make invoice');
     body.appendChild(h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 8px;', text: bits.join(' · ') }));
   } else {
     body.appendChild(h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 8px;', text: 'No NWC wallet linked yet.' }));
