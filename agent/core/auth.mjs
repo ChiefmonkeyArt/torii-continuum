@@ -351,6 +351,79 @@ export function createAuth(cfg, deps = {}) {
     return { ok: true };
   }
 
+  /**
+   * Verify a fresh NIP-07-signed challenge event for a SENSITIVE ACTION (not a
+   * login). Reuses the exact same one-time challenge pool + signature checks as
+   * verifyChallenge, but:
+   *   - binds the signature to an already-authenticated owner (expectPubkeyHex,
+   *     the session npub decoded to hex) instead of claiming/issuing anything,
+   *   - never mints a session token and never touches admin-claim state,
+   *   - consumes the challenge on success (single-use → replay protection).
+   *
+   * This is the shared primitive behind consent-gated memory activation and any
+   * future signed action, so those routes never hand-roll signature crypto.
+   *
+   * @param {object} event            NIP-07 signed kind-22242 challenge event
+   * @param {object} opts
+   * @param {string} opts.expectPubkeyHex  the caller's session pubkey (hex)
+   * @param {string} [opts.clientIp]
+   * @returns {{ ok: true, pubkey: string } | { ok: false, reason: string }}
+   */
+  function verifyActionSignature(event, { expectPubkeyHex, clientIp } = {}) {
+    if (!event || typeof event !== 'object') return { ok: false, reason: 'no event' };
+    if (event.kind !== CHALLENGE_KIND) return { ok: false, reason: 'wrong kind (expected 22242)' };
+    if (typeof expectPubkeyHex !== 'string' || expectPubkeyHex.length !== 64) {
+      return { ok: false, reason: 'no owner binding' };
+    }
+    // Owner binding: the signature must come from the SAME key as the session.
+    if (event.pubkey !== expectPubkeyHex) {
+      log.warn({
+        evt: 'auth.action.fail',
+        ip_prefix: prefix(clientIp || '', 12),
+        pubkey_prefix: prefix(event.pubkey || ''),
+        reason: 'owner_mismatch',
+      });
+      return { ok: false, reason: 'signature is not from the signed-in owner' };
+    }
+
+    const tag = (event.tags || []).find((t) => Array.isArray(t) && t[0] === 'challenge');
+    if (!tag || !tag[1]) return { ok: false, reason: 'missing challenge tag' };
+    const challenge = tag[1];
+
+    const entry = challenges.get(challenge);
+    if (!entry) return { ok: false, reason: 'unknown or expired challenge' };
+    if (entry.expiresAt < now()) {
+      challenges.delete(challenge);
+      return { ok: false, reason: 'expired challenge' };
+    }
+    if (event.content && event.content !== challenge) {
+      return { ok: false, reason: 'content/tag mismatch' };
+    }
+
+    let sigOk = false;
+    try {
+      if (getEventHash(event) !== event.id) return { ok: false, reason: 'id mismatch' };
+      sigOk = verifyEvent(event);
+    } catch (e) {
+      log.warn({ evt: 'auth.action.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'badsig' });
+      return { ok: false, reason: `sig verify threw: ${e.message}` };
+    }
+    if (!sigOk) {
+      log.warn({ evt: 'auth.action.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'badsig' });
+      return { ok: false, reason: 'bad signature' };
+    }
+
+    // Consume — single use, so a captured event cannot be replayed.
+    challenges.delete(challenge);
+    log.info({
+      evt: 'auth.action.success',
+      ip_prefix: prefix(clientIp || '', 12),
+      pubkey_prefix: prefix(event.pubkey),
+      challenge_prefix: prefix(challenge),
+    });
+    return { ok: true, pubkey: event.pubkey };
+  }
+
   function issueSessionToken() {
     // Only ever called after a claim (or with a configured admin), so adminHex
     // is guaranteed non-null here.
@@ -393,6 +466,7 @@ export function createAuth(cfg, deps = {}) {
   return {
     issueChallenge,
     verifyChallenge,
+    verifyActionSignature,
     verifySessionToken,
     isClaimed: () => adminHex !== null,
     adminNpub: () => adminNpub,

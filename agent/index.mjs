@@ -779,9 +779,17 @@ app.get('/api/character', { preHandler: requireAdmin }, async () => {
   };
 });
 
-// GET /api/memory — non-sensitive status snapshot.
-app.get('/api/memory', { preHandler: requireAdmin }, async () => {
-  return memory.status();
+// GET /api/memory — non-sensitive status snapshot. Adds `unlocked_for_owner`:
+// the AUTHORITATIVE per-owner activation signal (MEMORY-ACTIVATION-1). The RAM
+// cache is unlocked for exactly one owner at a time; this is true only when it
+// is unlocked for THIS session's owner, so a session can never mistake another
+// owner's unlocked cache (or a stale one) for its own activated memory.
+app.get('/api/memory', { preHandler: requireAdmin }, async (req) => {
+  const status = memory.status();
+  return {
+    ...status,
+    unlocked_for_owner: memoryCache.unlockedForNpub() === req.session.npub,
+  };
 });
 
 // POST /api/memory/unlock — browser posts the decrypted plaintext bundle.
@@ -805,6 +813,66 @@ app.post('/api/memory/unlock', { preHandler: requireAdmin }, async (req, reply) 
   return {
     ok: true,
     ...result,
+    character_root_verified: rootCheck.ok,
+    reason: rootCheck.reason || null,
+    panic_key_nudge: panicNudge,
+  };
+});
+
+// ── MEMORY-ACTIVATION-1: guided, owner-signed first-run activation ──────────
+// The plain /api/memory/unlock above trusts the session token alone. Activation
+// hardens the first-run unlock into a SAFE, auditable act: the owner proves
+// fresh consent with a NIP-07 signature over a single-use server challenge
+// (replay protection), the signature is bound to the signed-in owner (owner
+// binding), and the act is recorded with metadata only (never plaintext). It
+// then reuses the SAME memoryCache.unlock() path — no parallel memory protocol.
+
+// POST /api/memory/activate/challenge — issue a one-time challenge for the
+// owner's signer to sign. Reuses the auth challenge pool (single-use + TTL).
+app.post('/api/memory/activate/challenge', { preHandler: requireAdmin }, async (req) => {
+  const { challenge, expires_in } = auth.issueChallenge(req.ip);
+  return { ok: true, challenge, expires_in };
+});
+
+// POST /api/memory/activate — verify the owner's signed challenge, then unlock.
+//   { event, entries }
+//   • event   — NIP-07 signed kind-22242 challenge event (fresh owner consent)
+//   • entries — the browser-decrypted ciphertext bundle to load into RAM
+// The signature is verified + owner-bound + replay-protected before any unlock,
+// and the activation is audited (owner prefix + entry count only).
+app.post('/api/memory/activate', { preHandler: requireAdmin }, async (req, reply) => {
+  const { event, entries } = req.body || {};
+  if (!Array.isArray(entries)) {
+    return reply.code(400).send({ error: 'body.entries[] required', code: 'entries' });
+  }
+  const ownerHex = ownerHexFromNpub(req.session.npub);
+  if (!ownerHex) {
+    return reply.code(400).send({ error: 'could not decode owner npub', code: 'owner' });
+  }
+  const sig = auth.verifyActionSignature(event, { expectPubkeyHex: ownerHex, clientIp: req.ip });
+  if (!sig.ok) {
+    return reply.code(401).send({ error: sig.reason, code: 'signature' });
+  }
+  const normalised = entries.map((e) => ({
+    eventId: e.event_id || e.eventId || null,
+    kind: e.kind,
+    dTag: e.d_tag || e.dTag,
+    content: e.content,
+    createdAt: e.created_at || e.createdAt || Math.floor(Date.now() / 1000),
+    source: 'unlock',
+  }));
+  const result = memoryCache.unlock(req.session.npub, normalised);
+  const rootCheck = memory.verifyCharacterRoot();
+  const panicNudge = await maybePanicKeyNudge(req.session.npub);
+  await audit.append('memory.activate', {
+    owner_pubkey_prefix: ownerHex.slice(0, 12),
+    entry_count: result.count,
+    unlocked_at: result.unlockedAt,
+  }).catch((e) => app.log.error(`[memory] audit activate failed: ${e.message}`));
+  return {
+    ok: true,
+    ...result,
+    unlocked_for_owner: memoryCache.unlockedForNpub() === req.session.npub,
     character_root_verified: rootCheck.ok,
     reason: rootCheck.reason || null,
     panic_key_nudge: panicNudge,
