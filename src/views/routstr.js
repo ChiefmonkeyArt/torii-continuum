@@ -52,6 +52,92 @@ let balanceNumEl = null;
 let topUpSectionEl = null;
 let topUpInputEl = null;
 
+// ── Re-render-safe top-up polling (v0.2.89-alpha, Item 1) ─────────────────────
+//
+// Field bug (2026-07-20): a Cashu top-up modal hung on "Waiting for payment…"
+// forever and nginx logged ZERO GET /api/wallet/mint-quote/… calls — the poll
+// simply stopped firing, leaving no server-side trace. The interval used to live
+// in a closure variable inside openTopUpModal(); any path that re-entered or
+// re-rendered the enclosing view could orphan or clear it silently. We hoist the
+// poll onto a module-scope singleton keyed by quote id so the interval survives a
+// re-render, and any orphaned interval self-cancels loudly.
+export const topUpSessions = new Map(); // quoteId → session
+
+export function createTopUpSession({ quoteId, source, expiry = null, mintUrl = null, startedAt = Date.now() }) {
+  const session = { quoteId, source, expiry, mintUrl, startedAt, pollHandle: null, attempt: 0 };
+  topUpSessions.set(quoteId, session);
+  return session;
+}
+
+export function clearTopUpSession(quoteId) {
+  const session = topUpSessions.get(quoteId);
+  if (session && session.pollHandle != null) clearInterval(session.pollHandle);
+  topUpSessions.delete(quoteId);
+}
+
+// Enable [topup] instrumentation from ?debug=topup or localStorage. Sets the
+// canonical window flag the log gate reads (never on by default).
+function initTopUpDebug() {
+  try {
+    const q = new URLSearchParams(window.location?.search || '');
+    if (q.get('debug') === 'topup' || window.localStorage?.getItem('torii.debug.topup') === '1') {
+      window.__TORII_DEBUG_TOPUP__ = true;
+    }
+  } catch (_e) {}
+}
+
+// All top-up instrumentation is console.info gated on the window flag — never
+// console.log, and silent unless the operator opted in.
+function topUpLog(msg) {
+  try { if (typeof window !== 'undefined' && window.__TORII_DEBUG_TOPUP__ === true) console.info(msg); } catch (_e) {}
+}
+
+/**
+ * One poll iteration, bound to the module singleton (not a closure). Exported so
+ * the re-render-safety + self-cancel + single-mint contract is unit-testable
+ * without a DOM. `handle` is the interval id that scheduled this tick; if the
+ * singleton's recorded pollHandle no longer matches (a re-render started a new
+ * poll, or the session was cleared) this interval is orphaned and self-cancels.
+ *
+ * deps: { statusCashu, statusNwc, onPaid, log }
+ */
+export async function topUpPollTick(session, handle, deps) {
+  const live = session && topUpSessions.get(session.quoteId);
+  const log = deps.log || topUpLog;
+  if (!live || live !== session || session.pollHandle !== handle) {
+    clearInterval(handle);
+    log('[topup] orphaned interval self-cancelled');
+    return { orphaned: true };
+  }
+  session.attempt += 1;
+  log(`[topup] poll tick quote=${session.quoteId} source=${session.source} attempt=${session.attempt}`);
+  const r = session.source === 'cashu'
+    ? await deps.statusCashu(session.quoteId)
+    : await deps.statusNwc(session.quoteId);
+  const ok = !!(r && r.ok);
+  const paid = !!(r && r.data && r.data.paid === true);
+  const state = r && r.data ? r.data.state : undefined;
+  const throttled = !!(r && r.data && r.data.throttled === true);
+  log(`[topup] poll response ok=${ok} paid=${paid} state=${state} throttled=${throttled}`);
+  if (!ok) return { ok: false }; // transient; keep polling until expiry
+  if (paid) {
+    // Drain the singleton (clears this very interval) BEFORE the UI update so a
+    // late tick can never re-enter toPaid and double-count the mint.
+    clearTopUpSession(session.quoteId);
+    await deps.onPaid(r.data);
+    return { paid: true };
+  }
+  return { ok: true, paid: false };
+}
+
+// Schedule the poll on the singleton. Exported so a fake-timer test can advance
+// time and assert the status endpoint is actually called on each tick.
+export function startTopUpPoll(session, deps, pollMs = TOPUP_POLL_MS) {
+  const handle = setInterval(() => { topUpPollTick(session, handle, deps); }, pollMs);
+  session.pollHandle = handle;
+  return handle;
+}
+
 /**
  * Read the spendable balance (sats) out of an agent balance payload.
  *
@@ -220,11 +306,15 @@ function openTopUpModal() {
   let amount = TOPUP_DEFAULT_SATS;
   let selectedMint = null;     // optional mint url (Cashu, when >1 configured)
   let nwcConnected = false;    // gates the NWC source until a wallet is linked
-  let pollHandle = null;
+  let activeQuoteId = null;    // key into the module-scope topUpSessions singleton
   let countdownHandle = null;
 
+  initTopUpDebug();
+
   const stopTimers = () => {
-    if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
+    // Poll lives on the module singleton (re-render-safe); the countdown is a
+    // plain closure interval. Clearing the singleton only affects our own quote.
+    if (activeQuoteId) { clearTopUpSession(activeQuoteId); activeQuoteId = null; }
     if (countdownHandle) { clearInterval(countdownHandle); countdownHandle = null; }
   };
 
@@ -435,13 +525,16 @@ function openTopUpModal() {
   }
 
   function startPoll(id) {
-    pollHandle = setInterval(async () => {
-      const r = source === 'cashu'
-        ? await walletMintQuoteStatus(id)
-        : await walletNwcInvoiceStatus(id);
-      if (!r.ok) return; // transient; keep polling until expiry
-      if (r.data?.paid === true) toPaid(r.data);
-    }, TOPUP_POLL_MS);
+    // Bind the poll to the module singleton, not this closure — so a re-render of
+    // the enclosing view (balance/usage poll, visibility flip) cannot orphan it.
+    const session = createTopUpSession({ quoteId: id, source, mintUrl: selectedMint || null });
+    activeQuoteId = id;
+    startTopUpPoll(session, {
+      statusCashu: walletMintQuoteStatus,
+      statusNwc: walletNwcInvoiceStatus,
+      onPaid: (data) => toPaid(data),
+      log: topUpLog,
+    });
   }
 
   async function toPaid(data) {
