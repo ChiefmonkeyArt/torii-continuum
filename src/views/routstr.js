@@ -8,6 +8,7 @@ import { setChatContext } from '../chat.js';
 import {
   walletBalance, walletReceive, isAgentConfigured,
   walletMintQuote, walletMintQuoteStatus, walletNwcInvoice, walletNwcInvoiceStatus,
+  walletPendingQuotes, walletResumeQuote,
   nwcStatus, nwcConnect, nwcTest, nwcDisconnect,
 } from '../data/agent.js';
 import { renderQR } from './qr.js';
@@ -188,6 +189,13 @@ export function renderRoutstr(mount, opts = {}) {
     ]),
   ]);
   mount.appendChild(header);
+
+  // Pending Top-Ups recovery card (Item 3): a placeholder at the very top of the
+  // Wallet section, populated asynchronously and only when the caller has
+  // unminted quotes on disk. Empty/errored → the slot stays empty.
+  const pendingSlot = h('div', { class: 'pending-topups-slot' });
+  mount.appendChild(pendingSlot);
+  if (live) mountPendingTopUps(pendingSlot, demo);
 
   // Two matching horizontal wallet cards: Cashu (left) + NWC (right).
   const walletCards = h('div', { class: 'grid-2' }, [
@@ -581,6 +589,112 @@ function openTopUpModal() {
 
 function hostOf(u) {
   try { return new URL(u).host; } catch { return String(u); }
+}
+
+// ── Pending Top-Ups card (v0.2.89-alpha, Item 3) ──────────────────────────────
+//
+// Recovery UI for the field bug: a payment can reach the mint (quote PAID) yet
+// never get minted into the wallet if the front-end poll dies (see Item 1). Those
+// quotes live on disk with minted:false. This card lists the caller's unminted
+// quotes so they can finish the mint by hand — GET /api/wallet/quotes/pending to
+// list, POST /api/wallet/quotes/:quote/resume to complete one. Rendered only when
+// the list is non-empty.
+
+// Coarse "created X ago" from an age in seconds. Deliberately low-resolution —
+// this is a recovery hint, not a clock.
+export function fmtAge(seconds) {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0));
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} minute${m === 1 ? '' : 's'} ago`;
+  const hrs = Math.floor(m / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? '' : 's'} ago`;
+  const d = Math.floor(hrs / 24);
+  return `${d} day${d === 1 ? '' : 's'} ago`;
+}
+
+// Pure render: given the pending quotes and an async onResume(quote, ui) handler,
+// build the card. Returns null for an empty/absent list so the caller can skip
+// mounting entirely. onResume receives { row, btn, statusEl } so it can drive the
+// per-row loading state and remove the row on success. "Resume all" replays every
+// row's handler sequentially.
+export function renderPendingTopUps(quotes, handlers = {}) {
+  if (!Array.isArray(quotes) || quotes.length === 0) return null;
+  const onResume = handlers.onResume || (async () => {});
+
+  const triggers = [];
+  const rows = quotes.map((q) => {
+    const label = `${formatSats(q.amount_sats)} sats · ${hostOf(q.mint)} · created ${fmtAge(q.age_seconds)}`;
+    const statusEl = h('span', { class: 'muted pending-row-status', style: 'font-size: 12px; margin-right: 8px; min-width: 0;' });
+    const btn = h('button', { class: 'pending-resume', type: 'button' }, ['Resume']);
+    const row = h('div', {
+      class: 'pending-row',
+      style: 'display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 0;',
+    }, [
+      h('span', { class: 'pending-row-label', text: label }),
+      h('div', { style: 'display:flex; align-items:center;' }, [statusEl, btn]),
+    ]);
+    const trigger = () => onResume(q, { row, btn, statusEl });
+    btn.addEventListener('click', trigger);
+    triggers.push(trigger);
+    return row;
+  });
+
+  const resumeAllBtn = h('button', { class: 'pending-resume-all', type: 'button' }, ['Resume all']);
+  resumeAllBtn.addEventListener('click', async () => {
+    resumeAllBtn.disabled = true;
+    for (const t of triggers) { await t(); }
+    resumeAllBtn.disabled = false;
+  });
+
+  return h('div', { class: 'card pending-topups' }, [
+    h('div', { style: 'display:flex; align-items:center; justify-content:space-between; gap:8px;' }, [
+      h('h3', { text: 'Pending top-ups' }),
+      resumeAllBtn,
+    ]),
+    h('div', { class: 'pending-rows' }, rows),
+    h('p', {
+      class: 'muted',
+      style: 'font-size: 12px; margin-top: 8px;',
+      text: "Payments that reached the mint but weren't minted into your wallet. Click Resume to complete them.",
+    }),
+  ]);
+}
+
+// Async wiring: fetch the caller's pending quotes and, if any, mount the card into
+// `container`. Each Resume calls the resume endpoint, shows a per-row spinner,
+// and on success removes the row + updates the live balance number (and fires the
+// sats-burst celebration once it exists — Item 4). Never runs in demo.
+export async function mountPendingTopUps(container, demo) {
+  if (demo || !container) return;
+  let res;
+  try { res = await walletPendingQuotes(); } catch (_e) { return; }
+  const quotes = res && res.ok && Array.isArray(res.data?.quotes) ? res.data.quotes : [];
+  if (quotes.length === 0) return;
+
+  const resumeOne = async (q, ui) => {
+    if (ui.btn.disabled) return false;
+    ui.btn.disabled = true;
+    ui.statusEl.textContent = 'Resuming…';
+    let r;
+    try { r = await walletResumeQuote(q.quote); } catch (_e) { r = { ok: false, reason: 'offline' }; }
+    if (!r || !r.ok) {
+      ui.btn.disabled = false;
+      ui.statusEl.textContent = r && r.reason === 'not_yours' ? 'Not yours' : `Failed: ${(r && r.reason) || 'error'}`;
+      return false;
+    }
+    ui.statusEl.textContent = '';
+    if (ui.row && ui.row.parentNode) ui.row.parentNode.removeChild(ui.row);
+    const newBal = Number.isFinite(r.data?.new_balance_sats) ? r.data.new_balance_sats : null;
+    if (newBal != null) {
+      updateRoutstr({ connected: true, cashuBalanceSats: newBal });
+      if (balanceNumEl && balanceNumEl.isConnected) balanceNumEl.textContent = formatSats(newBal);
+    }
+    return true;
+  };
+
+  const card = renderPendingTopUps(quotes, { onResume: resumeOne });
+  if (card) container.appendChild(card);
 }
 
 // Legacy inline Cashu-token receive form (POST /api/wallet/receive {token}).

@@ -618,6 +618,31 @@ app.get('/api/wallet/mint-quote/:quote', { preHandler: requireAdmin }, async (re
   return r;
 });
 
+// ─────────────────────────────────────────────────────────────
+// Pending top-up recovery (v0.2.89-alpha, Item 3) — admin-gated.
+//
+//   GET  /api/wallet/quotes/pending        — list the caller's unminted quotes
+//   POST /api/wallet/quotes/:quote/resume  — complete one (idempotent, owned)
+//
+// A quote whose invoice reached the mint but never minted (the 2026-07-20 field
+// bug) is reclaimed here. Ownership is enforced in the wallet by marker.session.
+// ─────────────────────────────────────────────────────────────
+app.get('/api/wallet/quotes/pending', { preHandler: requireAdmin }, async (req, reply) => {
+  const r = await wallet.listPendingQuotes({ sessionId: req.session?.npub || 'default' });
+  if (!r.ok) return reply.code(400).send({ error: r.reason });
+  return { ok: true, quotes: r.quotes };
+});
+
+app.post(
+  '/api/wallet/quotes/:quote/resume',
+  { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/wallet/quotes/resume') },
+  async (req, reply) => {
+    const r = await wallet.resumeQuote({ quote: req.params.quote, sessionId: req.session?.npub || 'default' });
+    if (!r.ok) return reply.code(r.forbidden ? 403 : 400).send({ error: r.reason });
+    return r;
+  },
+);
+
 app.post(
   '/api/wallet/nwc-invoice',
   { preHandler: requireAdmin, config: rateLimitConfig(onboardingMax, '/api/wallet/nwc-invoice') },

@@ -82,6 +82,13 @@ set -euo pipefail
 : "${RET_QUARANTINE_PARENT:=/home/continuum}"
 : "${RET_QUARANTINE_AGE_DAYS:=3}"
 : "${RET_QUARANTINE_KEEP:=3}"
+# Wallet mint-quote markers (v0.2.89-alpha) live one level below the proofs as
+# <wallet>/quotes/<quote>.json (metadata only — never proofs). A MINTED marker
+# is spent bookkeeping; prune it once it ages past AGE_DAYS. An UNMINTED marker
+# may still hold reclaimable sats at the mint, so it is NEVER auto-pruned — the
+# user must resume (POST /api/wallet/quotes/:quote/resume) or delete it by hand.
+: "${RET_WALLET_QUOTES_DIR:=/home/continuum/app/agent/memory/wallet/quotes}"
+: "${RET_QUOTE_AGE_DAYS:=30}"
 # Keep policy (configurable via the deploy role vars, see defaults/main.yml):
 #   sources  — how many /opt/deploy/torii-continuum-* clones to keep. The current
 #              PINNED clone is ALWAYS kept on top of this; the default 1 means the
@@ -414,6 +421,66 @@ ret_prune_app_quarantines() {
   done < <(find "$parent" -maxdepth 1 -type d -name "$RET_QUARANTINE_GLOB" -printf '%T@\t%p\0' 2>/dev/null | sort -zrn)
 }
 
+# ret_quote_is_minted <file> — 0 iff the marker JSON records "minted": true.
+ret_quote_is_minted() {
+  grep -Eq '"minted"[[:space:]]*:[[:space:]]*true' -- "${1:?}" 2>/dev/null
+}
+
+# ret_quote_created_ms <file> — echo the created_at epoch-milliseconds integer
+# from the marker JSON, or nothing if absent/unparseable.
+ret_quote_created_ms() {
+  sed -n 's/.*"created_at"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' -- "${1:?}" 2>/dev/null | head -1
+}
+
+# ret_prune_wallet_quotes <quotes-dir> [age_days] — delete MINTED mint-quote
+# markers older than <age_days> (created_at is epoch-ms, JSON.stringify pretty).
+# UNMINTED markers are NEVER auto-pruned — they may still hold reclaimable sats
+# at the mint, so only a resume or an explicit human delete removes them.
+#
+# STRICT anchoring (this dir sits INSIDE the live app tree, so the generic
+# protected-path refusal would block it; the guards here take its place):
+#   - the dir basename must be exactly 'quotes' (proofs live one level up as
+#     <mint-slug>.json and are NEVER under quotes/),
+#   - only depth-1 *.json files, never a symlink,
+#   - a candidate must parse as minted:true AND carry a numeric created_at older
+#     than the cutoff — anything else (incl. every proof file shape) is retained.
+ret_prune_wallet_quotes() {
+  local dir="${1:?}" age_days="${2:-$RET_QUOTE_AGE_DAYS}"
+  [[ -d "$dir" ]] || { ret_log "no wallet quotes dir at ${dir}; nothing to prune"; return 0; }
+  [[ "$age_days" =~ ^[0-9]+$ ]] || age_days=30
+  local real; real="$(ret_canon "$dir")" || { ret_warn "cannot resolve quotes dir ${dir}"; return 0; }
+  if [[ "$(basename -- "$real")" != "quotes" ]]; then
+    ret_warn "refusing to prune a quotes dir whose name is not exactly 'quotes': ${real}"
+    return 0
+  fi
+  local now_ms cutoff_ms
+  now_ms=$(( $(date +%s) * 1000 ))
+  cutoff_ms=$(( now_ms - age_days * 86400 * 1000 ))
+  local f created bytes
+  while IFS= read -r -d '' f; do
+    [[ -f "$f" && ! -L "$f" ]] || continue
+    if ! ret_quote_is_minted "$f"; then
+      ret_log "retaining unminted quote marker (never auto-pruned): ${f}"
+      continue
+    fi
+    created="$(ret_quote_created_ms "$f")"
+    if [[ ! "$created" =~ ^[0-9]+$ ]]; then
+      ret_log "retaining minted quote marker with unparseable created_at: ${f}"
+      continue
+    fi
+    if (( created >= cutoff_ms )); then
+      ret_log "retaining minted quote marker newer than ${age_days}d: ${f}"
+      continue
+    fi
+    bytes="$(ret_dir_bytes "$f")"
+    rm -f -- "$f" && {
+      RET_RECLAIMED_BYTES=$(( RET_RECLAIMED_BYTES + bytes ))
+      RET_PRUNED_COUNT=$(( RET_PRUNED_COUNT + 1 ))
+      ret_log "reclaimed minted quote marker (> ${age_days}d): ${f}"
+    }
+  done < <(find "$real" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null)
+}
+
 # ret_rotate_logs <dir> — cap deployment-specific logs. Refuses any dir that is
 # not the approved log dir or that resolves onto/under a protected path, so a
 # misconfiguration can never rotate/weaken system or audit logs. Keeps the newest
@@ -522,6 +589,7 @@ retention_sweep() {
   ret_prune_backups "$RET_BACKUP_PARENT"
   ret_prune_app_staging "$RET_APP_STAGING"
   ret_prune_app_quarantines "$RET_QUARANTINE_PARENT"
+  ret_prune_wallet_quotes "$RET_WALLET_QUOTES_DIR"
   ret_rotate_logs "$RET_LOG_DIR"
   ret_report
   ret_log "retention sweep complete."

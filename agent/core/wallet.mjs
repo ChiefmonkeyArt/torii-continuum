@@ -21,7 +21,7 @@
  * double-spend.
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Mint, Wallet, getEncodedToken, getDecodedToken, CheckStateEnum, MintQuoteState } from '@cashu/cashu-ts';
@@ -575,7 +575,61 @@ export async function createWallet(cfg, log, deps = {}) {
     return { ok: true, state: 'UNPAID', paid: false, expiry: resp.expiry ?? marker.expiry ?? null };
   }
 
-  return { balance, receive, send, health, createMintQuote, checkMintQuote, mints: [...mints.keys()] };
+  // ── Recovery: reclaim stuck top-ups (v0.2.89-alpha, Item 3) ────────────────
+  //
+  // A quote whose invoice reached the mint but never minted into the wallet
+  // (the 2026-07-20 field bug: front-end stopped polling) leaves a marker with
+  // minted:false on disk. These two calls let the OWNER list and resume them.
+  // Ownership is enforced by marker.session === sessionId — a caller can never
+  // see or resume another session's quotes.
+
+  async function listPendingQuotes({ sessionId = 'default' } = {}) {
+    let names;
+    try {
+      names = await readdir(quotesDir);
+    } catch (e) {
+      if (e.code === 'ENOENT') return { ok: true, quotes: [] };
+      throw e;
+    }
+    const now = Date.now();
+    const quotes = [];
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const quote = name.slice(0, -5);
+      if (!isSafeQuoteId(quote)) continue;
+      const marker = await readQuoteMarker(quote);
+      if (!marker || marker.minted === true) continue;
+      if ((marker.session || 'default') !== sessionId) continue; // never leak others' quotes
+      quotes.push({
+        quote: marker.quote || quote,
+        mint: marker.mint,
+        amount_sats: marker.amount_sats,
+        created_at: marker.created_at ?? null,
+        age_seconds: Number.isFinite(marker.created_at) ? Math.max(0, Math.floor((now - marker.created_at) / 1000)) : null,
+      });
+    }
+    quotes.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    return { ok: true, quotes };
+  }
+
+  async function resumeQuote({ quote, sessionId = 'default' } = {}) {
+    if (!isSafeQuoteId(quote)) return { ok: false, reason: 'bad quote id' };
+    const marker = await readQuoteMarker(quote);
+    if (!marker) return { ok: false, reason: 'unknown quote' };
+    // Ownership refusal: never resume a quote that isn't the caller's.
+    if ((marker.session || 'default') !== sessionId) {
+      return { ok: false, reason: 'not_yours', forbidden: true };
+    }
+    // Fully idempotent: an already-minted quote returns the cached success
+    // WITHOUT touching the mint (hitting resume repeatedly is safe).
+    if (marker.minted === true) {
+      const bal = await balance();
+      return { ok: true, paid: true, already: true, minted_sats: marker.amount_sats, new_balance_sats: bal.total };
+    }
+    return checkMintQuote({ quote, sessionId });
+  }
+
+  return { balance, receive, send, health, createMintQuote, checkMintQuote, listPendingQuotes, resumeQuote, mints: [...mints.keys()] };
 }
 
 /**
