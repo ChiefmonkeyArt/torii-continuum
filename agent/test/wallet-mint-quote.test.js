@@ -20,7 +20,27 @@ import { MintQuoteState } from '@cashu/cashu-ts';
 import { createWallet } from '../core/wallet.mjs';
 
 function silentLog() {
-  return { info() {}, warn() {}, error() {} };
+  return { info() {}, warn() {}, error() {}, debug() {} };
+}
+
+// A logger that records every call so we can assert the [wallet] checkMintQuote
+// entry + result trace (v0.2.89-alpha, Item 2). Making it structurally
+// impossible for a check to leave zero log trace turns future silent bugs loud.
+function captureLog() {
+  const calls = { info: [], warn: [], error: [], debug: [] };
+  const rec = (k) => (...args) => { calls[k].push(args); };
+  return { info: rec('info'), warn: rec('warn'), error: rec('error'), debug: rec('debug'), calls };
+}
+
+async function withCapturedWallet(cfg, deps, fn) {
+  const dir = await mkdtemp(join(tmpdir(), 'torii-wallet-'));
+  const log = captureLog();
+  try {
+    const wallet = await createWallet(cfg, log, { walletDir: dir, ...deps });
+    return await fn(wallet, log);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 // A fake cashu-ts Wallet that never hits the network. `state` drives what the
@@ -143,6 +163,42 @@ test('checkMintQuote mints exactly once on PAID and never re-mints', async () =>
     assert.equal(second.state, 'ISSUED');
     assert.equal(second.paid, true);
     assert.equal(state.mintCalls, 1, 'must not mint twice for the same quote');
+  });
+});
+
+test('checkMintQuote logs an entry + result trace on every invocation (Item 2)', async () => {
+  const state = { value: MintQuoteState.UNPAID, mintCalls: 0 };
+  await withCapturedWallet(oneMintCfg, { walletFactory: fakeMintFactory(state) }, async (w, log) => {
+    const q = await w.createMintQuote({ amountSats: 1000 });
+
+    const before = log.calls.info.length;
+    await w.checkMintQuote({ quote: q.quote, sessionId: 'npubdeadbeefsession' });
+    const infoLines = log.calls.info.slice(before);
+
+    // At least the entry + result pair.
+    assert.ok(infoLines.length >= 2, `expected >=2 info logs, got ${infoLines.length}`);
+    const joined = infoLines.map((a) => a[0]).join('\n');
+    assert.match(joined, /\[wallet\] checkMintQuote called/);
+    assert.match(joined, /\[wallet\] checkMintQuote result/);
+  });
+});
+
+test('checkMintQuote never logs a full session npub (last 8 chars only) or full quote id', async () => {
+  const state = { value: MintQuoteState.UNPAID, mintCalls: 0 };
+  await withCapturedWallet(oneMintCfg, { walletFactory: fakeMintFactory(state) }, async (w, log) => {
+    const q = await w.createMintQuote({ amountSats: 1000 });
+    const fullNpub = 'npub1a3umadeupsessionidentifierxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+    await w.checkMintQuote({ quote: q.quote, sessionId: fullNpub });
+
+    const all = log.calls.info.concat(log.calls.debug).map((a) => a.join(' ')).join('\n');
+    // The formatted args are the 2nd..Nth positional args (printf-style), so the
+    // captured args array holds the truncated forms — assert the full npub and
+    // full quote id never appear anywhere in the captured arguments.
+    const flat = log.calls.info.concat(log.calls.debug).flat().map(String).join('\n');
+    assert.ok(!flat.includes(fullNpub), 'full npub must never be logged');
+    assert.ok(!flat.includes(q.quote) || q.quote.length <= 12, 'full quote id must be truncated in logs');
+    // The truncated npub marker is present.
+    assert.match(flat, /npub…/);
   });
 });
 

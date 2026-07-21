@@ -65,6 +65,18 @@ function isSafeQuoteId(q) {
   return typeof q === 'string' && q.length > 0 && q.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(q);
 }
 
+// Short handle for a quote id in logs: first 8 + last 4 chars, never the full id.
+// Enough to correlate a check with its marker without echoing the whole value.
+function truncateId(q) {
+  return typeof q === 'string' && q.length > 12 ? `${q.slice(0, 8)}…${q.slice(-4)}` : 'quote';
+}
+
+// Session identity for logs: last 8 chars only, prefixed npub… — never the full
+// npub. Anything too short to be a real key collapses to a fixed label.
+function truncateNpub(s) {
+  return typeof s === 'string' && s.length >= 8 ? `npub…${s.slice(-8)}` : 'session';
+}
+
 const WALLET_DIR = join(agentRoot(), 'memory', 'wallet');
 
 function slug(mintUrl) {
@@ -468,28 +480,49 @@ export async function createWallet(cfg, log, deps = {}) {
   }
 
   async function checkMintQuote({ quote, sessionId = 'default' } = {}) {
-    if (!isSafeQuoteId(quote)) return { ok: false, reason: 'bad quote id' };
+    // Entry log (OPS-decisive): the empty journalctl output was what pinned the
+    // 2026-07-20 diagnosis. Every check now leaves an entry AND a result trace,
+    // so a future silent stall is impossible — a missing pair means the call
+    // never reached the server (a front-end bug), a present pair localises it.
+    log.info('[wallet] checkMintQuote called quote=%s session=%s', truncateId(quote), truncateNpub(sessionId));
+    const logResult = (state, minted, throttled, reason) =>
+      log.info('[wallet] checkMintQuote result quote=%s state=%s minted=%s throttled=%s reason=%s',
+        truncateId(quote), state, minted, throttled, reason ?? '');
+
+    if (!isSafeQuoteId(quote)) {
+      logResult('INVALID', false, false, 'bad quote id');
+      return { ok: false, reason: 'bad quote id' };
+    }
     const marker = await readQuoteMarker(quote);
-    if (!marker) return { ok: false, reason: 'unknown quote' };
+    if (!marker) {
+      logResult('UNKNOWN', false, false, 'unknown quote');
+      return { ok: false, reason: 'unknown quote' };
+    }
 
     // Already minted → serve the cached result WITHOUT touching the mint.
     if (marker.minted === true) {
       const bal = await balance();
+      logResult('ISSUED', true, false, 'cached');
       return { ok: true, state: 'ISSUED', paid: true, minted_sats: marker.amount_sats, new_balance_sats: bal.total };
     }
 
     // Per-quote status-check throttle. The next poll (2s cadence) resolves it.
     const now = Date.now();
     if (now - (lastCheckByQuote.get(quote) || 0) < 1500) {
+      logResult('UNPAID', false, true, 'throttled');
       return { ok: true, state: 'UNPAID', paid: false, throttled: true, expiry: marker.expiry ?? null };
     }
     lastCheckByQuote.set(quote, now);
 
     const wallet = mints.get(marker.mint);
-    if (!wallet) return { ok: false, reason: 'quote mint is no longer configured' };
+    if (!wallet) {
+      logResult('ERROR', false, false, 'mint not configured');
+      return { ok: false, reason: 'quote mint is no longer configured' };
+    }
     try {
       await ensureLoaded(wallet);
     } catch (e) {
+      logResult('ERROR', false, false, `mint unavailable: ${sanitizeReason(e)}`);
       return { ok: false, reason: `mint unavailable: ${sanitizeReason(e)}` };
     }
 
@@ -497,6 +530,7 @@ export async function createWallet(cfg, log, deps = {}) {
     try {
       resp = await wallet.checkMintQuoteBolt11(quote);
     } catch (e) {
+      logResult('ERROR', false, false, `quote check failed: ${sanitizeReason(e)}`);
       return { ok: false, reason: `quote check failed: ${sanitizeReason(e)}` };
     }
 
@@ -506,11 +540,15 @@ export async function createWallet(cfg, log, deps = {}) {
       await writeQuoteMarker(quote, { ...marker, minted: true, minted_at: Date.now() });
       let proofs;
       try {
+        log.debug('[wallet] mintProofsBolt11 start quote=%s amount=%s', truncateId(quote), marker.amount_sats);
         proofs = await wallet.mintProofsBolt11(marker.amount_sats, quote);
+        log.debug('[wallet] mintProofsBolt11 ok quote=%s amount=%s', truncateId(quote), marker.amount_sats);
       } catch (e) {
         // A CAUGHT (non-crash) failure: nothing was appended, so revert the
         // marker to allow a safe retry — the mint is idempotent by quote id.
+        log.debug('[wallet] mintProofsBolt11 failed quote=%s error=%s', truncateId(quote), sanitizeReason(e));
         await writeQuoteMarker(quote, { ...marker, minted: false });
+        logResult('PAID', false, false, `mint proofs failed: ${sanitizeReason(e)}`);
         return { ok: false, reason: `mint proofs failed: ${sanitizeReason(e)}` };
       }
       const existing = await readProofs(walletDir, marker.mint);
@@ -519,6 +557,7 @@ export async function createWallet(cfg, log, deps = {}) {
       const bal = await balance();
       dropOpenQuote(marker.session || sessionId, quote);
       log.info(`[wallet] minted ${minted} sats from quote mint=${marker.mint} new_balance=${bal.total}`);
+      logResult('PAID', true, false, 'minted');
       return { ok: true, state: 'PAID', paid: true, minted_sats: minted, new_balance_sats: bal.total };
     }
 
@@ -528,9 +567,11 @@ export async function createWallet(cfg, log, deps = {}) {
       await writeQuoteMarker(quote, { ...marker, minted: true });
       dropOpenQuote(marker.session || sessionId, quote);
       const bal = await balance();
+      logResult('ISSUED', true, false, 'already issued');
       return { ok: true, state: 'ISSUED', paid: true, minted_sats: marker.amount_sats, new_balance_sats: bal.total };
     }
 
+    logResult('UNPAID', false, false, 'unpaid');
     return { ok: true, state: 'UNPAID', paid: false, expiry: resp.expiry ?? marker.expiry ?? null };
   }
 
