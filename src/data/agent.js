@@ -212,6 +212,10 @@ export async function walletMintQuoteStatus(quote)       { return req('GET',  `/
 export async function walletNwcInvoice(amountSats, memo) { return req('POST', '/api/wallet/nwc-invoice', { amount_sats: amountSats, memo }); }
 /** GET /api/wallet/nwc-invoice/:hash — poll NWC invoice settlement (never mints). */
 export async function walletNwcInvoiceStatus(hash)       { return req('GET',  `/api/wallet/nwc-invoice/${encodeURIComponent(hash)}`); }
+/** GET /api/wallet/quotes/pending — the caller's unminted top-up quotes (recovery). */
+export async function walletPendingQuotes()              { return req('GET',  '/api/wallet/quotes/pending'); }
+/** POST /api/wallet/quotes/:quote/resume — complete one stuck top-up (idempotent). */
+export async function walletResumeQuote(quote)           { return req('POST', `/api/wallet/quotes/${encodeURIComponent(quote)}/resume`); }
 
 /**
  * GET /api/wallet/health — CONT-HEALTH-2. Non-mutating wallet + mint health.

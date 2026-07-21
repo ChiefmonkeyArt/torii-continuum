@@ -322,6 +322,46 @@ ret_prune_app_quarantines "$QPARENT" >/dev/null 2>&1
 [[ -L "$QPARENT/app.quarantine-link" ]] && ok "quarantine prune leaves a symlink candidate in place" || bad "quarantine prune removed a symlink candidate"
 rm -f "$QPARENT/app.quarantine-link"
 
+# ── 7g. Wallet mint-quote marker pruning (v0.2.89-alpha, Item 3) ──────────────
+# MINTED markers older than RET_QUOTE_AGE_DAYS are reclaimed; UNMINTED markers are
+# NEVER auto-pruned (they may still hold reclaimable sats at the mint); proof-
+# shaped files (no minted/created_at) are always retained. created_at is epoch-ms.
+QDIR="$WORK/wallet/quotes"
+NOW_MS=$(( $(date +%s) * 1000 ))
+OLD_MS=$(( NOW_MS - 40 * 86400 * 1000 ))   # 40 days old → beyond the 30d cutoff
+YOUNG_MS=$(( NOW_MS - 2 * 86400 * 1000 ))  # 2 days old → within the cutoff
+seed_quotes() {
+  rm -rf "$WORK/wallet"; mkdir -p "$QDIR"
+  # minted + old → prunable
+  printf '{\n  "quote": "old-minted",\n  "mint": "https://mint.example",\n  "amount_sats": 100,\n  "created_at": %s,\n  "minted": true,\n  "session": "npubx"\n}\n' "$OLD_MS" > "$QDIR/old-minted.json"
+  # minted + young → retained
+  printf '{\n  "quote": "young-minted",\n  "mint": "https://mint.example",\n  "amount_sats": 100,\n  "created_at": %s,\n  "minted": true,\n  "session": "npubx"\n}\n' "$YOUNG_MS" > "$QDIR/young-minted.json"
+  # UNMINTED + old → NEVER pruned (the 369-sat field-bug marker shape)
+  printf '{\n  "quote": "old-unminted",\n  "mint": "https://mint.example",\n  "amount_sats": 369,\n  "created_at": %s,\n  "minted": false,\n  "session": "npubx"\n}\n' "$OLD_MS" > "$QDIR/old-unminted.json"
+  # proof-shaped file (no minted/created_at) → always retained
+  printf '{\n  "mint": "https://mint.example",\n  "proofs": [{"amount": 8, "secret": "x", "C": "02ab"}]\n}\n' > "$QDIR/mint-example.json"
+}
+seed_quotes
+reset_accum
+ret_prune_wallet_quotes "$QDIR" >/dev/null
+[[ ! -e "$QDIR/old-minted.json" ]] && ok "wallet-quote prune reclaims a minted marker older than 30d" || bad "did not prune the old minted marker"
+[[ -e "$QDIR/young-minted.json" ]] && ok "wallet-quote prune retains a minted marker within 30d" || bad "pruned a young minted marker"
+[[ -e "$QDIR/old-unminted.json" ]] && ok "wallet-quote prune NEVER auto-prunes an unminted marker (reclaimable sats)" || bad "pruned an unminted marker (money loss risk!)"
+[[ -e "$QDIR/mint-example.json" ]] && ok "wallet-quote prune never touches a proof-shaped file" || bad "pruned a proof-shaped file!"
+[[ "$RET_PRUNED_COUNT" -eq 1 ]] && ok "wallet-quote prune reclaimed exactly the 1 aged minted marker" || bad "wallet-quote prune count wrong (${RET_PRUNED_COUNT})"
+# Idempotent: a second pass reclaims nothing.
+reset_accum
+ret_prune_wallet_quotes "$QDIR" >/dev/null
+[[ "$RET_PRUNED_COUNT" -eq 0 ]] && ok "wallet-quote prune is idempotent (2nd run reclaims 0)" || bad "wallet-quote prune not idempotent"
+# Refuses a dir whose basename is not exactly 'quotes'.
+mkdir -p "$WORK/wallet/notquotes"
+out="$(ret_prune_wallet_quotes "$WORK/wallet/notquotes" 2>&1 || true)"
+printf '%s' "$out" | grep -qi 'refusing' && ok "wallet-quote prune refuses a dir not named 'quotes'" || bad "did not refuse a non-'quotes' dir"
+# Missing dir → clean no-op.
+reset_accum
+ret_prune_wallet_quotes "$WORK/wallet/gone/quotes" >/dev/null 2>&1
+[[ "$RET_PRUNED_COUNT" -eq 0 ]] && ok "wallet-quote prune is a no-op when the dir is absent" || bad "wallet-quote no-op deleted something"
+
 # ── 8. Deploy-log rotation (never touches system/audit logs) ─────────────────
 rm -rf "$RET_LOG_DIR"; mkdir -p "$RET_LOG_DIR"
 # oversized live log gets truncated in place (inode preserved)
@@ -407,6 +447,11 @@ grep -qF 'ret_prune_app_quarantines' "$TOOL" && ok "tool defines ret_prune_app_q
 grep -qF 'app.quarantine-*' "$TOOL" && ok "tool anchors quarantine prune to app.quarantine-*" || bad "quarantine glob not anchored"
 grep -qE 'ret_prune_app_quarantines "\$RET_QUARANTINE_PARENT"' "$TOOL" && ok "quarantine prune is wired into the sweep" || bad "quarantine prune not wired into retention_sweep"
 grep -qE 'app\|app\.staging\|\.config\|\.local\|memory\|\.ssh' "$TOOL" && ok "quarantine prune hard-refuses protected basenames (belt + suspenders)" || bad "quarantine prune missing protected-basename refusal"
+# v0.2.89-alpha additions: wallet mint-quote marker pruning, wired + name-anchored.
+grep -qF 'ret_prune_wallet_quotes' "$TOOL" && ok "tool defines ret_prune_wallet_quotes (quote-marker retention)" || bad "missing ret_prune_wallet_quotes"
+grep -qE 'ret_prune_wallet_quotes "\$RET_WALLET_QUOTES_DIR"' "$TOOL" && ok "wallet-quote prune is wired into the sweep" || bad "wallet-quote prune not wired into retention_sweep"
+grep -qF "!= \"quotes\"" "$TOOL" && ok "wallet-quote prune is strictly name-anchored to 'quotes'" || bad "wallet-quote prune not name-anchored"
+grep -qF '"minted"[[:space:]]*:[[:space:]]*true' "$TOOL" && ok "wallet-quote prune only reclaims minted markers" || bad "wallet-quote prune minted-only guard missing"
 
 printf '\n[torii-disk-retention.test] pass=%d fail=%d\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || exit 1
