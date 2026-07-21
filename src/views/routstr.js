@@ -379,7 +379,10 @@ function openTopUpModal() {
   const qrWrap = h('div', { class: 'topup-qr' });
   const copyBtn = h('button', { class: 'topup-copy', type: 'button', style: 'display:none;' }, ['Copy invoice']);
   const countdownEl = h('div', { class: 'topup-countdown muted', style: 'display:none;' });
-  const invoicePanel = h('div', { class: 'topup-invoice', style: 'display:none;' }, [qrWrap, copyBtn, countdownEl]);
+  // Same-mint self-transfer hint (Item 5): shown under the QR once an invoice is
+  // live. Cosmetic — different copy for Cashu vs NWC sources.
+  const hintEl = h('div', { class: 'topup-hint muted', style: 'display:none; font-size: 12px; margin-top: 10px; line-height: 1.4;' });
+  const invoicePanel = h('div', { class: 'topup-invoice', style: 'display:none;' }, [qrWrap, copyBtn, countdownEl, hintEl]);
 
   const status = h('div', { class: 'topup-status muted', style: 'min-height: 20px; margin-top: 10px;', text: '' });
 
@@ -467,6 +470,7 @@ function openTopUpModal() {
     invoicePanel.style.display = 'none';
     copyBtn.style.display = 'none';
     countdownEl.style.display = 'none';
+    hintEl.style.display = 'none';
     clear(qrWrap);
     idleControls.style.display = '';
     genBtn.disabled = false;
@@ -490,12 +494,13 @@ function openTopUpModal() {
     const id = source === 'cashu' ? d.quote : d.payment_hash;
     if (!bolt11 || !id) { setStatus('Agent returned an incomplete invoice.', 'error'); addRetry(); return; }
 
-    showInvoice(bolt11, id, d.expiry);
+    showInvoice(bolt11, id, d.expiry, d.mint || selectedMint || null);
   }
 
-  function showInvoice(bolt11, id, expiry) {
+  function showInvoice(bolt11, id, expiry, mintUrl) {
     invoicePanel.style.display = '';
     clear(qrWrap);
+    setSameMintHint(hintEl, source, mintUrl);
     try {
       // BOLT11 is uppercased so the QR uses the denser alphanumeric mode.
       qrWrap.appendChild(renderQR(`lightning:${bolt11.toUpperCase()}`, { size: 240, ecl: 'M' }));
@@ -614,6 +619,26 @@ function openTopUpModal() {
 
 function hostOf(u) {
   try { return new URL(u).host; } catch { return String(u); }
+}
+
+// Same-mint self-transfer hint (v0.2.89-alpha, Item 5). Cosmetic copy shown under
+// the live invoice QR: a Cashu-source top-up paid from a Cashu wallet on the same
+// mint shows -N +N on the payer's ledger with no visible balance move, which looks
+// alarming; the NWC source gets a simpler "pay from your phone" nudge.
+export function setSameMintHint(el, source, mintUrl) {
+  if (!el) return;
+  if (source === 'cashu') {
+    const host = mintUrl ? hostOf(mintUrl) : null;
+    const where = host ? ` (${host})` : '';
+    el.textContent = `ℹ️ If you're paying this invoice from a Cashu wallet on the same mint${where}, you'll see the sats leave and re-enter the same wallet — they still move into Continuum.`;
+    el.style.display = '';
+  } else if (source === 'nwc') {
+    el.textContent = 'Pay this invoice from your connected NWC wallet on your phone.';
+    el.style.display = '';
+  } else {
+    el.textContent = '';
+    el.style.display = 'none';
+  }
 }
 
 // ── Pending Top-Ups card (v0.2.89-alpha, Item 3) ──────────────────────────────
