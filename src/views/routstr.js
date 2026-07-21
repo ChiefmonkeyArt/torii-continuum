@@ -12,6 +12,7 @@ import {
   nwcStatus, nwcConnect, nwcTest, nwcDisconnect,
 } from '../data/agent.js';
 import { renderQR } from './qr.js';
+import { satsBurst } from '../effects/sats-burst.js';
 import { isSessionLive, startLogin } from '../auth.js';
 import { isDemo, demoSource, demoBanner, demoIntercept } from '../demo/demo-mode.js';
 
@@ -404,7 +405,7 @@ function openTopUpModal() {
     h('div', { style: 'display:flex; justify-content:flex-end; margin-top: 12px;' }, [genBtn]),
   ]);
 
-  const body = h('div', { class: 'topup-modal-body' }, [
+  const body = h('div', { class: 'topup-modal-body', style: 'position: relative;' }, [
     idleControls,
     invoicePanel,
     status,
@@ -558,8 +559,32 @@ function openTopUpModal() {
       newBal = b.ok ? readBalanceSats(b.data) : null;
     }
     if (newBal != null) {
+      const oldBal = Number(getRoutstr().content?.cashuBalanceSats);
       updateRoutstr({ connected: true, cashuBalanceSats: newBal });
-      if (balanceNumEl && balanceNumEl.isConnected) balanceNumEl.textContent = formatSats(newBal);
+      // Celebrate (Item 4): ⚡ burst from the QR centre + balance tween + chip.
+      // Fires from the mint-success path only — never the paste-token flow. The
+      // effect owns the balance-number update (tween); on any failure fall back to
+      // a plain set so the number is never left stale.
+      try {
+        let origin = null;
+        try {
+          const br = body.getBoundingClientRect();
+          const qr = qrWrap.getBoundingClientRect();
+          origin = { x: qr.left - br.left + qr.width / 2, y: qr.top - br.top + qr.height / 2 };
+        } catch (_e) {}
+        satsBurst({
+          modalBody: body,
+          origin,
+          balanceEl: balanceNumEl && balanceNumEl.isConnected ? balanceNumEl : null,
+          card: balanceNumEl && balanceNumEl.closest ? balanceNumEl.closest('.card') : null,
+          from: Number.isFinite(oldBal) ? oldBal : newBal,
+          to: newBal,
+          amountSats: Number.isFinite(data?.minted_sats) ? data.minted_sats : undefined,
+          formatSats,
+        });
+      } catch (_e) {
+        if (balanceNumEl && balanceNumEl.isConnected) balanceNumEl.textContent = formatSats(newBal);
+      }
       setStatus(`Paid. New balance: ${formatSats(newBal)} sats.`, 'ok');
     } else {
       setStatus('Paid. Balance will refresh shortly.', 'ok');
@@ -687,8 +712,22 @@ export async function mountPendingTopUps(container, demo) {
     if (ui.row && ui.row.parentNode) ui.row.parentNode.removeChild(ui.row);
     const newBal = Number.isFinite(r.data?.new_balance_sats) ? r.data.new_balance_sats : null;
     if (newBal != null) {
+      const oldBal = Number(getRoutstr().content?.cashuBalanceSats);
       updateRoutstr({ connected: true, cashuBalanceSats: newBal });
-      if (balanceNumEl && balanceNumEl.isConnected) balanceNumEl.textContent = formatSats(newBal);
+      // Same celebration as a fresh top-up (Item 4). No modal/QR here, so there's
+      // no canvas burst — just the balance tween + "+N sats" chip on the card.
+      try {
+        satsBurst({
+          balanceEl: balanceNumEl && balanceNumEl.isConnected ? balanceNumEl : null,
+          card: balanceNumEl && balanceNumEl.closest ? balanceNumEl.closest('.card') : null,
+          from: Number.isFinite(oldBal) ? oldBal : newBal,
+          to: newBal,
+          amountSats: Number.isFinite(r.data?.minted_sats) ? r.data.minted_sats : undefined,
+          formatSats,
+        });
+      } catch (_e) {
+        if (balanceNumEl && balanceNumEl.isConnected) balanceNumEl.textContent = formatSats(newBal);
+      }
     }
     return true;
   };
