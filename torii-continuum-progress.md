@@ -9,6 +9,23 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.89-alpha — top-up poll re-render-safe, check-quote logging, pending-top-up recovery, sats-burst, same-mint hint (2026-07-21)
+
+Six items in one release, one commit each. **Not deployed from the subagent** — the parent hands the operator the deploy command block. Driven by the 2026-07-20 field bug (npub1a3um…, chiefmonkey.art): a 369-sat Cashu top-up (mint `https://mint.minibits.cash/Bitcoin`, quote `019f8049-6cce-76f9-b843-2654f4c2bfdf`) hung on "Waiting for payment…" forever; nginx logged **zero** `GET /api/wallet/mint-quote/…` calls and journalctl had zero matches — the poll stopped firing on the front-end and the quote marker was left `minted:false` with no server-side trace.
+
+- **Item 1 — re-render-safe top-up poll (the actual fix).** The poll interval used to live in a closure variable inside `openTopUpModal`; it is now a module-scope `topUpSessions` singleton keyed by quote id. Each tick self-cancels if its `pollHandle` no longer matches the live session (orphan guard). Every state transition + tick emits `console.info` gated on `window.__TORII_DEBUG_TOPUP__` (URL flag `?debug=topup` or `localStorage torii.debug.topup=1`). New `src/views/routstr-topup.test.js` proves the poll survives a view re-render.
+- **Item 2 — server-side check-quote logging.** `checkMintQuote` logs at entry and every terminal branch via `truncateId`/`truncateNpub` — never full BOLT11, preimages, proofs, or npubs (existing truncation preserved). `wallet-mint-quote.test.js` asserts the log calls and the no-leak invariant.
+- **Item 3 — pending-top-up recovery.** Owner-scoped `listPendingQuotes` + idempotent `resumeQuote` on the wallet, exposed at `GET /api/wallet/quotes/pending` and `POST /api/wallet/quotes/:quote/resume` (ownership via `marker.session === sessionId`, 403 `not_yours` otherwise; already-minted replay → `{ok:true,paid:true,already:true}` with no second mint). Retention sweep prunes **minted** quote markers older than 30 days; **unminted markers are never auto-pruned**. Front-end "Pending top-ups" card at the top of the Wallet section with per-row + bulk Resume.
+- **Item 4 — sats-burst celebration.** New zero-dep `src/effects/sats-burst.js`: a canvas ⚡ burst (40 glyphs, mild gravity, 1.4s fade) from the QR centre, a 1.0s easeOutCubic balance-number tween, and a floating "+N sats" chip. `prefers-reduced-motion: reduce` → a single 200ms card flash + static chip. Fired from `toPaid` (Cashu + NWC) and a successful resume — never the paste-token flow.
+- **Item 5 — same-mint self-transfer hint.** Under the live invoice QR: Cashu-source copy explaining the `-N +N` self-transfer (naming the mint host when known) and a simpler NWC "pay from your phone" nudge. Cosmetic.
+- **Item 6 — version bump.** Root + agent `package.json` → `0.2.89-alpha`.
+
+Every new/changed behaviour has a matching test (added `routstr-topup.test.js`, `wallet-quotes-pending.test.js`, `wallet-quotes-resume.test.js`, `routstr-pending-quotes.test.js`, `sats-burst.test.js`, `routstr-mint-hint.test.js`; extended `wallet-mint-quote.test.js`, `torii-disk-retention.test.sh`). Zero new npm dependencies.
+
+Test counts this release: root vitest **1490 pass** (49 files), agent node:test **325 pass**, ops shell **pass=109 fail=0**.
+
+**Item 1 root-cause note.** Static analysis of this codebase shows the "interval killed by a re-render" hypothesis does not statically reproduce (the modal is a `document.body` portal untouched by `renderRoutstr`'s `clear(mount)`; the re-render path never calls `stopTimers`; the client `req()` catches throws but would still have hit nginx). Zero mint-quote-status calls therefore points to the first 2s tick never firing or a pre-fetch silent failure. The refactor + instrumentation is the correct fix regardless and is explicitly designed to make the bug loud in production so the next occurrence is diagnosable.
+
 ## v0.2.88-alpha — multi-tab session, demo nav wiring, real anchors, NWC identity, usage poll (2026-07-20)
 
 Six items in one release, one commit each. **Not deployed from the subagent** — the parent hands the operator the deploy command block.
