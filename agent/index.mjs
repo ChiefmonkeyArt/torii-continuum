@@ -700,8 +700,16 @@ app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
 
   const result = await chatSkill.handle({ message: trimmed, context });
   if (!result.ok) {
-    // 502 = upstream failure (Routstr / wallet)
-    return reply.code(502).send({ error: result.reason });
+    // Structured + already-sanitised upstream failure. `code` is a stable token
+    // (see agent/lib/provider-errors.mjs) so the SPA can branch without parsing
+    // prose, and `error` never carries a raw upstream body or HTML error page.
+    // 402 marks the payment-path failure the operator can fix by topping up.
+    const status = result.code === 'insufficient_funds' ? 402 : 502;
+    return reply.code(status).send({
+      error: result.reason,
+      code: result.code || null,
+      provider: result.provider || null,
+    });
   }
 
   return {
@@ -710,6 +718,7 @@ app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
     provider: result.provider,
     duration_ms: result.duration_ms,
     sats_spent: result.sats_spent,
+    fell_back_from: result.fell_back_from || null,
   };
 });
 

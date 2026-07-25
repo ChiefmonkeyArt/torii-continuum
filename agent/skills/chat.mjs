@@ -98,8 +98,10 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
     const duration = Date.now() - started;
 
     if (!result.ok) {
-      log.warn(`[chat] model call failed: ${result.reason}`);
-      return { ok: false, reason: result.reason };
+      log.warn(`[chat] model call failed (${result.code || 'no code'}): ${result.reason}`);
+      // Preserve the structured code so the HTTP layer can emit a machine-
+      // readable, already-sanitised error instead of raw provider prose.
+      return { ok: false, reason: result.reason, code: result.code || null, provider: result.provider || null };
     }
 
     // Append to episodic AFTER a successful turn. Reflect never reads
@@ -125,6 +127,9 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
       provider: result.provider,
       duration_ms: duration,
       sats_spent: result.sats_spent || 0,
+      // Set when the paid provider failed and the free local model answered, so
+      // the dock can label the reply honestly rather than implying Routstr ran.
+      fell_back_from: result.fell_back_from || null,
     };
   }
 
