@@ -160,7 +160,14 @@ async function req(method, path, body) {
   if (!res.ok) {
     // 401 → session expired, clear it so UI drops back to logged-out
     if (res.status === 401) clearStoredToken();
-    return { ok: false, reason: errorReason(json, res.status), status: res.status };
+    // Propagate the agent's structured `code` when present so callers can branch
+    // on a stable token instead of pattern-matching the human reason string.
+    return {
+      ok: false,
+      reason: errorReason(json, res.status),
+      status: res.status,
+      code: json && typeof json.code === 'string' ? json.code : null,
+    };
   }
 
   return { ok: true, data: json };

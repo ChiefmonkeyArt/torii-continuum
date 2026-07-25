@@ -32,6 +32,9 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { agentRoot } from './config.mjs';
+import {
+  ERROR_CODES, classifyHttpFailure, classifyThrownError, providerFailure,
+} from '../lib/provider-errors.mjs';
 
 function modelForSkill(cfg, skill) {
   const explicit = cfg.ollama?.models?.[skill];
@@ -74,9 +77,9 @@ export function createOllama(cfg, log) {
   }
 
   async function chat({ skill = 'chat', messages }) {
-    if (!enabled) return { ok: false, reason: 'ollama disabled' };
+    if (!enabled) return providerFailure(ERROR_CODES.PROVIDER_DISABLED, 'ollama disabled');
     if (!Array.isArray(messages) || messages.length === 0) {
-      return { ok: false, reason: 'messages must be a non-empty array' };
+      return providerFailure(ERROR_CODES.BAD_REQUEST, 'messages must be a non-empty array');
     }
 
     const model = modelForSkill(cfg, skill);
@@ -104,8 +107,8 @@ export function createOllama(cfg, log) {
       });
     } catch (e) {
       clearTimeout(t);
-      const reason = e.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : `network: ${e.message}`;
-      log.warn(`[ollama] ${model} failed: ${reason}`);
+      const failure = classifyThrownError(e, { timeoutMs, provider: 'ollama' });
+      log.warn(`[ollama] ${model} failed: ${failure.reason}`);
       await appendCostLog(cfg, {
         at: new Date().toISOString(),
         provider: 'ollama',
@@ -113,17 +116,18 @@ export function createOllama(cfg, log) {
         model,
         ok: false,
         sats_spent: 0,
-        reason,
+        reason: failure.reason,
+        code: failure.code,
         duration_ms: Date.now() - started,
       });
-      return { ok: false, reason };
+      return failure;
     }
     clearTimeout(t);
 
     if (!res.ok) {
       const bodyText = await res.text().catch(() => '');
-      const reason = `http ${res.status}: ${bodyText.slice(0, 200)}`;
-      log.warn(`[ollama] ${model} failed: ${reason}`);
+      const failure = classifyHttpFailure({ status: res.status, body: bodyText, provider: 'ollama' });
+      log.warn(`[ollama] ${model} failed: ${failure.reason}`);
       await appendCostLog(cfg, {
         at: new Date().toISOString(),
         provider: 'ollama',
@@ -131,21 +135,24 @@ export function createOllama(cfg, log) {
         model,
         ok: false,
         sats_spent: 0,
-        reason,
+        reason: failure.reason,
+        code: failure.code,
         duration_ms: Date.now() - started,
       });
-      return { ok: false, reason };
+      return failure;
     }
 
     let parsed;
     try {
       parsed = await res.json();
     } catch (e) {
-      return { ok: false, reason: `bad response json: ${e.message}` };
+      return providerFailure(ERROR_CODES.UPSTREAM_BAD_JSON, `ollama returned malformed JSON: ${e.message}`);
     }
 
     const content = parsed.choices?.[0]?.message?.content;
-    if (!content) return { ok: false, reason: 'no content in response' };
+    if (!content) {
+      return providerFailure(ERROR_CODES.UPSTREAM_EMPTY, 'ollama returned an empty completion');
+    }
 
     const usage = parsed.usage || {};
     const durationMs = Date.now() - started;

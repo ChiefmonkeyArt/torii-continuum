@@ -197,10 +197,12 @@ The demo build at `continuum-torii.pplx.app` intentionally omits
 
 ## 9b. Local models with Ollama (optional, CONT-AGENT-1b)
 
-The agent can fall back to a local Ollama daemon when Routstr returns 402
-(Cashu float empty) or is unreachable. This keeps chat working offline
-and free, while preserving Routstr as the primary provider for frontier
-quality.
+The agent can fall back to a local Ollama daemon whenever Routstr fails in
+a way a different provider might survive: a 402 (Cashu float empty), a
+network drop, an upstream 5xx, a non-JSON HTML error page from the edge
+(which can arrive under a 200 status), a wall-clock timeout, or an empty
+completion stream. This keeps chat working offline and free, while
+preserving Routstr as the primary provider for frontier quality.
 
 ### Install on the VPS
 
@@ -251,13 +253,43 @@ For live chat on 8B+ models comfortably, use a GPU box.
 ### Router strategies
 
 - `routstr_first` — **recommended.** Routstr for every turn; Ollama picks
-  up automatically when Routstr returns 402/payment or a network error.
+  up automatically on any *retryable* Routstr failure.
 - `ollama_first` — Ollama first (free); Routstr as fallback.
 - `ollama_only` — never touch Routstr. Fully offline mode.
 - `routstr_only` — never touch Ollama. Original behaviour (pre-1b).
 
 Every successful chat response now carries a `provider` field (`routstr`
-or `ollama`) so the Console can surface which model actually answered.
+or `ollama`) so the Console can surface which model actually answered,
+plus `fell_back_from` (the provider that failed) when the free local model
+picked up the turn — the chat dock discloses that in the reply.
+
+### Structured provider errors (v0.2.90-alpha)
+
+Both providers report failures through `agent/lib/provider-errors.mjs` in
+one shape: `{ ok:false, code, reason, status?, retryable }`. The upstream
+response body is **classified, never forwarded** — an HTML error page or a
+body that echoes a Cashu token can no longer reach a log or the browser
+(`sanitizeReason` also redacts NWC URIs, bearer values and long hex runs).
+
+| `code` | Meaning | Retryable |
+| --- | --- | --- |
+| `upstream_5xx` | provider returned 5xx | yes |
+| `upstream_html` | non-JSON HTML error page (any status, incl. 200) | yes |
+| `upstream_timeout` | `limits.timeout_ms` deadline aborted the request | yes |
+| `upstream_empty` | 200 with an empty completion stream | yes |
+| `upstream_bad_json` | 200 with an unparseable body | yes |
+| `network` | socket/DNS failure | yes |
+| `insufficient_funds` | 402, or the wallet could not fund the request | yes |
+| `token_already_spent` | Cashu proof already redeemed | yes |
+| `upstream_4xx` | provider rejected the request | no |
+| `bad_request` | malformed local request | no |
+| `provider_disabled` | the only configured provider is off | no |
+
+`retryable` is the fallback contract: a transport or payment failure is
+worth trying on the free local model, but a malformed request is **not** —
+falling back there would mask a real bug behind a silent paid→free
+downgrade. `POST /api/chat` returns the same `code` (402 for
+`insufficient_funds`, otherwise 502) so the SPA can branch on it.
 
 ---
 
@@ -300,7 +332,9 @@ Only prefixes are logged; never full pubkeys, full challenges, or full IPs.
 **Wallet + chat (admin):**
 - `GET /api/wallet/balance`
 - `POST /api/wallet/receive`
-- `POST /api/chat` — response now includes `provider: "routstr" | "ollama"`
+- `POST /api/chat` — response includes `provider: "routstr" | "ollama"` and
+  `fell_back_from`; a failure returns `{ error, code, provider }` (402 for
+  `insufficient_funds`, else 502) — see §9b structured provider errors
 - `GET /api/health/models` — provider reachability + configured models
 
 **Character (admin):**

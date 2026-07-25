@@ -122,6 +122,10 @@ routstr:
   limits:
     max_tokens_out: 2048
     max_sats_per_request: 50
+    # Wall-clock deadline for the completion request. A stalled Routstr edge
+    # used to hold a chat turn open forever; the deadline aborts it and lets the
+    # router fall back to the local Ollama model instead.
+    timeout_ms: 45000
 
   # ── Onboarding provider adapter (v0.2.35-alpha) ──
   #
