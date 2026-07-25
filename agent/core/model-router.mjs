@@ -4,8 +4,12 @@
  * Routing policy is set by cfg.model_router.strategy:
  *
  *   "routstr_first"  (default)
- *      Try Routstr. If it fails with a payment error (402), a network error,
- *      or the wallet reports insufficient sats, fall through to Ollama.
+ *      Try Routstr. Fall through to Ollama on any RETRYABLE structured failure:
+ *      an upstream 5xx, a non-JSON HTML error page (Cloudflare 520-style, which
+ *      can arrive under a 200 status), a wall-clock timeout, an empty stream, a
+ *      network drop, or a payment failure (402 / dry wallet). A malformed
+ *      request does NOT fall through — that would hide a bug behind a silent
+ *      paid→free downgrade. See lib/provider-errors.mjs for the code set.
  *
  *   "ollama_first"
  *      Try Ollama. If it's disabled, unreachable, or returns an error,
@@ -25,14 +29,24 @@
  * A `provider` field is added ("routstr" | "ollama") for logging / UI.
  */
 
-const PAYMENT_ERROR_MARKERS = ['402', 'payment required', 'insufficient', 'cashu'];
+import { isRetryableCode, inferCodeFromReason, ERROR_CODES, sanitizeReason } from '../lib/provider-errors.mjs';
 
-function isPaymentOrNetworkError(reason) {
-  if (!reason || typeof reason !== 'string') return false;
-  const lower = reason.toLowerCase();
-  if (lower.startsWith('network:')) return true;
-  if (lower.includes('unreachable')) return true;
-  return PAYMENT_ERROR_MARKERS.some((m) => lower.includes(m));
+/**
+ * Should a failed primary-provider result fall through to the other provider?
+ *
+ * Decided on the STRUCTURED code, so an upstream 5xx, a Cloudflare HTML error
+ * page, or a wall-clock timeout downgrades to the free local model instead of
+ * surfacing as a dead chat turn. Previously only payment/network prose matched,
+ * which meant every Routstr 520 / HTML 200 / hang was a hard failure.
+ *
+ * A malformed request (bad_request) is deliberately NOT retryable: silently
+ * downgrading paid→free would mask a real bug.
+ */
+export function shouldFallback(result) {
+  if (!result || result.ok) return false;
+  const code = result.code || inferCodeFromReason(result.reason);
+  if (!code) return false;
+  return isRetryableCode(code);
 }
 
 export function createModelRouter({ routstr, ollama, cfg, log }) {
@@ -44,7 +58,9 @@ export function createModelRouter({ routstr, ollama, cfg, log }) {
         return withProvider(await routstr.chat(args), 'routstr');
 
       case 'ollama_only': {
-        if (!ollama?.enabled) return { ok: false, reason: 'ollama disabled but ollama_only strategy set' };
+        if (!ollama?.enabled) {
+          return { ok: false, code: ERROR_CODES.PROVIDER_DISABLED, reason: 'ollama disabled but ollama_only strategy set', retryable: false };
+        }
         return withProvider(await ollama.chat(args), 'ollama');
       }
 
@@ -61,19 +77,31 @@ export function createModelRouter({ routstr, ollama, cfg, log }) {
       default: {
         const first = await routstr.chat(args);
         if (first.ok) return withProvider(first, 'routstr');
-        // Only fall through on retryable errors — bad requests, empty
-        // messages, etc. should not trigger a paid-to-free downgrade
-        // that could mask a real problem.
         if (!ollama?.enabled) return withProvider(first, 'routstr');
-        if (!isPaymentOrNetworkError(first.reason)) {
-          log.warn(`[router] routstr failed but not payment/net error, not falling back: ${first.reason}`);
+        // Fall through only on retryable transport/payment failures (5xx, HTML
+        // error page, timeout, empty stream, network drop, dry wallet). A
+        // malformed request must surface, not trigger a paid→free downgrade.
+        if (!shouldFallback(first)) {
+          log.warn(`[router] routstr failed with non-retryable ${first.code || 'error'}, not falling back: ${first.reason}`);
           return withProvider(first, 'routstr');
         }
-        log.info(`[router] routstr failed (${first.reason}), falling back to ollama`);
+        log.info(`[router] routstr ${first.code || 'error'} (${first.reason}) — falling back to ollama`);
         const second = await ollama.chat(args);
-        if (second.ok) return withProvider(second, 'ollama');
-        // Both failed — return the more informative error (Routstr's).
-        return withProvider({ ok: false, reason: `routstr: ${first.reason}; ollama: ${second.reason}` }, 'both');
+        if (second.ok) {
+          // Tell the caller this reply came from the free local model after a
+          // paid-provider failure, so the UI can be honest about provenance.
+          return withProvider({ ...second, fell_back_from: 'routstr', fallback_code: first.code || null }, 'ollama');
+        }
+        // Both failed. Keep BOTH structured codes; report the primary's code
+        // since that's the failure the operator needs to fix.
+        return withProvider({
+          ok: false,
+          code: first.code || inferCodeFromReason(first.reason) || ERROR_CODES.NETWORK,
+          reason: sanitizeReason(`routstr: ${first.reason}; ollama: ${second.reason}`, 300),
+          routstr_code: first.code || null,
+          ollama_code: second.code || null,
+          retryable: false,
+        }, 'both');
       }
     }
   }
@@ -87,4 +115,4 @@ function withProvider(result, provider) {
 }
 
 // Exported for tests
-export const _internals = { isPaymentOrNetworkError };
+export const _internals = { shouldFallback };
