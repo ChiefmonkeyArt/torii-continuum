@@ -2,16 +2,20 @@
  * AI chat dock.
  *
  * Wiring:
- *   • If VITE_AGENT_URL is set and the user is logged in, chat goes through
- *     the agent (POST /api/chat), which pays per request in Cashu via Routstr.
- *   • Otherwise, we serve the canned mock reply so the demo build on
- *     continuum-torii.pplx.app still feels alive without a live backend.
+ *   • If an agent is configured (VITE_AGENT_URL / same-origin) and the user is
+ *     logged in, chat goes through the agent (POST /api/chat), which pays per
+ *     request in Cashu via Routstr and falls back to a local Ollama model on a
+ *     retryable upstream failure.
+ *   • Canned mock replies exist ONLY for the agent-less demo build. A production
+ *     build (agent configured) NEVER fabricates a reply: a failed turn reports a
+ *     structured, sanitised error so the operator can't mistake a canned string
+ *     for their sovereign bot. See mockRepliesAllowed().
  *
  * Each view sets context via setChatContext() so replies can reference
  * the current project/page.
  */
 
-import { chat as agentChat } from './data/agent.js';
+import { chat as agentChat, isAgentConfigured } from './data/agent.js';
 import { isSessionLive } from './auth.js';
 import { currentRoute } from './router.js';
 import { threadKeyFor, pageTypeFor, projectSlugFrom, trimThread, sanitizeThreads, THREAD_CAP } from './chat-threads.js';
@@ -106,14 +110,14 @@ export function mountChat(root) {
   reserveSpace();
 }
 
-// The placeholder should only advertise mock replies when we're NOT live —
-// once signed in, replies are real agent calls, so drop the "(mock responses)"
-// qualifier rather than lie to the operator.
+// Only the agent-less demo build may advertise mock replies. Signed in, or in
+// any production build, replies are real agent calls (or an honest error), so
+// the "(mock responses)" qualifier would be a lie.
 function updatePlaceholder() {
   if (!inputEl) return;
-  inputEl.placeholder = isSessionLive()
-    ? 'Ask Continuum anything…'
-    : 'Ask Continuum anything… (mock responses)';
+  inputEl.placeholder = !isSessionLive() && mockRepliesAllowed()
+    ? 'Ask Continuum anything… (mock responses)'
+    : 'Ask Continuum anything…';
 }
 
 // Auto-grow the textarea with its content up to a sensible max, then let it
@@ -140,10 +144,13 @@ function reserveSpace() {
 }
 
 function greet() {
-  const live = isSessionLive();
-  push('ai', live
-    ? 'Continuum online. Signed in. I can help plan projects, draft milestones, and reason across your Brain. Model calls are paid per request via Routstr + Cashu.'
-    : 'Continuum online. Running in demo mode (mock replies). Sign in with Plebeian Signer to route real calls through your agent.');
+  if (isSessionLive()) {
+    push('ai', 'Continuum online. Signed in. I can help plan projects, draft milestones, and reason across your Brain. Model calls are paid per request via Routstr + Cashu, with a local model as fallback.');
+    return;
+  }
+  push('ai', mockRepliesAllowed()
+    ? 'Continuum online. Running in demo mode (mock replies). Sign in with Plebeian Signer to route real calls through your agent.'
+    : 'Continuum online. Sign in with Plebeian Signer to route real calls through your agent.');
 }
 
 export function setChatContext(next) {
@@ -298,24 +305,82 @@ function pushTo(key, who, text, action) {
 }
 
 /**
- * Route the user turn either to the live agent (POST /api/chat) or to the
- * local mock reply. The agent is used only when we have a session token —
- * agent.js drops the request if the token is missing or expired.
+ * Are canned mock replies permitted in this build?
+ *
+ * ONLY for the agent-less demo build (no VITE_AGENT_URL, no same-origin agent).
+ * Once an agent is configured this is a production install, and fabricating a
+ * plausible-looking reply there is actively harmful: the operator cannot tell a
+ * canned string from their bot's real answer, and a silent mock masks a real
+ * outage. Pure + exported so the invariant is unit-tested.
+ * @returns {boolean}
+ */
+export function mockRepliesAllowed() {
+  return !isAgentConfigured();
+}
+
+/**
+ * Map a failed agent chat result to an operator-facing sentence, keyed off the
+ * agent's structured `code` (agent/lib/provider-errors.mjs) with a graceful
+ * degradation to the sanitised reason string. Never fabricates an assistant
+ * answer — this is always presented as an error, not a reply.
+ * Pure + exported for tests.
+ * @param {any} result agent.chat() result
+ * @returns {string}
+ */
+export function chatErrorMessage(result) {
+  const code = result && typeof result.code === 'string' ? result.code : null;
+  switch (code) {
+    case 'upstream_timeout':
+      return 'The model provider timed out and the local fallback did not answer either. Nothing was charged for an unanswered turn. Try again in a moment.';
+    case 'upstream_html':
+      return 'The model provider returned an error page instead of a response (usually a temporary edge/proxy fault). Try again shortly.';
+    case 'upstream_5xx':
+      return 'The model provider is returning server errors right now, and the local fallback was unavailable. Try again shortly.';
+    case 'upstream_empty':
+      return 'The model returned an empty response. Try rephrasing, or try again in a moment.';
+    case 'network':
+      return 'Could not reach the model provider or the local fallback. Check the agent’s connectivity and try again.';
+    case 'provider_disabled':
+      return 'No model provider is available: Routstr failed and no local Ollama model is enabled. Enable a local model or restore Routstr access.';
+    case 'bad_request':
+      return 'The agent rejected that request as malformed. This is a bug worth reporting rather than a provider outage.';
+    default:
+      break;
+  }
+  if (result && result.offline) {
+    return 'Your agent is unreachable, so this turn could not be routed. No canned reply is served in a production build — reconnect the agent and try again.';
+  }
+  const reason = result && typeof result.reason === 'string' && result.reason.trim() ? result.reason.trim() : 'unknown error';
+  return `That turn could not be completed: ${reason}`;
+}
+
+/**
+ * Route the user turn to the live agent (POST /api/chat). The agent is used only
+ * when we have a session token — agent.js drops the request if the token is
+ * missing or expired. Canned replies are served ONLY on the agent-less demo
+ * build; a production build reports a structured error instead of a fake answer.
  */
 async function getReply(text, ctx) {
   if (isSessionLive()) {
     const r = await agentChat({ message: text, context: ctx });
-    if (r.ok && r.data?.reply) return r.data.reply;
+    if (r.ok && r.data?.reply) {
+      // Be honest when the paid provider failed and the free local model answered.
+      const fellBack = r.data.fell_back_from;
+      return fellBack
+        ? `${r.data.reply}\n\n_(answered by the local ${r.data.model || 'fallback'} model — ${fellBack} was unavailable)_`
+        : r.data.reply;
+    }
     // Insufficient funds is a recoverable, user-actionable state — surface a
-    // clear message + a Top Up path instead of a generic "(agent error…)" mock.
+    // clear message plus a Top Up path.
     if (isInsufficientFundsReply(r)) {
       return { text: 'You have insufficient funds to route this request. Top up your wallet to keep chatting.', action: 'topup' };
     }
-    // Fall through to mock on any other failure, with a hint prefix so the user knows
-    if (r.reason && !r.offline) return `(agent error: ${r.reason})\n\n` + await mockReply(text, ctx);
-    return `(agent unreachable — served mock)\n\n` + await mockReply(text, ctx);
+    return chatErrorMessage(r);
   }
-  return mockReply(text, ctx);
+  // Signed out. The demo build shows the canned shell; a production build asks
+  // the visitor to sign in rather than pretending to be the bot.
+  if (mockRepliesAllowed()) return mockReply(text, ctx);
+  return 'Sign in with your Nostr signer to route this through your agent. Continuum does not answer with canned replies in a live install.';
 }
 
 // Navigate to the Routstr page and ask it to focus the top-up/receive form.
@@ -327,8 +392,9 @@ function goToTopUp() {
 }
 
 /**
- * Mock reply — pretends to be a routed DeepSeek call.
- * Used when there is no active session or the agent is unreachable.
+ * Mock reply — canned demo-shell copy. Reachable ONLY on the agent-less demo
+ * build for a signed-out visitor (see mockRepliesAllowed). Never served as a
+ * substitute for a failed live agent turn.
  */
 function mockReply(text, ctx) {
   const q = text.toLowerCase();
