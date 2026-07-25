@@ -33,6 +33,12 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { agentRoot } from './config.mjs';
+import {
+  ERROR_CODES, classifyHttpFailure, classifyThrownError, providerFailure, looksLikeHtml,
+} from '../lib/provider-errors.mjs';
+
+/** Wall-clock deadline for a chat completion when config doesn't set one. */
+const DEFAULT_CHAT_TIMEOUT_MS = 45000;
 
 /**
  * Rough estimate — we don't have per-model pricing yet, so we allocate up to
@@ -165,6 +171,9 @@ async function appendCostLog(cfg, entry) {
 export function createRoutstr(cfg, wallet, log) {
   const endpoint = cfg.routstr.endpoint.replace(/\/$/, '');
   const maxTokens = cfg.routstr.limits?.max_tokens_out || 2048;
+  // Without a deadline a hung Routstr edge holds the chat request open forever
+  // and the operator sees a spinner instead of the local-model fallback.
+  const chatTimeoutMs = cfg.routstr.limits?.timeout_ms || DEFAULT_CHAT_TIMEOUT_MS;
 
   /**
    * Best-effort refund reclaim for a payment token whose change we may have
@@ -217,7 +226,14 @@ export function createRoutstr(cfg, wallet, log) {
   async function callOnce(model, messages, sats, allowRetry = true) {
     const send = await wallet.send(sats);
     if (!send.ok) {
-      return { ok: false, reason: `wallet: ${send.reason}`, code: send.code || null };
+      // A dry / floor-blocked wallet is a payment-path failure: structured so the
+      // router can downgrade to the free local model and the SPA can offer top-up.
+      return {
+        ok: false,
+        code: send.code || ERROR_CODES.INSUFFICIENT_FUNDS,
+        reason: `wallet: ${send.reason}`,
+        retryable: true,
+      };
     }
 
     // Retained for refund reclaim. NOT used to roll back into spendable balance.
@@ -225,9 +241,12 @@ export function createRoutstr(cfg, wallet, log) {
     const url = `${endpoint}/v1/chat/completions`;
     const started = Date.now();
     let res, body;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), chatTimeoutMs);
     try {
       res = await fetch(url, {
         method: 'POST',
+        signal: ac.signal,
         headers: {
           'Content-Type': 'application/json',
           // Routstr's stateless per-request payment: the Cashu eCash token
@@ -251,7 +270,9 @@ export function createRoutstr(cfg, wallet, log) {
       // AFTER dispatch: the token is spent/unknown — NEVER roll it back into
       // spendable balance. Try to reclaim a lost refund instead.
       await tryRefundReclaim(paymentToken);
-      return { ok: false, reason: `network: ${e.message}` };
+      return classifyThrownError(e, { timeoutMs: chatTimeoutMs, provider: 'routstr' });
+    } finally {
+      clearTimeout(timer);
     }
 
     if (!res.ok) {
@@ -264,11 +285,18 @@ export function createRoutstr(cfg, wallet, log) {
           log.warn('[routstr] token_already_spent — quarantined stale proofs, retrying once with fresh');
           return callOnce(model, messages, sats, false);
         }
-        return { ok: false, reason: `http ${res.status}: token_already_spent`, code: 'token_already_spent' };
+        return providerFailure(
+          ERROR_CODES.TOKEN_ALREADY_SPENT,
+          'routstr rejected the payment token as already spent',
+          { status: res.status },
+        );
       }
-      // A 5xx/520 likely dropped the X-Cashu-Refund — attempt refund reclaim.
-      if (res.status >= 500) await tryRefundReclaim(paymentToken);
-      return { ok: false, reason: `http ${res.status}: ${body.slice(0, 200)}` };
+      // A 5xx/520 (or an HTML edge error page) likely dropped the X-Cashu-Refund
+      // — attempt refund reclaim before reporting.
+      if (res.status >= 500 || looksLikeHtml(body)) await tryRefundReclaim(paymentToken);
+      // Structured + sanitised: the raw upstream body (often a Cloudflare HTML
+      // page) is classified, never spliced into the client-visible reason.
+      return classifyHttpFailure({ status: res.status, body, provider: 'routstr' });
     }
 
     // Streaming: the 200 body is a text/event-stream. Accumulate the delta
@@ -278,11 +306,19 @@ export function createRoutstr(cfg, wallet, log) {
     // rollback contract unchanged (the token is committed at dispatch time).
     const { content, usage: streamUsage } = parseSSE(body);
     if (!content) {
-      // 200 with no usable SSE content (e.g. a Cloudflare HTML 520 that still
-      // set status 200, or an empty stream). The token is already handed off —
-      // do NOT roll back; try to reclaim any lost refund instead.
+      // 200 with no usable SSE content. Two distinct cases, both retryable but
+      // worth telling apart: a proxy served an HTML error page under a 200
+      // status, or the stream really was empty. The token is already handed off
+      // — do NOT roll back; try to reclaim any lost refund instead.
       await tryRefundReclaim(paymentToken);
-      return { ok: false, reason: 'no content in stream' };
+      if (looksLikeHtml(body)) {
+        return classifyHttpFailure({ status: res.status, body, provider: 'routstr' });
+      }
+      return providerFailure(
+        ERROR_CODES.UPSTREAM_EMPTY,
+        'routstr returned an empty completion stream',
+        { status: res.status },
+      );
     }
 
     const usage = streamUsage || {};
@@ -327,7 +363,9 @@ export function createRoutstr(cfg, wallet, log) {
    */
   async function chat({ skill = 'chat', messages }) {
     if (!Array.isArray(messages) || messages.length === 0) {
-      return { ok: false, reason: 'messages must be a non-empty array' };
+      // Non-retryable: a malformed call is a bug, not an outage. The router must
+      // NOT downgrade to the free local model and hide it.
+      return providerFailure(ERROR_CODES.BAD_REQUEST, 'messages must be a non-empty array');
     }
 
     const primary = modelForSkill(cfg, skill);
@@ -364,6 +402,7 @@ export function createRoutstr(cfg, wallet, log) {
       duration_ms: attempt.duration_ms || 0,
       attempted_models: attemptedModels,
       reason: attempt.ok ? null : attempt.reason,
+      code: attempt.ok ? null : attempt.code || null,
     });
 
     return attempt;
