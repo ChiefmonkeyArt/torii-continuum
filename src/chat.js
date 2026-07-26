@@ -344,6 +344,10 @@ export function chatErrorMessage(result) {
       return 'No model provider is available: Routstr failed and no local Ollama model is enabled. Enable a local model or restore Routstr access.';
     case 'bad_request':
       return 'The agent rejected that request as malformed. This is a bug worth reporting rather than a provider outage.';
+    case 'budget_exhausted':
+      return 'That turn ran out of time before any model could answer, so it was stopped rather than left hanging. Nothing was charged. Try again, or raise the agent’s turn budget (model_router.total_budget_ms).';
+    case 'client_timeout':
+      return 'Your agent did not respond in time, so this turn was abandoned here in the browser. It may still be working — wait a moment before retrying.';
     default:
       break;
   }

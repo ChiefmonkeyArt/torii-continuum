@@ -127,7 +127,26 @@ export function errorReason(json, status) {
   return `http ${status}`;
 }
 
-async function req(method, path, body) {
+/**
+ * Client-side deadline for a chat turn (CONT-TIMEOUT-1).
+ *
+ * The browser fetch had NO deadline, so when the agent stalled behind a slow
+ * provider the operator watched a spinner until nginx cut the socket at 120s —
+ * and even then some browsers keep the request pending. The deadline chain, and
+ * every link must hold:
+ *
+ *   agent turn budget 100s  <  this 115s  <=  nginx proxy_read_timeout 120s
+ *
+ * Sitting between the two means a slow-but-honest agent reply still lands (we
+ * outwait its own budget), while a truly wedged connection surfaces as our own
+ * `client_timeout` rather than a raw proxy 504.
+ */
+export const CHAT_CLIENT_TIMEOUT_MS = 115000;
+
+/** Default deadline for ordinary agent calls (auth, memory, projects). */
+const DEFAULT_CLIENT_TIMEOUT_MS = 30000;
+
+async function req(method, path, body, { timeoutMs = DEFAULT_CLIENT_TIMEOUT_MS } = {}) {
   const base = agentUrl();
   if (!base) return { ok: false, reason: 'offline', offline: true };
 
@@ -142,6 +161,20 @@ async function req(method, path, body) {
   const tok = getStoredToken();
   if (tok) headers.Authorization = `Bearer ${tok}`;
 
+  // Bound the request AND the body read: a proxy can hold a response open after
+  // the headers arrive, which would hang just as badly as a hung connection.
+  const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+  let timedOut = false;
+  const timer = ctl && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? setTimeout(() => { timedOut = true; ctl.abort(); }, timeoutMs)
+    : null;
+  const clientTimeout = () => ({
+    ok: false,
+    code: 'client_timeout',
+    reason: `timed out after ${Math.round(timeoutMs / 1000)}s`,
+    timeout: true,
+  });
+
   let res;
   try {
     res = await fetch(`${base}${path}`, {
@@ -149,13 +182,20 @@ async function req(method, path, body) {
       headers,
       body: hasBody ? JSON.stringify(body) : undefined,
       credentials: 'include',
+      signal: ctl ? ctl.signal : undefined,
     });
   } catch (e) {
+    if (timer) clearTimeout(timer);
+    // A timeout is NOT "offline" — the agent is reachable, just slow. Callers
+    // branch on it separately so the UI can say so instead of claiming no network.
+    if (timedOut) return clientTimeout();
     return { ok: false, reason: `network: ${e.message}`, offline: true };
   }
 
   let json = null;
   try { json = await res.json(); } catch (_e) {}
+  if (timer) clearTimeout(timer);
+  if (timedOut) return clientTimeout();
 
   if (!res.ok) {
     // 401 → session expired, clear it so UI drops back to logged-out
@@ -282,7 +322,9 @@ export async function refreshProjectSources(slug) {
 // ─── Chat ───────────────────────────────────────────────────
 
 export async function chat({ message, context }) {
-  return req('POST', '/api/chat', { message, context });
+  // Longer than any other call: a chat turn legitimately waits on a model.
+  // See CHAT_CLIENT_TIMEOUT_MS for the agent/nginx ordering this has to respect.
+  return req('POST', '/api/chat', { message, context }, { timeoutMs: CHAT_CLIENT_TIMEOUT_MS });
 }
 
 // ─── Genesis (GENESIS-1) ────────────────────────────────────

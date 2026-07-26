@@ -27,9 +27,21 @@
  * The router preserves the { ok, content, model, sats_spent, duration_ms }
  * response shape so chat.mjs doesn't need to know which provider replied.
  * A `provider` field is added ("routstr" | "ollama") for logging / UI.
+ *
+ * Timeout budget (CONT-TIMEOUT-1). Providers run SEQUENTIALLY, so their
+ * configured timeouts used to add up: 45s of Routstr plus 180s of Ollama is
+ * 225s, well past nginx's 120s `proxy_read_timeout`. The operator got a 504
+ * while the agent kept generating into a dead socket. The router now opens ONE
+ * budget per turn and passes what's left of it to each provider, so the whole
+ * turn — however many providers it touches — stays inside the proxy bound. A
+ * fallback with too little time left is not started; it reports
+ * `budget_exhausted` instead of producing an answer nobody is waiting for.
  */
 
 import { isRetryableCode, inferCodeFromReason, ERROR_CODES, sanitizeReason } from '../lib/provider-errors.mjs';
+import {
+  createBudget, resolveTotalBudgetMs, worthAttempting, describeBudget,
+} from '../lib/timeout-budget.mjs';
 
 /**
  * Should a failed primary-provider result fall through to the other provider?
@@ -49,33 +61,51 @@ export function shouldFallback(result) {
   return isRetryableCode(code);
 }
 
-export function createModelRouter({ routstr, ollama, cfg, log }) {
+export function createModelRouter({ routstr, ollama, cfg, log, now }) {
   const strategy = cfg.model_router?.strategy || 'routstr_first';
+  const totalBudgetMs = resolveTotalBudgetMs(cfg);
 
   async function chat(args) {
+    // One wall-clock allowance for the whole turn, shared by every provider
+    // attempt below. `now` is injectable so the tests are deterministic.
+    const budget = createBudget(totalBudgetMs, now ? { now } : undefined);
+    /** Args for the next provider call, carrying whatever time is left. */
+    const withBudget = () => ({ ...args, budget_ms: budget.remainingMs() });
+    /** The turn ran out before this provider could be given a fair slice. */
+    const exhausted = (provider) => ({
+      ok: false,
+      code: ERROR_CODES.BUDGET_EXHAUSTED,
+      reason: sanitizeReason(`${provider} not attempted: ${describeBudget(budget)}`),
+      retryable: false,
+    });
+
     switch (strategy) {
       case 'routstr_only':
-        return withProvider(await routstr.chat(args), 'routstr');
+        return withProvider(await routstr.chat(withBudget()), 'routstr');
 
       case 'ollama_only': {
         if (!ollama?.enabled) {
           return { ok: false, code: ERROR_CODES.PROVIDER_DISABLED, reason: 'ollama disabled but ollama_only strategy set', retryable: false };
         }
-        return withProvider(await ollama.chat(args), 'ollama');
+        return withProvider(await ollama.chat(withBudget()), 'ollama');
       }
 
       case 'ollama_first': {
         if (ollama?.enabled) {
-          const first = await ollama.chat(args);
+          const first = await ollama.chat(withBudget());
           if (first.ok) return withProvider(first, 'ollama');
           log.info(`[router] ollama_first: ollama failed (${first.reason}), trying routstr`);
+          if (!worthAttempting(budget.remainingMs())) {
+            log.warn(`[router] not trying routstr: ${describeBudget(budget)}`);
+            return withProvider(exhausted('routstr'), 'ollama');
+          }
         }
-        return withProvider(await routstr.chat(args), 'routstr');
+        return withProvider(await routstr.chat(withBudget()), 'routstr');
       }
 
       case 'routstr_first':
       default: {
-        const first = await routstr.chat(args);
+        const first = await routstr.chat(withBudget());
         if (first.ok) return withProvider(first, 'routstr');
         if (!ollama?.enabled) return withProvider(first, 'routstr');
         // Fall through only on retryable transport/payment failures (5xx, HTML
@@ -85,8 +115,21 @@ export function createModelRouter({ routstr, ollama, cfg, log }) {
           log.warn(`[router] routstr failed with non-retryable ${first.code || 'error'}, not falling back: ${first.reason}`);
           return withProvider(first, 'routstr');
         }
+        // A doomed fallback is worse than an honest failure: the local model
+        // would still be loading when nginx hangs up. Report the primary
+        // failure and say why we stopped.
+        if (!worthAttempting(budget.remainingMs())) {
+          log.warn(`[router] routstr ${first.code || 'error'} but no budget for ollama: ${describeBudget(budget)}`);
+          return withProvider({
+            ...first,
+            code: ERROR_CODES.BUDGET_EXHAUSTED,
+            reason: sanitizeReason(`routstr: ${first.reason}; ollama not attempted: ${describeBudget(budget)}`, 300),
+            routstr_code: first.code || null,
+            retryable: false,
+          }, 'routstr');
+        }
         log.info(`[router] routstr ${first.code || 'error'} (${first.reason}) — falling back to ollama`);
-        const second = await ollama.chat(args);
+        const second = await ollama.chat(withBudget());
         if (second.ok) {
           // Tell the caller this reply came from the free local model after a
           // paid-provider failure, so the UI can be honest about provenance.
@@ -106,7 +149,7 @@ export function createModelRouter({ routstr, ollama, cfg, log }) {
     }
   }
 
-  return { chat, strategy };
+  return { chat, strategy, totalBudgetMs };
 }
 
 function withProvider(result, provider) {

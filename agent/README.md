@@ -234,7 +234,11 @@ ollama:
 
 model_router:
   strategy: "routstr_first"   # or ollama_first | ollama_only | routstr_only
+  total_budget_ms: 100000     # whole-turn wall clock, shared by both providers
 ```
+
+`timeout_ms` above is a per-call **ceiling**; the effective deadline is also
+capped by what remains of `total_budget_ms`. See *End-to-end turn budget* below.
 
 Restart the agent, then hit `GET /api/health/models` (admin-gated) to
 confirm both providers are reachable.
@@ -284,12 +288,54 @@ body that echoes a Cashu token can no longer reach a log or the browser
 | `upstream_4xx` | provider rejected the request | no |
 | `bad_request` | malformed local request | no |
 | `provider_disabled` | the only configured provider is off | no |
+| `budget_exhausted` | the turn ran out of wall-clock (see below) | no |
 
 `retryable` is the fallback contract: a transport or payment failure is
 worth trying on the free local model, but a malformed request is **not** —
 falling back there would mask a real bug behind a silent paid→free
 downgrade. `POST /api/chat` returns the same `code` (402 for
 `insufficient_funds`, otherwise 502) so the SPA can branch on it.
+
+### End-to-end turn budget (v0.2.91-alpha, CONT-TIMEOUT-1)
+
+Providers run **sequentially**, so their configured timeouts used to add up.
+With the shipped defaults that made the documented configuration impossible
+to satisfy:
+
+| Layer | Setting | Was |
+| --- | --- | --- |
+| nginx | `proxy_read_timeout` | 120s — outermost bound on any response |
+| Routstr | `routstr.limits.timeout_ms` | 45s |
+| Ollama | `ollama.timeout_ms` | 180s (low-spec VPS default) |
+| router | — | no budget across providers |
+| browser | `fetch` | no deadline at all |
+
+A `routstr_first` turn could therefore spend 45s + 180s = **225s**. nginx cut
+the socket at 120s, so the operator got a 504 or an endless spinner instead of
+the local model's answer, while the agent kept generating into a dead socket.
+Ollama alone at 180s already broke the 120s bound.
+
+The router now opens **one budget per turn** (`model_router.total_budget_ms`,
+default 100s) and every provider call is clamped to
+`min(its own timeout_ms, what's left)`. A fallback with less than 5s remaining
+is **not started** — it reports `budget_exhausted`, which is deliberately
+*not* retryable, because another attempt would only produce an answer nobody
+upstream is still waiting for. Routstr checks the budget **before**
+`wallet.send`, so a doomed turn costs zero sats.
+
+The deadline chain, and every link must hold:
+
+```
+provider slice  <=  total_budget_ms  <  browser fetch  <=  nginx
+   (clamped)             100s              115s           120s
+```
+
+Raising the budget means raising all three, in that order:
+`ops/nginx/torii-api.conf` → `CHAT_CLIENT_TIMEOUT_MS` in `src/data/agent.js`
+→ `model_router.total_budget_ms`. The client deadline sits *between* the agent
+budget and nginx on purpose: it outwaits a slow-but-honest agent reply, while
+a wedged connection surfaces as the SPA's own `client_timeout` rather than a
+raw proxy 504.
 
 ---
 
