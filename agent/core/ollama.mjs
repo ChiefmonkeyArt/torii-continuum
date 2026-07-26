@@ -35,6 +35,7 @@ import { agentRoot } from './config.mjs';
 import {
   ERROR_CODES, classifyHttpFailure, classifyThrownError, providerFailure,
 } from '../lib/provider-errors.mjs';
+import { sliceForProvider, worthAttempting } from '../lib/timeout-budget.mjs';
 
 function modelForSkill(cfg, skill) {
   const explicit = cfg.ollama?.models?.[skill];
@@ -53,7 +54,7 @@ async function appendCostLog(cfg, entry) {
 export function createOllama(cfg, log) {
   const enabled = cfg.ollama?.enabled === true;
   const endpoint = (cfg.ollama?.endpoint || 'http://127.0.0.1:11434').replace(/\/$/, '');
-  const timeoutMs = cfg.ollama?.timeout_ms || 60000;
+  const configuredTimeoutMs = cfg.ollama?.timeout_ms || 60000;
   const maxTokens = cfg.ollama?.max_tokens_out || 2048;
 
   /**
@@ -76,11 +77,26 @@ export function createOllama(cfg, log) {
     }
   }
 
-  async function chat({ skill = 'chat', messages }) {
+  /**
+   * chat({ skill, messages, budget_ms })
+   * `budget_ms` is the wall-clock the router has left for the turn. The call is
+   * clamped to min(configured timeout, remaining budget) — this is what keeps a
+   * 180s `ollama.timeout_ms` from outliving nginx's 120s read timeout. Omitting
+   * it keeps the configured timeout, so the provider still works standalone.
+   */
+  async function chat({ skill = 'chat', messages, budget_ms = null }) {
     if (!enabled) return providerFailure(ERROR_CODES.PROVIDER_DISABLED, 'ollama disabled');
     if (!Array.isArray(messages) || messages.length === 0) {
       return providerFailure(ERROR_CODES.BAD_REQUEST, 'messages must be a non-empty array');
     }
+    const hasBudget = budget_ms !== null && budget_ms !== undefined;
+    if (hasBudget && !worthAttempting(budget_ms)) {
+      return providerFailure(
+        ERROR_CODES.BUDGET_EXHAUSTED,
+        `ollama skipped: only ${Math.max(0, Math.floor(budget_ms))}ms of the turn budget left`,
+      );
+    }
+    const timeoutMs = sliceForProvider(configuredTimeoutMs, hasBudget ? budget_ms : null);
 
     const model = modelForSkill(cfg, skill);
     const started = Date.now();

@@ -36,6 +36,9 @@ import { agentRoot } from './config.mjs';
 import {
   ERROR_CODES, classifyHttpFailure, classifyThrownError, providerFailure, looksLikeHtml,
 } from '../lib/provider-errors.mjs';
+import {
+  createBudget, sliceForProvider, worthAttempting, describeBudget,
+} from '../lib/timeout-budget.mjs';
 
 /** Wall-clock deadline for a chat completion when config doesn't set one. */
 const DEFAULT_CHAT_TIMEOUT_MS = 45000;
@@ -223,7 +226,7 @@ export function createRoutstr(cfg, wallet, log) {
     }
   }
 
-  async function callOnce(model, messages, sats, allowRetry = true) {
+  async function callOnce(model, messages, sats, timeoutMs = chatTimeoutMs, allowRetry = true) {
     const send = await wallet.send(sats);
     if (!send.ok) {
       // A dry / floor-blocked wallet is a payment-path failure: structured so the
@@ -242,7 +245,7 @@ export function createRoutstr(cfg, wallet, log) {
     const started = Date.now();
     let res, body;
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), chatTimeoutMs);
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {
       res = await fetch(url, {
         method: 'POST',
@@ -270,7 +273,7 @@ export function createRoutstr(cfg, wallet, log) {
       // AFTER dispatch: the token is spent/unknown — NEVER roll it back into
       // spendable balance. Try to reclaim a lost refund instead.
       await tryRefundReclaim(paymentToken);
-      return classifyThrownError(e, { timeoutMs: chatTimeoutMs, provider: 'routstr' });
+      return classifyThrownError(e, { timeoutMs, provider: 'routstr' });
     } finally {
       clearTimeout(timer);
     }
@@ -283,7 +286,7 @@ export function createRoutstr(cfg, wallet, log) {
         if (typeof send.markSpent === 'function') await send.markSpent();
         if (allowRetry) {
           log.warn('[routstr] token_already_spent — quarantined stale proofs, retrying once with fresh');
-          return callOnce(model, messages, sats, false);
+          return callOnce(model, messages, sats, timeoutMs, false);
         }
         return providerFailure(
           ERROR_CODES.TOKEN_ALREADY_SPENT,
@@ -358,10 +361,14 @@ export function createRoutstr(cfg, wallet, log) {
   }
 
   /**
-   * Public: chat({ skill, messages })
-   * skill selects the model + fallback ladder.
+   * Public: chat({ skill, messages, budget_ms })
+   * skill selects the model + fallback ladder. `budget_ms` is the wall-clock the
+   * router has left for the WHOLE turn; every attempt below — primary and each
+   * rung of the model ladder — is clamped to what remains of it, and a rung too
+   * thin to finish is not started at all. Omitting it (a provider called
+   * directly, outside the router) keeps the configured per-call timeout.
    */
-  async function chat({ skill = 'chat', messages }) {
+  async function chat({ skill = 'chat', messages, budget_ms = null }) {
     if (!Array.isArray(messages) || messages.length === 0) {
       // Non-retryable: a malformed call is a bug, not an outage. The router must
       // NOT downgrade to the free local model and hide it.
@@ -370,10 +377,26 @@ export function createRoutstr(cfg, wallet, log) {
 
     const primary = modelForSkill(cfg, skill);
     const sats = estimateSats(cfg, skill);
+    // One budget for the whole ladder. When the router gave us a slice we track
+    // it locally so ladder rung N+1 sees the time rungs 1..N actually consumed.
+    const budget = budget_ms === null || budget_ms === undefined
+      ? null
+      : createBudget(budget_ms);
+    const remaining = () => (budget ? budget.remainingMs() : null);
+    const sliceNow = () => sliceForProvider(chatTimeoutMs, remaining());
 
-    // Primary attempt
-    let attempt = await callOnce(primary, messages, sats);
     let attemptedModels = [primary];
+    let attempt;
+    if (budget && !worthAttempting(budget.remainingMs())) {
+      // Too little of the turn left to pay for a completion nobody will read.
+      // Reported BEFORE wallet.send so no sats leave the wallet.
+      attempt = providerFailure(
+        ERROR_CODES.BUDGET_EXHAUSTED,
+        `routstr skipped: only ${budget.remainingMs()}ms of the turn budget left`,
+      );
+    } else {
+      attempt = await callOnce(primary, messages, sats, sliceNow());
+    }
 
     if (!attempt.ok) {
       log.warn(`[routstr] primary ${primary} failed: ${attempt.reason}`);
@@ -381,9 +404,13 @@ export function createRoutstr(cfg, wallet, log) {
       if (ladder) {
         for (const model of ladder) {
           if (model === primary) continue;
+          if (budget && !worthAttempting(budget.remainingMs())) {
+            log.warn(`[routstr] skipping ${model}: ${describeBudget(budget)}`);
+            break;
+          }
           attemptedModels.push(model);
           log.info(`[routstr] falling back to ${model}`);
-          attempt = await callOnce(model, messages, sats);
+          attempt = await callOnce(model, messages, sats, sliceNow());
           if (attempt.ok) break;
           log.warn(`[routstr] fallback ${model} failed: ${attempt.reason}`);
         }
