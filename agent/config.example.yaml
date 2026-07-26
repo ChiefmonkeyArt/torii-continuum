@@ -227,6 +227,14 @@ ollama:
   # Per-request timeout. Slow CPUs on big models can push this; 60s is safe
   # for 3B, bump to 180s for 8B on 2 vCPU. Low-spec VPS default: 180s so a
   # cold qwen2.5:0.5b load + first token doesn't abort under load.
+  #
+  # CEILING (v0.2.91-alpha): this is an UPPER BOUND, not a guarantee. Every call
+  # is also clamped to whatever is left of `model_router.total_budget_ms`, so a
+  # 180s value only takes effect on a turn where Ollama runs first and alone. On
+  # a routstr_first turn that already spent 45s upstream, Ollama gets the
+  # remainder — that clamp is what keeps the turn inside nginx's 120s
+  # proxy_read_timeout. Raise total_budget_ms (and nginx) if you genuinely need
+  # the full 180s.
   timeout_ms: 180000
 
 
@@ -252,6 +260,29 @@ ollama:
 #
 model_router:
   strategy: "routstr_first"
+
+  # ── End-to-end turn budget (v0.2.91-alpha, CONT-TIMEOUT-1) ──
+  #
+  # Total wall-clock allowance for ONE chat turn, across every provider attempt.
+  # Providers run sequentially, so without this their timeouts simply added up:
+  # 45s of Routstr then 180s of Ollama is 225s, and nginx cut the connection at
+  # 120s — the operator saw a 504 while the agent generated into a dead socket.
+  #
+  # Each provider call is clamped to min(its own timeout_ms, what's LEFT of this
+  # budget), and a fallback with less than 5s left is not started at all: it
+  # reports `budget_exhausted` rather than producing an answer nobody is still
+  # waiting for. Nothing is charged for a turn that is never dispatched.
+  #
+  # The whole deadline chain, and every link must hold:
+  #
+  #   provider slice  <=  total_budget_ms  <  browser fetch  <=  nginx
+  #     (clamped)              100s              115s            120s
+  #
+  # If you raise this, raise `proxy_read_timeout`/`proxy_send_timeout` in
+  # ops/nginx/torii-api.conf AND CHAT_CLIENT_TIMEOUT_MS in src/data/agent.js to
+  # match, in that order — otherwise the proxy still hangs up first and the
+  # extra budget buys nothing.
+  total_budget_ms: 100000
 
 
 # ─────────────────────────────────────────────────────────────
