@@ -37,6 +37,7 @@ export const ERROR_CODES = Object.freeze({
   BAD_REQUEST: 'bad_request',
   PROVIDER_DISABLED: 'provider_disabled',
   UPSTREAM_BAD_JSON: 'upstream_bad_json',
+  BUDGET_EXHAUSTED: 'budget_exhausted',
 });
 
 /**
@@ -44,7 +45,9 @@ export const ERROR_CODES = Object.freeze({
  * failure (5xx, HTML error page, timeout, empty stream, network drop) or a
  * payment-path failure is retryable: the local Ollama path costs nothing and
  * may well succeed. A malformed request (bad_request) is NOT — falling back
- * would mask a real bug behind a silent paid→free downgrade.
+ * would mask a real bug behind a silent paid→free downgrade. Neither is
+ * `budget_exhausted`: the turn has no wall-clock left, so another attempt would
+ * only produce an answer nobody upstream is still waiting for.
  */
 const RETRYABLE = new Set([
   ERROR_CODES.UPSTREAM_5XX,
