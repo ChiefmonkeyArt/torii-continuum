@@ -78,6 +78,21 @@ describe('chatErrorMessage — structured provider codes', () => {
     expect(chatErrorMessage({ ok: false, code: 'bad_request' })).toMatch(/bug/i);
   });
 
+  it('explains an exhausted turn budget and points at the knob (CONT-TIMEOUT-1)', () => {
+    const m = chatErrorMessage({ ok: false, code: 'budget_exhausted' });
+    expect(m).toMatch(/ran out of time/i);
+    expect(m).toMatch(/total_budget_ms/);
+    expect(m).toMatch(/nothing was charged/i);
+  });
+
+  it('distinguishes a client-side abandon from an unreachable agent (CONT-TIMEOUT-1)', () => {
+    const m = chatErrorMessage({ ok: false, code: 'client_timeout', timeout: true });
+    expect(m).toMatch(/did not respond in time/i);
+    expect(m).toMatch(/may still be working/i);
+    // Must NOT claim the agent is unreachable — it answered slowly, if at all.
+    expect(m).not.toMatch(/unreachable/i);
+  });
+
   it('never fabricates an assistant answer for an unknown code', () => {
     const m = chatErrorMessage({ ok: false, code: 'something_new', reason: 'upstream weirdness' });
     expect(m).toMatch(/could not be completed/i);
