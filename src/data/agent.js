@@ -21,6 +21,20 @@ const TOKEN_KEY = 'continuum.session.v1';
 // an explicit user action); it is only used below to detect that a same-origin
 // agent is reachable, and it is cleared on sign-out.
 const ONBOARDING_SESSION_KEY = 'torii.session';
+// The expiry the agent stated for the current session (unix seconds). Not a
+// secret and not a credential — a token without this is still usable, and this
+// without a token is meaningless. See setSessionExpiry for why it is stored
+// rather than parsed back out of the token.
+const SESSION_EXPIRY_KEY = 'continuum.session.exp.v1';
+// Client state that belongs to the signed-in owner and must not survive a sign
+// out on a shared browser. The local project store (`continuum.v1`) is
+// deliberately NOT here: it is the operator's own local-first document set,
+// already behind the route guard, and wiping it on sign-out would destroy work.
+// `continuum.theme` is a display preference with no owner in it.
+export const OWNER_SCOPED_KEYS = Object.freeze([
+  'continuum.chat.threads',
+  'continuum.routstr.focusTopUp',
+]);
 
 /**
  * Derive the same-origin agent base from the page's pathname. The SPA and the
@@ -82,14 +96,42 @@ export function setStoredToken(tok) {
   } catch (_e) {}
 }
 
-export function clearStoredToken() { setStoredToken(null); }
+export function clearStoredToken() { setStoredToken(null); setSessionExpiry(null); }
 
 /**
- * Cheap, HMAC-free liveness check of an agent session token. Mirrors the
- * agent's `iat.exp.pubkey.oiat.sig` shape and its `exp < now` rule (the server
- * still verifies the HMAC on every call — this only decides whether the UI
- * shows a logged-in state). Pure + exported so the contract is unit-tested
- * without a DOM. `now` is unix seconds.
+ * Persist (or clear) the expiry the AGENT stated when it issued this session.
+ *
+ * This is the authoritative signal, and it is why it is stored separately from
+ * the token: the token is the agent's business and the browser should treat it
+ * as opaque. Parsing it was what let the two drift apart — v0.2.92 added a
+ * field, the client demanded exactly the new count, and against an agent that
+ * had not been upgraded in lockstep the browser disowned a token the agent had
+ * just legitimately issued. Sign-in then "succeeded" while the UI stayed signed
+ * out. An expiry the agent told us cannot desynchronise from the token's shape.
+ * @param {number|null} sec unix seconds, or null to clear
+ */
+export function setSessionExpiry(sec) {
+  try {
+    if (Number.isFinite(sec) && sec > 0) localStorage.setItem(SESSION_EXPIRY_KEY, String(Math.floor(sec)));
+    else localStorage.removeItem(SESSION_EXPIRY_KEY);
+  } catch (_e) {}
+}
+
+/** The stored authoritative expiry, or null when absent/corrupt. */
+export function readSessionExpiry() {
+  try {
+    const raw = localStorage.getItem(SESSION_EXPIRY_KEY);
+    if (!raw) return null;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch { return null; }
+}
+
+/**
+ * Cheap, HMAC-free liveness check of an agent session token. Applies the
+ * agent's `exp < now` rule (the server still verifies the HMAC on every call —
+ * this only decides whether the UI shows a logged-in state). Pure + exported so
+ * the contract is unit-tested without a DOM. `now` is unix seconds.
  * @param {unknown} tok
  * @param {number} [now]
  */
@@ -99,22 +141,47 @@ export function tokenLooksLive(tok, now = Math.floor(Date.now() / 1000)) {
 }
 
 /**
- * The `exp` a session token carries, or null when it is absent or malformed.
- * Exported because the session state machine schedules renewals against it and
- * has to tell "no session" apart from "a session that ended".
+ * The `exp` a session token carries, or null when it is absent or unreadable.
+ *
+ * Deliberately SHAPE-TOLERANT: any token of at least four dot-separated fields
+ * is read, and `exp` is taken from index 1 — the one position that has been
+ * stable across every token version the agent has ever issued. An exact
+ * field-count check is what turned "the agent added a field" into "the operator
+ * cannot sign in", so the client no longer asserts a count it does not own.
+ * Only a fallback; readSessionExpiry() is authoritative when present.
  * @param {unknown} tok
  * @returns {number|null} unix seconds
  */
 export function tokenExpiry(tok) {
   if (typeof tok !== 'string' || !tok) return null;
   const parts = tok.split('.');
-  if (parts.length !== 5) return null;
+  if (parts.length < 4) return null;
   const exp = parseInt(parts[1], 10);
   return Number.isFinite(exp) ? exp : null;
 }
 
-export function isLoggedIn() {
-  return tokenLooksLive(getStoredToken());
+/**
+ * The single expiry the whole UI reasons about: what the agent said, else what
+ * the token carries. Null means "no session", which is not the same as "a
+ * session that ended" — the session state machine needs to tell those apart.
+ * @returns {number|null} unix seconds
+ */
+export function sessionExpiry() {
+  if (!getStoredToken()) return null;
+  return readSessionExpiry() ?? tokenExpiry(getStoredToken());
+}
+
+/**
+ * THE authoritative client-side answer to "is the operator signed in?".
+ *
+ * Every guard, the shell, the session control and the refresh loop must route
+ * through this one function. Divergent re-derivations of the same question were
+ * the bug: the login surface could believe sign-in had succeeded while the
+ * router believed nobody was signed in.
+ */
+export function isLoggedIn(now = Math.floor(Date.now() / 1000)) {
+  const exp = sessionExpiry();
+  return exp !== null && exp > now;
 }
 
 /**
@@ -232,7 +299,13 @@ export async function requestChallenge() {
 
 export async function verifyChallenge(event) {
   const r = await req('POST', '/api/auth/verify', { event });
-  if (r.ok && r.data?.token) setStoredToken(r.data.token);
+  if (r.ok && r.data?.token) {
+    setStoredToken(r.data.token);
+    // Record the agent's own expiry BEFORE anybody is told the login worked, so
+    // there is no window in which the UI has been notified of a session it would
+    // then fail to recognise.
+    setSessionExpiry(r.data.expires_at ?? tokenExpiry(r.data.token));
+  }
   return r;
 }
 
@@ -249,7 +322,9 @@ export async function refreshSession() {
   const r = await req('POST', '/api/auth/refresh');
   if (r.ok && r.data?.token) {
     setStoredToken(r.data.token);
-    return { ok: true, expires_at: r.data.expires_at ?? tokenExpiry(r.data.token) };
+    const exp = r.data.expires_at ?? tokenExpiry(r.data.token);
+    setSessionExpiry(exp);
+    return { ok: true, expires_at: exp };
   }
   return { ok: false, code: r.data?.code || r.code || 'refresh_failed' };
 }
@@ -261,6 +336,12 @@ export async function refreshSession() {
 export function logout() {
   clearStoredToken();
   try { localStorage.removeItem(ONBOARDING_SESSION_KEY); } catch (_e) {}
+  // Owner-scoped client state goes with the session. The chat log in particular
+  // is the operator's own conversation with their bot; leaving it behind meant
+  // the next person to open this browser could read it after a sign-out.
+  for (const k of OWNER_SCOPED_KEYS) {
+    try { localStorage.removeItem(k); } catch (_e) {}
+  }
 }
 
 // ─── Wallet ─────────────────────────────────────────────────

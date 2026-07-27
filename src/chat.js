@@ -108,6 +108,20 @@ export function mountChat(root) {
   updatePlaceholder();
   autosize();
   reserveSpace();
+
+  // Sign-out clears the persisted chat log, but this tab still holds it in
+  // memory — so without this the previous owner's conversation was still on
+  // screen (and still saved back on the next turn) after signing out.
+  document.addEventListener('continuum:session-changed', () => {
+    if (!isSessionLive()) resetThreads();
+    updatePlaceholder();
+  });
+}
+
+/** Drop every in-memory thread. Storage is cleared by the sign-out path. */
+export function resetThreads() {
+  threads = {};
+  if (logEl) syncActiveThread();
 }
 
 // Only the agent-less demo build may advertise mock replies. Signed in, or in

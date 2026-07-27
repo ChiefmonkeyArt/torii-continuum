@@ -289,8 +289,13 @@ describe('src/main.js — multi-tab storage listener wiring (source structure)',
 describe('src/shell.js — sign-out branch never reaches the signer (source structure)', () => {
   const shell = read('shell.js');
 
-  it('the sidebar sign-out branch calls confirmSignOut, not startLogin', () => {
-    expect(shell).toMatch(/isSessionLive\(\)\)\s*\{\s*confirmSignOut\(\);/);
+  it('the sign-out branch is bound to the RENDERED intent, not a second live read', () => {
+    // The label used to come from one isSessionLive() read and the action from a
+    // second, later one. A token lapsing in between produced a button reading
+    // "Sign out" that called startLogin() and popped the signer. Both now derive
+    // from the single `authed` value captured at render time.
+    expect(shell).toMatch(/const\s+authed\s*=\s*isSessionLive\(\)/);
+    expect(shell).toMatch(/if\s*\(authed\)\s*\{\s*confirmSignOut\(\);\s*return;\s*\}/);
   });
 
   it('startLogin is only reachable from the else (sign-in) branch', () => {

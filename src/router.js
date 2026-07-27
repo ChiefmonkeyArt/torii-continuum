@@ -12,9 +12,25 @@
 
 const routes = [];
 let currentHandler = null;
+let onRouteError = null;
 
 export function route(pattern, handler) {
   routes.push({ pattern, keys: keysOf(pattern), handler });
+}
+
+/**
+ * Register the fail-closed sink for a view that throws (CONT-AUTHUI-1).
+ *
+ * Without this, an exception from a handler escaped resolve() — and because the
+ * FIRST resolve happens inside startRouter() during boot, it aborted the rest of
+ * boot: the pane had already been cleared by the view, so the operator was left
+ * with an empty region beside a working menu and none of the listeners that are
+ * registered after routing. Containing it here keeps one broken screen from
+ * taking down the whole shell.
+ * @param {((err: unknown, pattern: string) => void)|null} fn
+ */
+export function setRouteErrorHandler(fn) {
+  onRouteError = typeof fn === 'function' ? fn : null;
 }
 
 function keysOf(pattern) {
@@ -35,7 +51,12 @@ function resolve() {
       const params = {};
       r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); });
       currentHandler = { pattern: r.pattern, params };
-      r.handler(params);
+      try {
+        r.handler(params);
+      } catch (err) {
+        if (onRouteError) onRouteError(err, r.pattern);
+        else throw err;
+      }
       return;
     }
   }

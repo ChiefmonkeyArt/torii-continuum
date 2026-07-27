@@ -244,10 +244,14 @@ describe('wiring: main.js session-changed handler forces a transition (source lo
     expect(handler).toMatch(/navigate\(\s*sessionChangeTarget\(\s*authed\s*\)/);
   });
 
-  it('replaces (not pushes) history on sign-out so Back cannot restore the dashboard', () => {
-    // v0.2.75-alpha: on sign-out (authed === false) the current authenticated
-    // entry is replaced, so the Back button has no dashboard entry to return to.
-    expect(handler).toMatch(/\{\s*replace:\s*!authed\s*\}/);
+  it('replaces (not pushes) history in BOTH directions', () => {
+    // v0.2.75-alpha replaced only on sign-out, so Back could not restore the
+    // dashboard. CONT-AUTHUI-1 replaces on sign-IN too: pushing left the login
+    // surface in history, and Back onto it bounced forward again via rootTarget,
+    // trapping the operator between two entries. In both directions the entry
+    // being replaced is the one the operator has just finished with.
+    expect(handler).toMatch(/\{\s*replace:\s*true\s*\}/);
+    expect(handler).not.toMatch(/replace:\s*!authed/);
   });
 
   it('does not gate the transition on the current route being the root', () => {

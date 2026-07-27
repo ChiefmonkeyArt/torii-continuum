@@ -52,6 +52,12 @@ export function appVersion() {
 export function renderSidebar() {
   const projectCount = listProjects().length;
   const active = getActiveNav();
+  // Read the authoritative auth state ONCE per render and derive the control's
+  // label, icon, title AND action from that single value. Previously the label
+  // was rendered from one read and the click branched on a second, later read —
+  // so a token that lapsed in between produced a button reading "Sign out" that
+  // called startLogin() and popped the signer.
+  const authed = isSessionLive();
 
   sidebarEl.innerHTML = `
     <div class="brand" role="button" aria-label="Continuum home">
@@ -89,9 +95,9 @@ export function renderSidebar() {
       <div class="sidebar-update" data-sidebar-update hidden></div>
       <div class="sidebar-login-status" data-login-status role="status" aria-live="polite"></div>
       <div class="sidebar-footer-row">
-        <button class="session-btn ${isSessionLive() ? 'logged-in' : ''}" data-session-toggle title="${isSessionLive() ? 'Sign out' : 'Sign in with Nostr'}">
-          <span class="session-icon">${isSessionLive() ? iconLogout() : iconKey()}</span>
-          <span>${isSessionLive() ? 'Sign out' : (isAgentConfigured() ? 'Login' : 'Demo mode')}</span>
+        <button class="session-btn ${authed ? 'logged-in' : ''}" data-session-toggle data-session-intent="${authed ? 'signout' : 'signin'}" title="${authed ? 'Sign out' : 'Sign in with Nostr'}">
+          <span class="session-icon">${authed ? iconLogout() : iconKey()}</span>
+          <span>${authed ? 'Sign out' : (isAgentConfigured() ? 'Sign in' : 'Demo mode')}</span>
         </button>
         <button class="theme-toggle" data-theme-toggle title="Toggle theme" aria-label="Toggle theme">${currentTheme() === 'light' ? iconMoon() : iconSun()}</button>
       </div>
@@ -109,13 +115,15 @@ export function renderSidebar() {
   const loginStatusEl = sidebarEl.querySelector('[data-login-status]');
   if (sessionBtn) sessionBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    // Sign-out and sign-in are DIFFERENT actions on DIFFERENT code paths. Only
-    // the sign-in branch may reach startLogin / window.nostr. Sign-out opens a
-    // purely-local confirmation (confirmSignOut) that never touches a NIP-07
-    // signer — so even if the token expires between render and click, the
-    // "Sign out" button can never fall through to the signer.
-    if (isSessionLive()) { confirmSignOut(); }
-    else { startLogin({ onStatus: (s) => renderLoginStatus(loginStatusEl, s) }); }
+    // The action is bound to the RENDERED intent (`authed`, the same value the
+    // label came from) — never to a second, later read. A control the operator
+    // can see saying "Sign out" therefore always signs out, and can never reach
+    // startLogin / window.nostr. In the opposite direction a control rendered
+    // "Sign in" that finds a live session (signed in elsewhere since the render)
+    // re-renders itself instead of starting a redundant challenge.
+    if (authed) { confirmSignOut(); return; }
+    if (isSessionLive()) { renderSidebar(); return; }
+    startLogin({ onStatus: (s) => renderLoginStatus(loginStatusEl, s) });
   });
   sidebarEl.querySelectorAll('.nav-item').forEach((el) => {
     // Real anchors now (href baked with demoAware at render time, so hover URL,

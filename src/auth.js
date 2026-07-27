@@ -29,7 +29,7 @@ import {
   logout as clearSession,
   isAgentConfigured,
   getStoredToken,
-  tokenExpiry,
+  sessionExpiry,
   refreshSession as refreshSessionToken,
 } from './data/agent.js';
 import {
@@ -236,9 +236,10 @@ export function startSessionRefresh(overrides = {}) {
     ...overrides,
   };
 
-  const expiry = () => tokenExpiry(getStoredToken());
-
-  currentState = classify(expiry(), deps.nowSec());
+  // sessionExpiry() is the same authoritative value isSessionLive() consumes —
+  // the agent's stated expires_at, falling back to the token only when absent.
+  // Reading it here keeps the renewal clock and the guard from disagreeing.
+  currentState = classify(sessionExpiry(), deps.nowSec());
   if (currentState === STATES.ANONYMOUS) return currentState;
   if (currentState === STATES.EXPIRED) {
     deps.onExpired();
@@ -251,7 +252,7 @@ export function startSessionRefresh(overrides = {}) {
 function arm(delayOverrideMs = null) {
   if (!deps) return;
   const wait = delayOverrideMs === null
-    ? msUntilRefresh(tokenExpiry(getStoredToken()), deps.nowSec())
+    ? msUntilRefresh(sessionExpiry(), deps.nowSec())
     : delayOverrideMs;
   if (wait === null) return;
   refreshTimer = deps.setTimer(tick, wait);
@@ -261,7 +262,7 @@ async function tick() {
   if (!deps) return;
   refreshTimer = null;
   const now = deps.nowSec();
-  currentState = reduce(currentState, { type: 'tick', expiresAt: tokenExpiry(getStoredToken()), now });
+  currentState = reduce(currentState, { type: 'tick', expiresAt: sessionExpiry(), now });
 
   if (currentState === STATES.EXPIRED) {
     deps.onExpired();
@@ -279,7 +280,7 @@ async function tick() {
   if (result?.ok) {
     currentState = reduce(currentState, {
       type: 'refresh_ok',
-      expiresAt: result.expires_at ?? tokenExpiry(getStoredToken()),
+      expiresAt: result.expires_at ?? sessionExpiry(),
       now: after,
     });
     arm();
@@ -289,7 +290,7 @@ async function tick() {
   currentState = reduce(currentState, {
     type: 'refresh_failed',
     code: result?.code,
-    expiresAt: tokenExpiry(getStoredToken()),
+    expiresAt: sessionExpiry(),
     now: after,
   });
   if (currentState === STATES.EXPIRED) {
