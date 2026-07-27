@@ -222,8 +222,11 @@ describe('main.js wiring (source lock)', () => {
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
 
-  it('sign-out replaces (not pushes) history so Back cannot restore the dashboard', () => {
-    expect(main).toMatch(/navigate\(\s*sessionChangeTarget\(\s*authed\s*\)\s*,\s*\{\s*replace:\s*!authed\s*\}\s*\)/);
+  it('a session change replaces (not pushes) history in both directions', () => {
+    // Sign-out: Back cannot restore the dashboard. Sign-in: Back cannot land on
+    // the stale login surface (which then bounced forward again, trapping the
+    // operator between two history entries).
+    expect(main).toMatch(/navigate\(\s*sessionChangeTarget\(\s*authed\s*\)\s*,\s*\{\s*replace:\s*true\s*\}\s*\)/);
   });
 
   it('the per-route guard bounces with replace, not push', () => {

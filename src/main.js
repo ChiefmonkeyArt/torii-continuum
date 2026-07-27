@@ -12,10 +12,10 @@
  */
 import { initStore } from './data/store.js';
 import { mountShell, mainContent, renderSidebar, applyStoredTheme } from './shell.js';
-import { route, startRouter, navigate, currentRoute, resolveCurrent } from './router.js';
+import { route, startRouter, navigate, currentRoute, resolveCurrent, setRouteErrorHandler } from './router.js';
 import { mountChat } from './chat.js';
 import { isSessionLive, endSession, isSignoutBroadcast, rehydrateSession, SIGNOUT_SENTINEL_KEY } from './auth.js';
-import { rootTarget, guardRedirect, sessionChangeTarget, restoreTarget, demoRedirect } from './nav-guard.js';
+import { rootTarget, guardRedirect, sessionChangeTarget, restoreTarget, demoRedirect, ROOT_PATH } from './nav-guard.js';
 import { demoStore } from './demo/demo-fixtures.js';
 import { renderDemoStub } from './demo/demo-mode.js';
 
@@ -148,7 +148,20 @@ function boot() {
   route('/demo/settings', demoRoute('/demo/settings', () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Settings' }); renderSidebar(); }));
   route('/demo/health',   demoRoute('/demo/health',   () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Health' }); renderSidebar(); }));
 
-  startRouter();
+  // ORDER IS LOAD-BEARING (CONT-AUTHUI-1). Everything below must be wired
+  // BEFORE startRouter(), because startRouter() performs the first resolve
+  // synchronously and that resolve renders a view.
+  //
+  //   • mountChat first: every authenticated view calls setChatContext(), which
+  //     writes into the dock's elements. With the dock mounted after the first
+  //     resolve, a hard refresh onto any authenticated route threw inside the
+  //     router — clearing the main pane and then abandoning the rest of boot,
+  //     which is what produced a blank content panel beside a live menu.
+  //   • listeners second: they used to be registered after startRouter(), so a
+  //     first resolve that threw took the session-changed / popstate / pageshow /
+  //     storage handlers down with it. The page then looked signed-in but could
+  //     never redirect on sign-in, exit on sign-out, guard Back, or honour
+  //     another tab's logout — for the rest of its life.
   mountChat(root);
 
   // React to session changes so the shell and route stay honest. A mid-session
@@ -163,12 +176,14 @@ function boot() {
   document.addEventListener('continuum:session-changed', () => {
     renderSidebar();
     const authed = isSessionLive();
-    // On sign-out (authed === false) REPLACE the current entry rather than push,
-    // so the authenticated surface we are leaving (e.g. the dashboard) is not
-    // retained in history for the Back button to restore. Sign-in pushes as
-    // normal. Earlier authenticated entries deeper in history are still caught
-    // by the per-route guard and enforceRouteAuth() on Back/restore.
-    navigate(sessionChangeTarget(authed), { replace: !authed });
+    // REPLACE in BOTH directions. Sign-out has always replaced, so the
+    // authenticated surface being left is not retained for Back to restore.
+    // Sign-in now replaces too: pushing left the login surface sitting in
+    // history, so Back landed on a stale login screen — which then bounced
+    // forward again via rootTarget, trapping the operator between two entries.
+    // The entry being replaced is the one the operator just finished with, in
+    // both directions, so neither is worth keeping.
+    navigate(sessionChangeTarget(authed), { replace: true });
   });
 
   // Sign-out must remain a hard boundary across BROWSER history + bfcache, not
@@ -202,6 +217,64 @@ function boot() {
 
   // Prevent double-tap zoom on the chat button on iOS
   document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
+
+  // A view that throws must not be able to leave the operator staring at an
+  // empty pane. The router hands us the failure instead of letting it escape
+  // (which previously aborted boot); we fail closed to a visible, actionable
+  // panel and never leave main-content empty.
+  setRouteErrorHandler(renderRouteError);
+
+  // LAST. The first resolve renders a view, so every dependency a view can
+  // reach — the chat dock, the session listeners, the error handler — is
+  // already in place by the time this runs.
+  startRouter();
+}
+
+// Fail-closed surface for a route handler that threw. Shows what happened
+// without leaking internals, offers a reload, and — when the session is not
+// live — a way back to the public home rather than a dead authenticated shell.
+function renderRouteError(err, pattern) {
+  const mount = mainContent();
+  if (!mount) return;
+  const authed = isSessionLive();
+  mount.innerHTML = '';
+  const box = document.createElement('section');
+  box.className = 'route-error card';
+  box.setAttribute('role', 'alert');
+
+  const title = document.createElement('h2');
+  title.textContent = 'This screen failed to load';
+  const body = document.createElement('p');
+  body.className = 'muted';
+  body.textContent = authed
+    ? 'Your session is still valid. Reloading usually clears this.'
+    : 'You are signed out. Sign in again to continue.';
+  const detail = document.createElement('p');
+  detail.className = 'route-error-detail muted';
+  detail.textContent = `Route ${pattern || 'unknown'}`;
+
+  const actions = document.createElement('div');
+  actions.className = 'form-actions';
+  const reload = document.createElement('button');
+  reload.className = 'primary';
+  reload.type = 'button';
+  reload.setAttribute('data-route-error-reload', '');
+  reload.textContent = 'Reload';
+  reload.addEventListener('click', () => { window.location.reload(); });
+  actions.appendChild(reload);
+  if (!authed) {
+    const home = document.createElement('button');
+    home.type = 'button';
+    home.setAttribute('data-route-error-home', '');
+    home.textContent = 'Go to sign in';
+    home.addEventListener('click', () => { navigate(ROOT_PATH, { replace: true }); });
+    actions.appendChild(home);
+  }
+
+  box.append(title, body, detail, actions);
+  mount.appendChild(box);
+  setLandingMode(false);
+  try { console.error('[continuum] route render failed', pattern, err); } catch (_e) {}
 }
 
 if (document.readyState === 'loading') {
