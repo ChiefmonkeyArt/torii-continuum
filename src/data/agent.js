@@ -86,20 +86,31 @@ export function clearStoredToken() { setStoredToken(null); }
 
 /**
  * Cheap, HMAC-free liveness check of an agent session token. Mirrors the
- * agent's `iat.exp.pubkey.sig` shape and its `exp < now` rule (the server still
- * verifies the HMAC on every call — this only decides whether the UI shows a
- * logged-in state). Pure + exported so the contract is unit-tested without a
- * DOM. `now` is unix seconds.
+ * agent's `iat.exp.pubkey.oiat.sig` shape and its `exp < now` rule (the server
+ * still verifies the HMAC on every call — this only decides whether the UI
+ * shows a logged-in state). Pure + exported so the contract is unit-tested
+ * without a DOM. `now` is unix seconds.
  * @param {unknown} tok
  * @param {number} [now]
  */
 export function tokenLooksLive(tok, now = Math.floor(Date.now() / 1000)) {
-  if (typeof tok !== 'string' || !tok) return false;
+  const exp = tokenExpiry(tok);
+  return exp !== null && exp > now;
+}
+
+/**
+ * The `exp` a session token carries, or null when it is absent or malformed.
+ * Exported because the session state machine schedules renewals against it and
+ * has to tell "no session" apart from "a session that ended".
+ * @param {unknown} tok
+ * @returns {number|null} unix seconds
+ */
+export function tokenExpiry(tok) {
+  if (typeof tok !== 'string' || !tok) return null;
   const parts = tok.split('.');
-  if (parts.length !== 4) return false;
+  if (parts.length !== 5) return null;
   const exp = parseInt(parts[1], 10);
-  if (!Number.isFinite(exp)) return false;
-  return exp > now;
+  return Number.isFinite(exp) ? exp : null;
 }
 
 export function isLoggedIn() {
@@ -223,6 +234,24 @@ export async function verifyChallenge(event) {
   const r = await req('POST', '/api/auth/verify', { event });
   if (r.ok && r.data?.token) setStoredToken(r.data.token);
   return r;
+}
+
+/**
+ * Slide the current session forward without a new signature (CONT-AUTH-1).
+ *
+ * The replacement token is only stored on a clean success, so a refusal or a
+ * network fault leaves the existing — still valid — token exactly where it is.
+ * Returns the agent's refusal `code` unchanged, because the session state
+ * machine routes on it: only `max_lifetime_reached` is terminal.
+ * @returns {Promise<{ok: boolean, code?: string, expires_at?: number}>}
+ */
+export async function refreshSession() {
+  const r = await req('POST', '/api/auth/refresh');
+  if (r.ok && r.data?.token) {
+    setStoredToken(r.data.token);
+    return { ok: true, expires_at: r.data.expires_at ?? tokenExpiry(r.data.token) };
+  }
+  return { ok: false, code: r.data?.code || r.code || 'refresh_failed' };
 }
 
 // Sign-out must drop every auth-relevant token so a subsequent refresh reliably
