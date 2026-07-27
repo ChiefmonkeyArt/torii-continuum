@@ -139,6 +139,15 @@ export function loadConfig(path) {
 
   // Defaults for optional fields
   cfg.session_ttl_sec ??= 86400;
+  // Absolute ceiling on a refreshed session (v0.2.92-alpha, CONT-AUTH-1). A
+  // sliding session may renew without a new signature, but never past this many
+  // seconds from the ORIGINAL login — so refresh cannot quietly become a
+  // permanent credential. Floored at one TTL: a cap below the window it extends
+  // would refuse every refresh and is always a misconfiguration.
+  cfg.session_max_lifetime_sec ??= 604800; // 7 days
+  if (cfg.session_max_lifetime_sec < cfg.session_ttl_sec) {
+    cfg.session_max_lifetime_sec = cfg.session_ttl_sec;
+  }
   cfg.server.cors_origins ??= [];
   cfg.cashu ??= { mints: [], low_balance_warn_sats: 500, hard_floor_sats: 100 };
   // Hard cap on a single Lightning-QR top-up mint quote (v0.2.83-alpha). Applied
