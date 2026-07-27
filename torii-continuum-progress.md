@@ -9,6 +9,22 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.95-alpha — the public login screen that refreshed into the Dashboard (2026-07-27)
+
+**CONT-SESSION-1.** The reported regression: public login modal on screen, sign-in *not* successful, hard refresh opens the Dashboard. Storage and the screen disagreed, and on reload storage wins.
+
+One defect, two instances: `verifyChallenge` and `refreshSession` both persisted whatever came back the moment it came back, with no check that the intent which started the request was still current. Cancel mid-verify → the reply stores a session the operator can see no sign of and cannot sign out of. Sign out mid-renewal → the reply rewrites a live token behind the login screen and the renewal loop re-arms for the life of the tab. CONT-LOGIN-1's attempt-generation guard could not stop either, because it lives in `src/auth.js`, above the write in `src/data/agent.js`.
+
+- **Auth epoch, in the module that owns the storage.** `authEpochNow()` / `invalidateAuthWrites()`; both writers capture the epoch before their `await` and return `{ ok: false, code: 'superseded' }` instead of persisting across a bump. `logout()` bumps before clearing so a reply already on the wire cannot land behind it.
+- **An abandoned attempt persists nothing.** `endAttempt()` bumps the epoch, covering cancel, every stage timeout, and the absolute watchdog. The instant between the token landing and the abandonment check is closed by clearing that exact token — matched by identity, so a replacement attempt that already succeeded is never clobbered.
+- **The renewal loop stops when the session ends.** A superseded (or token-less) tick calls `stopSessionRefresh()` rather than backing off and retrying against a session that no longer exists.
+- **One boot authority.** Root uses `rehydrateSession()`, the same read `guarded()` uses, and navigates with `{ replace: true }`. An expired token therefore also drops its marker, so the login screen never renders beside a stale "signed in as".
+- **Local-first projects survive.** `continuum.v1` stays out of `OWNER_SCOPED_KEYS` — now covered by a test rather than only a comment.
+
+**Tests.** `src/session-persistence-integration.test.js`, 19 tests. Every refresh assertion performs a real hard refresh: destroy the window, reset the module registry, boot a new app against the same localStorage — so only what was *persisted* can influence the result. Covers public screen + refresh; declined / cancelled / timed-out signer + refresh; a verify landing after a cancel; stale token + refresh; sign-out + refresh; sign-out during a renewal; valid session refresh → dashboard with no login-modal frame; exactly one redirect on success; Back restoring neither the stale modal nor the protected view. Three of them fail on the pre-fix tree.
+
+Frontend **1648 pass / 57 files**; agent **412 pass**; `npm run build` clean.
+
 ## v0.2.94-alpha — the stalled Nostr login: every stage bounded, every failure recoverable (2026-07-27)
 
 One slice, CONT-LOGIN-1. **Not deployed from the subagent** — the parent hands the operator the deploy command block.

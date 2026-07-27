@@ -29,7 +29,9 @@ import {
   logout as clearSession,
   isAgentConfigured,
   getStoredToken,
+  clearStoredToken,
   sessionExpiry,
+  invalidateAuthWrites,
   refreshSession as refreshSessionToken,
 } from './data/agent.js';
 import {
@@ -190,6 +192,11 @@ function endAttempt(clearTimer = clearTimeout) {
   currentStage = null;
   attemptStatusSink = null;
   loginGeneration += 1;
+  // The generation above only retires OUR continuations; the token is written
+  // inside verifyChallenge, below this module. Retiring the auth epoch too is
+  // what stops an abandoned attempt from persisting a session nobody asked for.
+  // On the success path the write has already landed, so this is a no-op there.
+  invalidateAuthWrites();
 }
 
 /**
@@ -327,6 +334,14 @@ async function tick() {
   currentState = reduce(currentState, { type: 'refresh_started' });
   const result = await deps.refresh();
   const after = deps.nowSec();
+
+  // The session ended while we were waiting. Stop — do NOT back off and retry,
+  // which is what used to keep a renewal loop running behind the login screen
+  // for as long as the tab stayed open.
+  if (result?.superseded || !getStoredToken()) {
+    stopSessionRefresh();
+    return;
+  }
 
   if (result?.ok) {
     currentState = reduce(currentState, {
@@ -509,7 +524,18 @@ export async function startLogin(opts = {}) {
     // 3. Verify — bounded like the challenge.
     enter('verify');
     const verified = await verifyChallenge(signed, { timeoutMs: STAGE_TIMEOUTS_MS.verify });
-    if (!live()) return;
+    if (!live()) {
+      // Abandoned in the instant between the token landing and this check. The
+      // epoch could not catch this one, so undo it: the operator is looking at
+      // "Sign-in cancelled", and a session they cannot see is a session they
+      // cannot sign out of. Matched by exact token so a REPLACEMENT attempt
+      // that already succeeded is never clobbered.
+      if (verified.ok && verified.data?.token && getStoredToken() === verified.data.token) {
+        clearStoredToken();
+        writeSessionMarker(null);
+      }
+      return;
+    }
     if (!verified.ok) {
       fail('verify', verified.timeout ? 'timeout' : (verified.offline ? 'offline' : 'agent_rejected'), verified.reason);
       return;

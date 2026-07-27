@@ -108,8 +108,15 @@ function boot() {
   // Routes
   // Root is application-first: authed → dashboard, else render login in place.
   route('/', () => {
-    const target = rootTarget(isSessionLive());
-    if (target) { navigate(target); return; }
+    // Same authority as every guarded route (CONT-SESSION-1). Root used to ask
+    // isSessionLive() directly while guarded routes went through
+    // rehydrateSession(); rendering the public login screen from a weaker read
+    // than the guards use is how the screen and the next refresh came to
+    // disagree. rehydrateSession also drops a marker left behind by an expired
+    // token, so login never renders beside a stale "signed in as" artifact.
+    const { live } = rehydrateSession();
+    const target = rootTarget(live);
+    if (target) { navigate(target, { replace: true }); return; }
     setLandingMode(true); renderLogin(mainContent());
   });
   // Every non-root route is protected (default-deny in nav-guard): a logged-out
