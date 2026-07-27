@@ -99,6 +99,38 @@ export function setStoredToken(tok) {
 export function clearStoredToken() { setStoredToken(null); setSessionExpiry(null); }
 
 /**
+ * The auth epoch (CONT-SESSION-1).
+ *
+ * Two calls persist a session: the login verify and the background renewal.
+ * Both used to store whatever came back the moment it came back, with no check
+ * that the intent which started the request was still current. That is the
+ * whole bug: sign out (or cancel a login) while one is in flight and the reply
+ * lands afterwards, writing a live token underneath a UI that is now showing
+ * the public login screen. Nothing on screen changes, so nobody notices — until
+ * the next refresh reads storage, finds a valid session, and opens the
+ * dashboard. Storage and screen disagreed, and on reload storage wins.
+ *
+ * So every auth write is stamped with the epoch that was current when its
+ * request STARTED, and anything that invalidates in-flight auth intent (sign
+ * out, an abandoned login attempt) bumps it. A reply from a superseded epoch is
+ * reported, not persisted. The guard has to live here, in the module that owns
+ * the storage, because a guard in the caller sits ABOVE the write and cannot
+ * stop it — which is exactly how the previous attempt-generation check was
+ * bypassed.
+ */
+let authEpoch = 0;
+
+/** The current auth epoch. Capture before an auth request, compare after. */
+export function authEpochNow() { return authEpoch; }
+
+/**
+ * Invalidate every auth write already in flight. Called by sign-out and by an
+ * abandoned login attempt.
+ * @returns {number} the new epoch
+ */
+export function invalidateAuthWrites() { authEpoch += 1; return authEpoch; }
+
+/**
  * Persist (or clear) the expiry the AGENT stated when it issued this session.
  *
  * This is the authoritative signal, and it is why it is stored separately from
@@ -302,7 +334,12 @@ export async function requestChallenge(opts = {}) {
 }
 
 export async function verifyChallenge(event, opts = {}) {
+  const epoch = authEpochNow();
   const r = await req('POST', '/api/auth/verify', { event }, opts);
+  // Cancelled, timed out, or signed out while the agent was answering: the
+  // operator is looking at the public login screen, so this signature must not
+  // quietly become a session they never see and cannot get out of.
+  if (epoch !== authEpochNow()) return { ok: false, code: 'superseded', superseded: true };
   if (r.ok && r.data?.token) {
     setStoredToken(r.data.token);
     // Record the agent's own expiry BEFORE anybody is told the login worked, so
@@ -323,7 +360,11 @@ export async function verifyChallenge(event, opts = {}) {
  * @returns {Promise<{ok: boolean, code?: string, expires_at?: number}>}
  */
 export async function refreshSession() {
+  const epoch = authEpochNow();
   const r = await req('POST', '/api/auth/refresh');
+  // Signed out mid-renewal. Storing this would resurrect the session the
+  // operator just ended — and re-arm the renewal loop behind the login screen.
+  if (epoch !== authEpochNow()) return { ok: false, code: 'superseded', superseded: true };
   if (r.ok && r.data?.token) {
     setStoredToken(r.data.token);
     const exp = r.data.expires_at ?? tokenExpiry(r.data.token);
@@ -338,6 +379,8 @@ export async function refreshSession() {
 // handoff envelope (torii.session) — otherwise a stale onboarding token would
 // linger and be treated as a live agent hint after sign-out.
 export function logout() {
+  // Before clearing, so a reply already on the wire cannot land behind us.
+  invalidateAuthWrites();
   clearStoredToken();
   try { localStorage.removeItem(ONBOARDING_SESSION_KEY); } catch (_e) {}
   // Owner-scoped client state goes with the session. The chat log in particular
