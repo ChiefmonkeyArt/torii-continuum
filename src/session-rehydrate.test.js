@@ -28,7 +28,7 @@ const read = (p) => readFileSync(join(here, p), 'utf8');
 
 const TOKEN_KEY = 'continuum.session.v1';
 // A token whose exp (2nd field of iat.exp.pubkey.sig) is far in the future.
-const LIVE_TOKEN = '1.9999999999.deadbeefpub.sig';
+const LIVE_TOKEN = '1.9999999999.deadbeefpub.1.sig';
 
 class FakeStorage {
   constructor() { this.map = new Map(); }

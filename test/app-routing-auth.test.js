@@ -46,8 +46,8 @@ const stripComments = (s) =>
 const future = Math.floor(Date.now() / 1000) + 3600;
 const past = Math.floor(Date.now() / 1000) - 3600;
 const pubkey = 'a'.repeat(64);
-const liveToken = `1000.${future}.${pubkey}.deadbeefsig`;
-const deadToken = `1000.${past}.${pubkey}.deadbeefsig`;
+const liveToken = `1000.${future}.${pubkey}.1000.deadbeefsig`;
+const deadToken = `1000.${past}.${pubkey}.1000.deadbeefsig`;
 
 function makeStorageStub() {
   const map = new Map();

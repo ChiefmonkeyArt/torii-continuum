@@ -21,12 +21,12 @@ import {
   genesisCreate,
 } from './agent.js';
 
-// A live token mirrors the agent's `iat.exp.pubkey.sig` shape with a future exp.
+// A live token mirrors the agent's `iat.exp.pubkey.oiat.sig` shape, future exp.
 const future = Math.floor(Date.now() / 1000) + 3600;
 const past = Math.floor(Date.now() / 1000) - 3600;
 const pubkey = 'a'.repeat(64);
-const liveToken = `1000.${future}.${pubkey}.deadbeefsig`;
-const deadToken = `1000.${past}.${pubkey}.deadbeefsig`;
+const liveToken = `1000.${future}.${pubkey}.1000.deadbeefsig`;
+const deadToken = `1000.${past}.${pubkey}.1000.deadbeefsig`;
 
 function makeStorageStub() {
   const map = new Map();
@@ -72,7 +72,7 @@ describe('tokenLooksLive (HMAC-free liveness gate)', () => {
     expect(tokenLooksLive('')).toBe(false);
     expect(tokenLooksLive(null)).toBe(false);
     expect(tokenLooksLive(undefined)).toBe(false);
-    expect(tokenLooksLive(`1000.notanumber.${pubkey}.sig`)).toBe(false);
+    expect(tokenLooksLive(`1000.notanumber.${pubkey}.1000.sig`)).toBe(false);
   });
 
   it('honours an injected now', () => {
@@ -202,7 +202,7 @@ describe('req() request shape — bodyless POST must not carry a JSON content-ty
   });
 
   it('verifyChallenge posts the exact {event} body with a JSON content-type and stores the token', async () => {
-    const token = `1000.${future}.${pubkey}.sig`;
+    const token = `1000.${future}.${pubkey}.1000.sig`;
     mockFetch(200, { token, expires_at: future });
     const event = { kind: 22242, pubkey, content: 'c'.repeat(48), tags: [['challenge', 'c'.repeat(48)]], sig: 'ff', id: 'ee' };
     const r = await verifyChallenge(event);

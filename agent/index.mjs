@@ -518,6 +518,24 @@ app.post('/api/auth/verify', { config: rateLimitConfig(authVerifyMax, '/api/auth
   return { token: result.token, expires_at: result.expires_at };
 });
 
+// POST /api/auth/refresh — slide a still-valid session forward (CONT-AUTH-1).
+//
+// Deliberately NOT behind requireAdmin: the bearer token is the whole claim
+// being examined, and requireAdmin would collapse every refusal into one
+// generic 401. The browser state machine routes on the code — only
+// max_lifetime_reached means "go back to your signer" — so the codes are
+// reported distinctly. Rate-limited on the auth budget, since an attacker
+// holding a token should not get an unbounded renewal oracle.
+app.post('/api/auth/refresh', { config: rateLimitConfig(authVerifyMax, '/api/auth/refresh') }, async (req, reply) => {
+  const header = req.headers?.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  const result = auth.refreshSession(token);
+  if (!result.ok) {
+    return reply.code(401).send({ ok: false, code: result.code, reason: result.reason });
+  }
+  return { ok: true, token: result.token, expires_at: result.expires_at };
+});
+
 // ─────────────────────────────────────────────────────────────
 // Admin routes
 // ─────────────────────────────────────────────────────────────

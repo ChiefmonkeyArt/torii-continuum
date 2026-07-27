@@ -129,8 +129,8 @@ class FakeStorage {
 }
 
 const TOKEN_KEY = 'continuum.session.v1';
-// A token that isLoggedIn/tokenLooksLive accepts: `iat.exp.pubkey.sig`, exp>now.
-const LIVE_TOKEN = '1.9999999999.pk.sig';
+// A token isLoggedIn/tokenLooksLive accepts: `iat.exp.pubkey.oiat.sig`, exp>now.
+const LIVE_TOKEN = '1.9999999999.pk.1.sig';
 
 // Records the view the router actually rendered, so we can assert a protected
 // screen is NEVER shown to a logged-out visitor.

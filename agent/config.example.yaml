@@ -35,8 +35,20 @@ admin_npub: ""
 # Rotate any time; existing sessions become invalid.
 session_secret: "REPLACE_WITH_32_BYTES_HEX"
 
-# How long a session token stays valid (seconds). 24h default.
+# How long a session token stays valid (seconds). 24h default. The browser
+# renews it in the background before it lapses (CONT-AUTH-1), so this is the
+# window a stolen token is usable for — not how often you have to sign in.
 session_ttl_sec: 86400
+
+# ── Absolute session lifetime (v0.2.92-alpha, CONT-AUTH-1) ──
+# A session may slide forward without a new signature, but never past this many
+# seconds from the ORIGINAL login. Once reached, POST /api/auth/refresh answers
+# `max_lifetime_reached` and the owner signs a fresh kind-22242 challenge in
+# their NIP-07 signer. This is what stops silent renewal from turning a session
+# into a permanent credential — lower it for a shared or higher-risk machine.
+# Values below session_ttl_sec are raised to it (a cap under the window it
+# extends would refuse every refresh).
+session_max_lifetime_sec: 604800 # 7 days
 
 
 # ─────────────────────────────────────────────────────────────

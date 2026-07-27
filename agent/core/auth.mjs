@@ -424,14 +424,64 @@ export function createAuth(cfg, deps = {}) {
     return { ok: true, pubkey: event.pubkey };
   }
 
-  function issueSessionToken() {
+  /**
+   * Mint a session token `iat.exp.pubkey.oiat.sig`.
+   *
+   * `oiat` is the ORIGINAL issued-at — the moment the owner actually signed a
+   * NIP-07 challenge. A refresh carries it forward unchanged, which is what
+   * makes the absolute cap in `refreshSession` un-slideable: a stolen token can
+   * be renewed, but never past `oiat + session_max_lifetime_sec`, so the theft
+   * window is bounded by the original login rather than by the last refresh.
+   *
+   * `exp` is clamped to that same cap, so a token is never handed out claiming
+   * to outlive the session it belongs to.
+   *
+   * The pubkey deliberately stays at index 2, where the browser already reads
+   * it for display (`src/auth.js`) — appending `oiat` after it keeps that
+   * contract intact.
+   *
+   * @param {number|null} originIat carried forward on refresh; null on login
+   */
+  function issueSessionToken(originIat = null) {
     // Only ever called after a claim (or with a configured admin), so adminHex
     // is guaranteed non-null here.
     const iat = now();
-    const exp = iat + cfg.session_ttl_sec;
-    const payload = `${iat}.${exp}.${adminHex}`;
+    const oiat = Number.isFinite(originIat) ? originIat : iat;
+    const exp = Math.min(iat + cfg.session_ttl_sec, oiat + cfg.session_max_lifetime_sec);
+    const payload = `${iat}.${exp}.${adminHex}.${oiat}`;
     const sig = createHmac('sha256', cfg.session_secret).update(payload).digest('hex');
-    return { token: `${payload}.${sig}`, expiresAt: exp };
+    return { token: `${payload}.${sig}`, expiresAt: exp, originIat: oiat };
+  }
+
+  /**
+   * Slide a still-valid session forward without a new signature.
+   *
+   * Refusals are codes, not prose, because the browser state machine routes on
+   * them: `max_lifetime_reached` is terminal and must send the owner back to
+   * their signer, while `expired`/`invalid_session` mean this token is simply
+   * not a basis for anything. No refusal is retryable.
+   *
+   * @returns {{ok:true, token:string, expires_at:number}|{ok:false, code:string, reason:string}}
+   */
+  function refreshSession(token) {
+    const seen = verifySessionToken(token);
+    if (!seen.ok) {
+      const code = seen.reason === 'expired' ? 'expired' : 'invalid_session';
+      log.warn({ evt: 'auth.refresh.reject', code });
+      return { ok: false, code, reason: seen.reason };
+    }
+    const deadline = seen.oiat + cfg.session_max_lifetime_sec;
+    if (now() >= deadline) {
+      log.info({ evt: 'auth.refresh.reject', code: 'max_lifetime_reached' });
+      return {
+        ok: false,
+        code: 'max_lifetime_reached',
+        reason: 'session reached its maximum lifetime; sign in again',
+      };
+    }
+    const next = issueSessionToken(seen.oiat);
+    log.info({ evt: 'auth.refresh.success', expires_at: next.expiresAt });
+    return { ok: true, token: next.token, expires_at: next.expiresAt };
   }
 
   /**
@@ -440,17 +490,22 @@ export function createAuth(cfg, deps = {}) {
   function verifySessionToken(token) {
     if (!token || typeof token !== 'string') return { ok: false, reason: 'no token' };
     const parts = token.split('.');
-    if (parts.length !== 4) return { ok: false, reason: 'malformed' };
-    const [iatStr, expStr, pk, sig] = parts;
+    if (parts.length !== 5) return { ok: false, reason: 'malformed' };
+    const [iatStr, expStr, pk, oiatStr, sig] = parts;
     const iat = parseInt(iatStr, 10);
     const exp = parseInt(expStr, 10);
-    if (!Number.isFinite(iat) || !Number.isFinite(exp)) return { ok: false, reason: 'bad timestamps' };
+    const oiat = parseInt(oiatStr, 10);
+    if (!Number.isFinite(iat) || !Number.isFinite(exp) || !Number.isFinite(oiat)) {
+      return { ok: false, reason: 'bad timestamps' };
+    }
     if (exp < now()) return { ok: false, reason: 'expired' };
+    // A token may not claim to predate the login it descends from.
+    if (oiat > iat) return { ok: false, reason: 'bad timestamps' };
     // Unclaimed box: no valid session can exist yet.
     if (!adminHex || pk !== adminHex) return { ok: false, reason: 'not admin pubkey' };
 
     const expected = createHmac('sha256', cfg.session_secret)
-      .update(`${iat}.${exp}.${pk}`)
+      .update(`${iat}.${exp}.${pk}.${oiat}`)
       .digest('hex');
     let match = false;
     try {
@@ -460,7 +515,7 @@ export function createAuth(cfg, deps = {}) {
     }
     if (!match) return { ok: false, reason: 'bad signature' };
 
-    return { ok: true, npub: adminNpub, exp };
+    return { ok: true, npub: adminNpub, exp, iat, oiat };
   }
 
   return {
@@ -468,6 +523,7 @@ export function createAuth(cfg, deps = {}) {
     verifyChallenge,
     verifyActionSignature,
     verifySessionToken,
+    refreshSession,
     isClaimed: () => adminHex !== null,
     adminNpub: () => adminNpub,
     _challenges: challenges, // exposed for tests (read-only usage)

@@ -130,7 +130,7 @@ describe('confirmSignOut — opens a local confirmation modal', () => {
 
 describe('Cancel — no session clear, no navigation', () => {
   it('closes the modal but leaves both session keys intact and dispatches nothing', () => {
-    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.sig');
+    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.1.sig');
     localStorage.setItem(ONBOARDING_KEY, JSON.stringify({ token: 't' }));
     const onChange = vi.fn();
     document.addEventListener('continuum:session-changed', onChange);
@@ -139,7 +139,7 @@ describe('Cancel — no session clear, no navigation', () => {
     findButton(backdrop(), 'Cancel').click();
 
     // Session untouched.
-    expect(localStorage.getItem(TOKEN_KEY)).toBe('1.9999999999.pk.sig');
+    expect(localStorage.getItem(TOKEN_KEY)).toBe('1.9999999999.pk.1.sig');
     expect(localStorage.getItem(ONBOARDING_KEY)).toBe(JSON.stringify({ token: 't' }));
     // No session-change → no navigation was triggered.
     expect(onChange).not.toHaveBeenCalled();
@@ -153,7 +153,7 @@ describe('Cancel — no session clear, no navigation', () => {
 
 describe('Yes — purely local logout that routes to the login modal', () => {
   it('removes both session keys and dispatches continuum:session-changed', () => {
-    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.sig');
+    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.1.sig');
     localStorage.setItem(ONBOARDING_KEY, JSON.stringify({ token: 't' }));
     const onChange = vi.fn();
     document.addEventListener('continuum:session-changed', onChange);
@@ -173,7 +173,7 @@ describe('Yes — purely local logout that routes to the login modal', () => {
   });
 
   it('never invokes window.nostr / NIP-07 on the sign-out path', () => {
-    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.sig');
+    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.1.sig');
     confirmSignOut();
     findButton(backdrop(), 'Yes').click();
     expect(signerCalls.signEvent).toBe(0);
@@ -194,7 +194,7 @@ describe('signOutOutcomes — pure decision logic', () => {
 
 describe('multi-tab sign-out — localStorage sentinel broadcast', () => {
   it('endSession() clears both keys, writes the sign-out sentinel, and dispatches once', () => {
-    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.sig');
+    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.1.sig');
     localStorage.setItem(ONBOARDING_KEY, JSON.stringify({ token: 't' }));
     const onChange = vi.fn();
     document.addEventListener('continuum:session-changed', onChange);
@@ -209,7 +209,7 @@ describe('multi-tab sign-out — localStorage sentinel broadcast', () => {
   });
 
   it('endSession({localOnly:true}) clears + dispatches but does NOT re-broadcast', () => {
-    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.sig');
+    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.1.sig');
     const onChange = vi.fn();
     document.addEventListener('continuum:session-changed', onChange);
 
@@ -252,14 +252,14 @@ describe('session marker — non-secret rehydrate sentinel (SESSION-REHYDRATE-1)
   });
 
   it('endSession() also clears the session marker (writer-tab local clear)', () => {
-    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.sig');
+    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.1.sig');
     writeSessionMarker({ npub: 'pk', connected_at: 1 });
     endSession();
     expect(readSessionMarker()).toBeNull();
   });
 
   it('rehydrateSession: a live token yields live=true and returns the marker', () => {
-    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.sig');
+    localStorage.setItem(TOKEN_KEY, '1.9999999999.pk.1.sig');
     writeSessionMarker({ npub: 'pk', connected_at: 42 });
     const r = rehydrateSession();
     expect(r.live).toBe(true);

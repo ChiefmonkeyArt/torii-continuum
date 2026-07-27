@@ -179,7 +179,8 @@ The demo build at `continuum-torii.pplx.app` intentionally omits
 ## 8. Rotating things
 
 - **Session secret**: change `auth.session_secret` and restart. All
-  existing session tokens are invalidated immediately.
+  existing session tokens are invalidated immediately — including refreshed
+  ones, since the HMAC covers every field.
 - **Admin npub**: change `auth.admin_npub` and restart.
 - **Wallet**: proofs live in `memory/wallet/<mint-slug>.json`. Back them
   up (mode 0600); losing this file loses the sats.
@@ -339,6 +340,53 @@ raw proxy 504.
 
 ---
 
+### Sliding sessions and the absolute cap (v0.2.92-alpha, CONT-AUTH-1)
+
+A session token used to be a single fixed window: it worked until `exp`, then
+stopped, mid-keystroke, and the operator's first warning was a bounce to the
+login page. Making the window longer would have traded that for a worse
+problem — a stolen token usable for as long as the window.
+
+So the session now slides. The browser watches its own token and, once inside
+the last five minutes, calls `POST /api/auth/refresh` with it; the agent mints a
+replacement. No signer prompt, no interruption. A renewal that fails on a flaky
+network changes nothing — the current token is still valid, so the browser keeps
+working and retries.
+
+What stops this becoming a permanent credential is that renewal cannot extend
+the session's *origin*. Every token carries `oiat`, the moment the owner
+actually signed a challenge, and a refresh copies it forward untouched:
+
+```
+token = iat . exp . pubkey . oiat . sig       (HMAC-SHA256 over the first four)
+
+  exp  = min(now + session_ttl_sec, oiat + session_max_lifetime_sec)
+  cap  = oiat + session_max_lifetime_sec      ← unmovable by any refresh
+```
+
+Past the cap the agent answers `max_lifetime_reached` and the owner signs a
+fresh kind-22242 challenge in their NIP-07 signer. So `session_ttl_sec` bounds
+how long a *stolen* token is useful, and `session_max_lifetime_sec` bounds how
+long a *session* can live on renewals alone. Tighten the first for exposure,
+the second for how often a human must re-authenticate.
+
+Refusals are distinct codes rather than one generic 401, because the browser's
+session state machine routes on them:
+
+| code | meaning | browser does |
+| --- | --- | --- |
+| `expired` | the token's own window has closed | back to the signer |
+| `invalid_session` | absent, malformed, tampered, or not this admin's | back to the signer |
+| `max_lifetime_reached` | still valid, but the cap is reached — no more renewals | back to the signer |
+
+None is retryable. Only a *transport* failure is, and that never reaches the
+agent to be given a code.
+
+> **Upgrading:** the `oiat` field changes the token shape, so sessions issued by
+> an older agent are rejected once. Everyone signs in again exactly one time
+> after this upgrade — a token with no origin claim cannot have a cap enforced
+> against it.
+
 ## 10. HTTP API reference (v0.2.14-alpha)
 
 All endpoints under `/api/` except the auth pair are admin-gated. Send
@@ -348,6 +396,9 @@ All endpoints under `/api/` except the auth pair are admin-gated. Send
 - `GET /api/health`
 - `POST /api/auth/challenge` — rate-limited (default 10 req/min/IP)
 - `POST /api/auth/verify` — rate-limited (default 20 req/min/IP)
+- `POST /api/auth/refresh` — renews the bearer token you send; rate-limited on
+  the same budget as verify. Not admin-gated, because the token *is* the claim
+  being examined (see below).
 
 Rate limits are per client IP (nginx passes `X-Forwarded-For` to the
 loopback-bound agent). Tune or disable in `config.yaml` §`rate_limit`:

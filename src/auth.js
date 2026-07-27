@@ -29,7 +29,17 @@ import {
   logout as clearSession,
   isAgentConfigured,
   getStoredToken,
+  tokenExpiry,
+  refreshSession as refreshSessionToken,
 } from './data/agent.js';
+import {
+  STATES,
+  classify,
+  reduce,
+  shouldRefresh,
+  msUntilRefresh,
+  RETRY_BACKOFF_MS,
+} from './session-state.js';
 
 const NIP42_KIND = 22242;
 // Give the extension a bounded window to answer. A user who never approves (or a
@@ -96,6 +106,10 @@ export function rehydrateSession() {
   const live = isSessionLive();
   const marker = readSessionMarker();
   if (marker && !live) { writeSessionMarker(null); }
+  // A tab that rehydrates an existing session owns its renewal too — otherwise
+  // only the tab that performed the sign-in would keep the session alive, and
+  // reloading the page would silently stop the clock.
+  if (live) startSessionRefresh();
   return { live, marker: live ? marker : null };
 }
 
@@ -161,6 +175,7 @@ export function isSessionLive() { return isLoggedIn(); }
  * @param {{localOnly?: boolean}} [opts]
  */
 export function endSession(opts = {}) {
+  stopSessionRefresh();
   clearSession();
   writeSessionMarker(null);
   if (!opts.localOnly) {
@@ -170,6 +185,120 @@ export function endSession(opts = {}) {
     dispatchSameTabSignout();
   }
   document.dispatchEvent(new CustomEvent('continuum:session-changed'));
+}
+
+// ─── Session refresh (CONT-AUTH-1) ──────────────────────────
+//
+// The state machine in session-state.js decides WHAT should happen; this is the
+// only place that owns a timer and performs the side effects. One timer at a
+// time, always cancelled before a new one is armed, so a re-entrant call (a
+// second tab waking, a sign-in while a timer is pending) cannot leave two
+// renewal loops running against the same session.
+
+let refreshTimer = null;
+let currentState = STATES.ANONYMOUS;
+let deps = null;
+
+/** The live session state. Exported for the UI and for assertions. */
+export function sessionState() {
+  return currentState;
+}
+
+/** Cancel any pending renewal and forget the session state. */
+export function stopSessionRefresh() {
+  if (refreshTimer !== null) {
+    (deps?.clearTimer || clearTimeout)(refreshTimer);
+    refreshTimer = null;
+  }
+  currentState = STATES.ANONYMOUS;
+}
+
+/**
+ * Begin keeping the current session alive.
+ *
+ * Dependencies are injectable so the loop is testable without real time or a
+ * network; production passes nothing.
+ *
+ * A refusal that the agent calls terminal (`max_lifetime_reached`) ends the
+ * session immediately — the owner has to visit their signer again, and
+ * pretending otherwise would just fail every subsequent call. Any other
+ * failure leaves the still-valid token alone and simply tries again later: a
+ * flaky network is not a reason to throw somebody out of their work.
+ */
+export function startSessionRefresh(overrides = {}) {
+  stopSessionRefresh();
+  deps = {
+    setTimer: setTimeout,
+    clearTimer: clearTimeout,
+    nowSec: () => Math.floor(Date.now() / 1000),
+    refresh: refreshSessionToken,
+    onExpired: () => endSession(),
+    ...overrides,
+  };
+
+  const expiry = () => tokenExpiry(getStoredToken());
+
+  currentState = classify(expiry(), deps.nowSec());
+  if (currentState === STATES.ANONYMOUS) return currentState;
+  if (currentState === STATES.EXPIRED) {
+    deps.onExpired();
+    return currentState;
+  }
+  arm();
+  return currentState;
+}
+
+function arm(delayOverrideMs = null) {
+  if (!deps) return;
+  const wait = delayOverrideMs === null
+    ? msUntilRefresh(tokenExpiry(getStoredToken()), deps.nowSec())
+    : delayOverrideMs;
+  if (wait === null) return;
+  refreshTimer = deps.setTimer(tick, wait);
+}
+
+async function tick() {
+  if (!deps) return;
+  refreshTimer = null;
+  const now = deps.nowSec();
+  currentState = reduce(currentState, { type: 'tick', expiresAt: tokenExpiry(getStoredToken()), now });
+
+  if (currentState === STATES.EXPIRED) {
+    deps.onExpired();
+    return;
+  }
+  if (!shouldRefresh(currentState)) {
+    arm();
+    return;
+  }
+
+  currentState = reduce(currentState, { type: 'refresh_started' });
+  const result = await deps.refresh();
+  const after = deps.nowSec();
+
+  if (result?.ok) {
+    currentState = reduce(currentState, {
+      type: 'refresh_ok',
+      expiresAt: result.expires_at ?? tokenExpiry(getStoredToken()),
+      now: after,
+    });
+    arm();
+    return;
+  }
+
+  currentState = reduce(currentState, {
+    type: 'refresh_failed',
+    code: result?.code,
+    expiresAt: tokenExpiry(getStoredToken()),
+    now: after,
+  });
+  if (currentState === STATES.EXPIRED) {
+    deps.onExpired();
+    return;
+  }
+  // Still authorised — back off rather than retrying against a flaky agent as
+  // fast as the event loop allows.
+  arm(RETRY_BACKOFF_MS);
 }
 
 /**
@@ -281,9 +410,10 @@ export async function startLogin(opts = {}) {
     // 4. Success → persist the non-secret session marker (so a fresh tab can
     // rehydrate the authenticated shell) then let the router navigate to the
     // dashboard. The pubkey is the third field of the HMAC token
-    // (iat.exp.pubkey.sig) — display-only, never the secret key.
+    // (iat.exp.pubkey.oiat.sig) — display-only, never the secret key.
     const pubkey = (getStoredToken() || '').split('.')[2] || '';
     writeSessionMarker({ npub: pubkey, connected_at: Math.floor(Date.now() / 1000) });
+    startSessionRefresh();
     say('done', 'Signed in.', { done: true });
     document.dispatchEvent(new CustomEvent('continuum:session-changed'));
   } finally {
