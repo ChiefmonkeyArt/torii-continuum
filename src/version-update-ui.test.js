@@ -42,8 +42,19 @@ describe('login view (src/views/login.js) — direct login + version display', (
     expect(login).not.toContain('requestUpdate');
   });
 
-  it('offers signer install links when the extension is missing', () => {
-    expect(login).toContain('signerMissing');
+  // CONT-LOGIN-1: the install links (and every other recovery affordance) moved
+  // into ONE renderer shared with the sidebar, which used to render plain text —
+  // so the same failure gave install links on one surface and a dead sentence
+  // on the other. The lock now guards the sharing, not a duplicated literal.
+  it('renders status through the shared recovery-capable renderer', () => {
+    expect(login).toContain("from '../components/login-status.js'");
+    expect(login).toContain('renderLoginStatus(inlineStatus');
+    expect(login).not.toContain('chromewebstore.google.com');
+  });
+
+  it('wires both recovery paths into the status renderer', () => {
+    expect(login).toContain('onRetry');
+    expect(login).toContain('onCancel: cancelLogin');
   });
 });
 

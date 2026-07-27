@@ -16,7 +16,8 @@
  */
 
 import { h, clear } from './util.js';
-import { startLogin } from '../auth.js';
+import { startLogin, cancelLogin } from '../auth.js';
+import { renderLoginStatus } from '../components/login-status.js';
 import { isAgentConfigured, versionInfo } from '../data/agent.js';
 import { describeVersionState } from '../data/release.js';
 import { toriiSvg } from './landing.js';
@@ -43,11 +44,17 @@ export function renderLogin(mount) {
     h('span', { class: 'login-version-current', text: version }),
   ]);
 
-  const onStatus = (s) => renderInlineStatus(inlineStatus, s);
+  // Retry re-enters the SAME entry point the button uses, so a recovered
+  // attempt is indistinguishable from a first one.
+  const attempt = () => startLogin({ onStatus });
+  const onStatus = (s) => renderLoginStatus(inlineStatus, s, {
+    onRetry: attempt,
+    onCancel: cancelLogin,
+  });
 
   const loginBtn = h('button', {
     class: 'primary login-btn',
-    onClick: () => startLogin({ onStatus }),
+    onClick: attempt,
     'aria-label': agentReachable ? 'Sign in with nostr extension' : 'Sign in requires a self-hosted agent',
     title: agentReachable ? 'Sign in with Plebeian Signer' : 'Requires a self-hosted agent',
   }, [agentReachable ? 'Sign in with nostr extension' : 'Login (requires self-hosted agent)']);
@@ -115,20 +122,5 @@ function renderVersionRow(el, state, currentStamp) {
     }));
   } else if (state.state === 'current') {
     el.appendChild(h('span', { class: 'login-version-badge current', text: 'Up to date' }));
-  }
-}
-
-// Render inline login status/errors. Signer-missing adds install links.
-function renderInlineStatus(el, s) {
-  clear(el);
-  if (!s || !s.message) { el.className = 'login-inline-status'; return; }
-  el.className = `login-inline-status${s.error ? ' error' : ''}${s.done ? ' done' : ''}`;
-  el.appendChild(h('span', { class: 'login-inline-msg', text: s.message }));
-  if (s.signerMissing) {
-    el.appendChild(h('div', { class: 'login-inline-links' }, [
-      h('a', { href: 'https://chromewebstore.google.com/detail/plebeian-signer-nostr-ide/ijbiankmnehjephbkfdgphckcdgbgoho', target: '_blank', rel: 'noopener' }, ['Chrome']),
-      h('span', { class: 'login-links-sep', 'aria-hidden': 'true' }, [' · ']),
-      h('a', { href: 'https://addons.mozilla.org/en-US/firefox/addon/plebeian-signer/', target: '_blank', rel: 'noopener' }, ['Firefox']),
-    ]));
   }
 }
