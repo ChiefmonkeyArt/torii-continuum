@@ -293,12 +293,16 @@ async function req(method, path, body, { timeoutMs = DEFAULT_CLIENT_TIMEOUT_MS }
 
 // ─── Auth ───────────────────────────────────────────────────
 
-export async function requestChallenge() {
-  return req('POST', '/api/auth/challenge');
+// Both auth calls take an explicit deadline. Login is a click the operator is
+// actively waiting on, so it sets far tighter per-stage budgets than the generic
+// client default (which is sized for a model generating chat tokens) — see
+// src/login-stages.js. Omitting the option keeps the default.
+export async function requestChallenge(opts = {}) {
+  return req('POST', '/api/auth/challenge', undefined, opts);
 }
 
-export async function verifyChallenge(event) {
-  const r = await req('POST', '/api/auth/verify', { event });
+export async function verifyChallenge(event, opts = {}) {
+  const r = await req('POST', '/api/auth/verify', { event }, opts);
   if (r.ok && r.data?.token) {
     setStoredToken(r.data.token);
     // Record the agent's own expiry BEFORE anybody is told the login worked, so

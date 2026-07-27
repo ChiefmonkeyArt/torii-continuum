@@ -459,6 +459,40 @@
   border-bottom: 1px dotted hsl(var(--primary) / 0.5);
 }
 
+/* CONT-LOGIN-1: progress + recovery affordances, shared by both surfaces. */
+.login-inline-step,
+.sidebar-login-status .login-inline-step {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.login-inline-status.slow,
+.sidebar-login-status.slow { color: hsl(38 85% 68%); }
+.login-inline-actions,
+.sidebar-login-status .login-inline-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 6px;
+}
+.login-inline-btn {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: inherit;
+  background: hsl(var(--primary) / 0.08);
+  border: 1px solid hsl(var(--primary) / 0.35);
+}
+.login-inline-btn:hover { background: hsl(var(--primary) / 0.18); }
+.login-inline-btn.primary {
+  background: hsl(var(--primary) / 0.25);
+  border-color: hsl(var(--primary) / 0.6);
+}
+.sidebar-login-status .login-inline-actions { justify-content: flex-start; }
+
 /* VERSION-UPDATE-1: pre-login current + latest version (non-interactive). */
 .login-version {
   display: flex;

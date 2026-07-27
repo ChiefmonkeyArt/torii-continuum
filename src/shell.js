@@ -5,12 +5,13 @@
 
 import { navigate, currentRoute } from './router.js';
 import { listProjects } from './data/store.js';
-import { isSessionLive, startLogin, endSession } from './auth.js';
+import { isSessionLive, startLogin, cancelLogin, endSession } from './auth.js';
 import { isAgentConfigured, versionInfo, requestUpdate } from './data/agent.js';
 import { describeVersionState, updateTargetTag } from './data/release.js';
 import { h, openModal } from './views/util.js';
 import { demoAware } from './demo/demo-mode.js';
 import { navClickTarget } from './components/nav-link.js';
+import { renderLoginStatus } from './components/login-status.js';
 
 const NAV_ITEMS = [
   { id: 'projects',    label: 'Projects',    icon: iconProjects,    path: '/projects' },
@@ -123,7 +124,7 @@ export function renderSidebar() {
     // re-renders itself instead of starting a redundant challenge.
     if (authed) { confirmSignOut(); return; }
     if (isSessionLive()) { renderSidebar(); return; }
-    startLogin({ onStatus: (s) => renderLoginStatus(loginStatusEl, s) });
+    startLogin({ onStatus: sidebarLoginStatus(loginStatusEl) });
   });
   sidebarEl.querySelectorAll('.nav-item').forEach((el) => {
     // Real anchors now (href baked with demoAware at render time, so hover URL,
@@ -235,12 +236,17 @@ function pollForUpgrade(tag, attempts = 0) {
   }, 15000);
 }
 
-// Inline login status sink for the sidebar login button (no modal).
-function renderLoginStatus(el, s) {
-  if (!el) return;
-  if (!s || !s.message) { el.textContent = ''; el.className = 'sidebar-login-status'; return; }
-  el.className = `sidebar-login-status${s.error ? ' error' : ''}`;
-  el.textContent = s.message;
+// Inline login status sink for the sidebar login button (no modal). The
+// renderer is SHARED with the login card — the sidebar used to render plain
+// text, so the same failure offered install links on one surface and a dead
+// sentence on the other.
+function sidebarLoginStatus(el) {
+  const sink = (s) => renderLoginStatus(el, s, {
+    baseClass: 'sidebar-login-status',
+    onRetry: () => startLogin({ onStatus: sink }),
+    onCancel: cancelLogin,
+  });
+  return sink;
 }
 
 // The two outcomes of the sign-out confirmation, as plain callbacks so the

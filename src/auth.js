@@ -40,11 +40,17 @@ import {
   msUntilRefresh,
   RETRY_BACKOFF_MS,
 } from './session-state.js';
+import {
+  STAGE_TIMEOUTS_MS,
+  LOGIN_DEADLINE_MS,
+  SIGNER_SLOW_HINT_MS,
+  stageMessage,
+  stageLabel,
+  describeStageFailure,
+  busyStatus,
+} from './login-stages.js';
 
 const NIP42_KIND = 22242;
-// Give the extension a bounded window to answer. A user who never approves (or a
-// wedged extension) resolves as a clean timeout instead of hanging the button.
-const SIGNER_TIMEOUT_MS = 90_000;
 
 // Cross-tab sign-out broadcast. Writing this key fires a `storage` event in
 // every OTHER tab of the same origin (never the writer), so a sign-out in one
@@ -151,14 +157,59 @@ function dispatchSameTabSignout() {
   } catch (_e) {}
 }
 
-// Race guard: at most one login attempt in flight across ALL surfaces.
+// ─── Login attempt state (CONT-LOGIN-1) ─────────────────────
+//
+// At most one attempt in flight across ALL surfaces. The generation counter is
+// what makes an attempt genuinely abandonable: cancelling (or the watchdog
+// firing) bumps it, and every continuation checks it before touching shared
+// state. A signer that finally answers ten seconds after the operator gave up
+// therefore cannot store a token, dispatch a session change, or write status
+// over whatever the UI is showing now.
 let loginInFlight = false;
+let loginGeneration = 0;
+let currentStage = null;
+let attemptTimers = [];
+let attemptStatusSink = null;
 
 export function hasSigner() {
   return typeof window !== 'undefined' && window.nostr && typeof window.nostr.signEvent === 'function';
 }
 
 export function isLoginInFlight() { return loginInFlight; }
+
+/** Which stage the in-flight attempt is on, or null when idle. */
+export function loginStage() { return currentStage; }
+
+// Drop every timer this attempt armed and release the latch. Bumping the
+// generation is what retires any continuation still waiting on a promise we
+// have stopped caring about.
+function endAttempt(clearTimer = clearTimeout) {
+  for (const t of attemptTimers) { try { clearTimer(t); } catch (_e) {} }
+  attemptTimers = [];
+  loginInFlight = false;
+  currentStage = null;
+  attemptStatusSink = null;
+  loginGeneration += 1;
+}
+
+/**
+ * Abandon the in-flight login attempt.
+ *
+ * The operator needs this far more often than the flow's design admitted: the
+ * signer popup opens behind the window, or is dismissed by reflex, and the old
+ * UI then offered a 90-second wait with a dead button and no way out. Cancelling
+ * is purely local — no request, no signer call — and leaves any existing session
+ * untouched, so it can never log anybody out.
+ * @returns {boolean} true if an attempt was actually cancelled
+ */
+export function cancelLogin() {
+  if (!loginInFlight) return false;
+  const say = attemptStatusSink;
+  const stage = currentStage;
+  endAttempt();
+  if (say) say({ phase: 'cancelled', ...describeStageFailure(stage, 'cancelled') });
+  return true;
+}
 
 export function isSessionLive() { return isLoggedIn(); }
 
@@ -329,7 +380,7 @@ export function buildLoginEvent(challenge, origin, nowMs = Date.now()) {
  * @param {() => any} [makeTimer] injectable setTimeout for tests
  * @returns {Promise<T>}
  */
-export function withTimeout(promise, ms, makeTimer = setTimeout) {
+export function withTimeout(promise, ms, makeTimer = setTimeout, killTimer = clearTimeout) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const t = makeTimer(() => {
@@ -338,8 +389,8 @@ export function withTimeout(promise, ms, makeTimer = setTimeout) {
       reject(new Error('timeout'));
     }, ms);
     Promise.resolve(promise).then(
-      (v) => { if (!settled) { settled = true; clearTimeout(t); resolve(v); } },
-      (e) => { if (!settled) { settled = true; clearTimeout(t); reject(e); } },
+      (v) => { if (!settled) { settled = true; killTimer(t); resolve(v); } },
+      (e) => { if (!settled) { settled = true; killTimer(t); reject(e); } },
     );
   });
 }
@@ -352,59 +403,115 @@ export function withTimeout(promise, ms, makeTimer = setTimeout) {
  */
 export async function startLogin(opts = {}) {
   const onStatus = typeof opts.onStatus === 'function' ? opts.onStatus : () => {};
-  const say = (phase, message, extra = {}) => onStatus({ phase, message, ...extra });
+  const setTimer = opts.setTimer || setTimeout;
+  const clearTimer = opts.clearTimer || clearTimeout;
 
-  // Double-invocation / race guard.
-  if (loginInFlight) return;
+  // A click on an already-running attempt is ANSWERED, never swallowed. The old
+  // bare `return` here is the single most common way this login was experienced
+  // as stalled: something was happening, but asking again produced nothing at
+  // all, so the button read as dead.
+  if (loginInFlight) { onStatus(busyStatus(currentStage)); return; }
 
   // Demo build with no agent: explain inline, do not invoke a signer.
   if (!isAgentConfigured()) {
-    say('unavailable', 'Login requires a self-hosted agent. See agent/README.md to bring up your Torii.', { error: true });
+    onStatus({ phase: 'unavailable', ...describeStageFailure('challenge', 'no_agent') });
     return;
   }
 
   // No NIP-07 extension: keep the useful "install a signer" guidance, inline.
   if (!hasSigner()) {
-    say('no-signer', 'No NIP-07 signer found. Install Plebeian Signer, then try again.', { error: true, signerMissing: true });
+    onStatus({ phase: 'error', ...describeStageFailure('challenge', 'no_signer'), signerMissing: true });
     return;
   }
 
+  const gen = ++loginGeneration;
   loginInFlight = true;
+  attemptStatusSink = onStatus;
+  attemptTimers = [];
+  const live = () => gen === loginGeneration;
+
+  // Only ever speak for the attempt we belong to. A stage that settles after a
+  // cancel must not overwrite the status line the operator is now reading.
+  const say = (s) => { if (live()) onStatus(s); };
+  const enter = (stage, extra = {}) => {
+    if (!live()) return;
+    currentStage = stage;
+    say({
+      phase: stage,
+      stage,
+      step: stageLabel(stage),
+      message: stageMessage(stage),
+      cancellable: stage === 'signer',
+      ...extra,
+    });
+  };
+  const fail = (stage, kind, detail) => {
+    say({ phase: 'error', ...describeStageFailure(stage, kind, { detail }) });
+  };
+
+  // The never-wedge guarantee. Whatever happens inside — a stage that never
+  // settles, an extension that resolves long after its own deadline, a promise
+  // nobody rejects — the attempt is finished by this point and the latch is
+  // released. The latch must not be only as reliable as a browser extension.
+  attemptTimers.push(setTimer(() => {
+    if (!live()) return;
+    const stalled = currentStage;
+    endAttempt(clearTimer);
+    onStatus({ phase: 'error', ...describeStageFailure(stalled, 'timeout') });
+  }, LOGIN_DEADLINE_MS));
+
   try {
-    // 1. Challenge
-    say('challenge', 'Requesting challenge from your agent…');
-    const chal = await requestChallenge();
+    // 1. Challenge — bounded by its own deadline, not the generic client budget.
+    enter('challenge');
+    const chal = await requestChallenge({ timeoutMs: STAGE_TIMEOUTS_MS.challenge });
+    if (!live()) return;
     if (!chal.ok) {
-      say('error', `Could not reach agent: ${chal.reason}`, { error: true });
+      fail('challenge', chal.timeout ? 'timeout' : 'offline', chal.timeout ? '' : chal.reason);
       return;
     }
     const { challenge } = chal.data;
 
-    // 2. Sign directly in the extension (bounded by a timeout).
-    say('signing', 'Waiting for your signer to approve the login…');
+    // 2. Sign in the extension. This is the only human-scale wait, so it is the
+    // only stage that is cancellable and the only one that escalates its copy
+    // when it runs long — a screen that still looks like it is trying is worth
+    // a great deal against one that looks hung.
+    enter('signer');
+    attemptTimers.push(setTimer(() => {
+      if (live() && currentStage === 'signer') {
+        say({
+          phase: 'signer',
+          stage: 'signer',
+          step: stageLabel('signer'),
+          message: stageMessage('signer', { slow: true }),
+          cancellable: true,
+          slow: true,
+        });
+      }
+    }, SIGNER_SLOW_HINT_MS));
+
     let signed;
     try {
       signed = await withTimeout(
         window.nostr.signEvent(buildLoginEvent(challenge, window.location.origin)),
-        SIGNER_TIMEOUT_MS,
+        STAGE_TIMEOUTS_MS.signer,
+        setTimer,
+        clearTimer,
       );
     } catch (e) {
-      const reason = e && e.message === 'timeout'
-        ? 'Signer timed out. Approve the request in your extension, then try again.'
-        : `Signer declined: ${e?.message || e}`;
-      say('error', reason, { error: true });
+      if (!live()) return;
+      if (e && e.message === 'timeout') fail('signer', 'timeout');
+      else fail('signer', 'rejected', e?.message || String(e));
       return;
     }
-    if (!signed || typeof signed !== 'object') {
-      say('error', 'Signer returned no signature. Try again.', { error: true });
-      return;
-    }
+    if (!live()) return;
+    if (!signed || typeof signed !== 'object') { fail('signer', 'empty'); return; }
 
-    // 3. Verify
-    say('verifying', 'Verifying signature…');
-    const verified = await verifyChallenge(signed);
+    // 3. Verify — bounded like the challenge.
+    enter('verify');
+    const verified = await verifyChallenge(signed, { timeoutMs: STAGE_TIMEOUTS_MS.verify });
+    if (!live()) return;
     if (!verified.ok) {
-      say('error', `Agent rejected the signature: ${verified.reason}`, { error: true });
+      fail('verify', verified.timeout ? 'timeout' : (verified.offline ? 'offline' : 'agent_rejected'), verified.reason);
       return;
     }
 
@@ -415,9 +522,11 @@ export async function startLogin(opts = {}) {
     const pubkey = (getStoredToken() || '').split('.')[2] || '';
     writeSessionMarker({ npub: pubkey, connected_at: Math.floor(Date.now() / 1000) });
     startSessionRefresh();
-    say('done', 'Signed in.', { done: true });
+    say({ phase: 'done', message: 'Signed in.', done: true });
     document.dispatchEvent(new CustomEvent('continuum:session-changed'));
   } finally {
-    loginInFlight = false;
+    // Only tear down if we are still the current attempt — a cancel has already
+    // torn down and may have started a replacement we must not disturb.
+    if (live()) endAttempt(clearTimer);
   }
 }

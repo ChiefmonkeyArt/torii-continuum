@@ -71,21 +71,40 @@ describe('src/auth.js — direct invocation, no modal (source structure)', () =>
     expect(auth).not.toMatch(/openModal|showModal|LoginModal|login-modal/);
   });
 
-  it('guards against double invocation / races with an in-flight flag', () => {
+  // CONT-LOGIN-1 strengthened this: the old guard was `if (loginInFlight)
+  // return;` — a SILENT no-op, which to the operator is a dead button and is
+  // the most common way a stalled login is actually experienced. A second
+  // click must now always be answered.
+  it('answers a click during an in-flight attempt instead of returning silently', () => {
     expect(auth).toContain('loginInFlight');
-    expect(auth).toMatch(/if \(loginInFlight\) return/);
+    expect(auth).not.toMatch(/if \(loginInFlight\) return/);
+    expect(auth).toMatch(/if \(loginInFlight\)[\s\S]{0,120}busyStatus\(/);
   });
 
-  it('bounds the signer with a timeout', () => {
-    expect(auth).toContain('SIGNER_TIMEOUT_MS');
+  it('bounds every stage, not only the signer', () => {
+    expect(auth).toContain('STAGE_TIMEOUTS_MS.challenge');
+    expect(auth).toContain('STAGE_TIMEOUTS_MS.signer');
+    expect(auth).toContain('STAGE_TIMEOUTS_MS.verify');
     expect(auth).toMatch(/withTimeout\(/);
+  });
+
+  // The never-wedge guarantee: whatever happens inside an attempt, the absolute
+  // deadline releases the latch. Without it the latch is only as reliable as
+  // the least reliable thing it awaits — a browser extension.
+  it('caps the whole attempt with an absolute deadline that releases the latch', () => {
+    expect(auth).toContain('LOGIN_DEADLINE_MS');
+    expect(auth).toMatch(/endAttempt\(/);
+  });
+
+  it('exports a way out of the human-scale stage', () => {
+    expect(auth).toMatch(/export function cancelLogin\(/);
   });
 
   it('dispatches session-changed only after a verified signature', () => {
     expect(auth).toContain("continuum:session-changed");
     // The verify call and the success dispatch both live in the flow body; the
     // dispatch must come after the verify call (not the leading docstring).
-    const verifyIdx = auth.indexOf('await verifyChallenge(signed)');
+    const verifyIdx = auth.indexOf('await verifyChallenge(signed,');
     const dispatchIdx = auth.lastIndexOf('continuum:session-changed');
     expect(verifyIdx).toBeGreaterThan(-1);
     expect(dispatchIdx).toBeGreaterThan(verifyIdx);
