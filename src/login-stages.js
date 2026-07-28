@@ -16,6 +16,7 @@
  * is deliberate: every failure path is then forced to name a recovery, so a new
  * failure mode cannot ship as a dead-end message with no way forward.
  */
+import { classify, STATES } from './session-state.js';
 
 /**
  * Per-stage deadlines.
@@ -112,7 +113,8 @@ export function stageMessage(stage, { slow = false } = {}) {
  * @param {string} kind  one of: timeout, offline, rejected, empty, unsigned,
  *                       cancelled, no_signer, no_agent, agent_rejected,
  *                       signer_incompatible, signer_changed_challenge,
- *                       not_owner, challenge_expired
+ *                       not_owner, challenge_expired, no_session,
+ *                       session_not_stored, session_expired
  * @param {{detail?: string}} [opts]
  * @returns {{message: string, recovery: string, retryable: boolean, error: boolean, stage: string, kind: string}}
  */
@@ -182,6 +184,26 @@ export function describeStageFailure(stage, kind, opts = {}) {
       );
     case 'challenge_expired':
       return out('The login request expired before it was signed. Try again.', 'retry');
+    // The next three are CONT-COMPLETE-1: the agent said yes, but no session
+    // resulted. Each names a DIFFERENT component as the thing to fix, which is
+    // the whole reason they are not one kind: sending an operator to check their
+    // agent when the actual fault is their browser's storage, or their clock, is
+    // a diagnosis that costs hours.
+    case 'no_session':
+      return out(
+        'Your agent accepted the signature but returned no session. If it sits behind a proxy, check that the proxy is not stripping the response body.',
+        'check-agent',
+      );
+    case 'session_not_stored':
+      return out(
+        'Your session could not be saved in this browser. Private browsing and blocked site data both prevent it — allow site data for this page, then try again.',
+        'retry',
+      );
+    case 'session_expired':
+      return out(
+        'Your agent issued a session that had already expired, so its clock and this device’s disagree. Fix the clock on whichever is wrong, then try again.',
+        'check-agent',
+      );
     case 'agent_rejected':
       return out(
         `Your agent rejected the signature${detail ? `: ${detail}` : ''}.`,
@@ -190,6 +212,37 @@ export function describeStageFailure(stage, kind, opts = {}) {
     default:
       return out(`Sign-in failed${detail ? `: ${detail}` : ''}.`, 'retry');
   }
+}
+
+/**
+ * Why a 200 from /api/auth/verify did not produce a usable session — or null
+ * when it did (CONT-COMPLETE-1).
+ *
+ * A 200 is the agent's opinion, not a session. Treating the two as the same
+ * thing is what let sign-in "succeed" into a state the rest of the app then
+ * refused to recognise: the operator was routed straight back to the login card
+ * with an empty status line and no statement of what went wrong, while the agent
+ * log showed auth.verify.success. Every branch here is a way that can happen,
+ * and naming them separately is what makes each one actionable.
+ *
+ * The expiry rule is NOT re-derived here — it is `classify` from the session
+ * state machine, the same function the router's guard and the renewal clock
+ * consume. A second opinion about what "live" means is precisely the class of
+ * divergence that produced this bug.
+ *
+ * @param {{replyHadToken: boolean, storedToken: unknown, expiresAt: number|null, nowSec: number}} o
+ * @returns {'no_session'|'session_not_stored'|'session_expired'|null}
+ */
+export function describeCompletionFailure({ replyHadToken, storedToken, expiresAt, nowSec }) {
+  // The agent sent a token and we could not keep it: the fault is this browser's
+  // storage, not the agent, and saying "check your agent" would be a wrong turn.
+  if (!storedToken) return replyHadToken ? 'session_not_stored' : 'no_session';
+  const state = classify(expiresAt, nowSec);
+  if (state === STATES.EXPIRED) return 'session_expired';
+  // No readable expiry at all: the token cannot be reasoned about, so there is
+  // no session even though a string was stored.
+  if (state === STATES.ANONYMOUS) return 'no_session';
+  return null;
 }
 
 /**
