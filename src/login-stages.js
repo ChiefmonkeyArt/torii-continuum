@@ -83,7 +83,7 @@ export function stageMessage(stage, { slow = false } = {}) {
       return 'Requesting a challenge from your agent…';
     case 'signer':
       return slow
-        ? 'Still waiting for your signer. Check for a Plebeian Signer popup — it may be behind this window.'
+        ? 'Still waiting for your signer. Check for a signer popup — it may be behind this window.'
         : 'Waiting for your signer to approve the login…';
     case 'verify':
       return 'Verifying your signature…';
@@ -100,6 +100,8 @@ export function stageMessage(stage, { slow = false } = {}) {
  *   'retry'          → offer a Retry button (the attempt can simply be redone)
  *   'install-signer' → offer the extension install links
  *   'check-agent'    → retry, but say the agent is the thing to look at
+ *   'switch-signer'  → the signer or the key it holds is the problem, and
+ *                      retrying with it unchanged cannot succeed
  *   'none'           → nothing to offer (a deliberate cancel)
  *
  * Note that almost everything here is retryable. That is the point: a stalled
@@ -107,8 +109,10 @@ export function stageMessage(stage, { slow = false } = {}) {
  * VPS, a flaky link — and the previous UI treated all of them as terminal.
  *
  * @param {string} stage
- * @param {string} kind  one of: timeout, offline, rejected, empty, cancelled,
- *                       no_signer, no_agent, agent_rejected
+ * @param {string} kind  one of: timeout, offline, rejected, empty, unsigned,
+ *                       cancelled, no_signer, no_agent, agent_rejected,
+ *                       signer_incompatible, signer_changed_challenge,
+ *                       not_owner, challenge_expired
  * @param {{detail?: string}} [opts]
  * @returns {{message: string, recovery: string, retryable: boolean, error: boolean, stage: string, kind: string}}
  */
@@ -129,11 +133,14 @@ export function describeStageFailure(stage, kind, opts = {}) {
     case 'no_agent':
       return out('Sign-in needs a self-hosted agent. See agent/README.md to bring up your Torii.', 'none');
     case 'no_signer':
-      return out('No NIP-07 signer found. Install Plebeian Signer, then try again.', 'install-signer');
+      return out(
+        'No NIP-07 signer found. Install one of the signers below, then try again.',
+        'install-signer',
+      );
     case 'timeout':
       if (stage === 'signer') {
         return out(
-          'Your signer did not answer in time. Open Plebeian Signer, approve the request, then try again.',
+          'Your signer did not answer in time. Open your signer, approve the request, then try again.',
           'retry',
         );
       }
@@ -153,6 +160,28 @@ export function describeStageFailure(stage, kind, opts = {}) {
       );
     case 'empty':
       return out('Your signer returned no signature.', 'retry');
+    case 'unsigned':
+      return out('Your signer returned an unsigned event.', 'retry');
+    // The next four are CONT-SIGNER-1. Each one used to surface as
+    // `agent_rejected` with a plain Retry, which named the wrong component and,
+    // for not_owner, offered a loop that could never terminate.
+    case 'signer_changed_challenge':
+      return out(
+        'Your signer altered the login request, so it cannot be verified. Try a different NIP-07 signer.',
+        'switch-signer',
+      );
+    case 'signer_incompatible':
+      return out(
+        `Your signer produced an event your agent could not verify${detail ? `: ${detail}` : ''}. Try a different NIP-07 signer.`,
+        'switch-signer',
+      );
+    case 'not_owner':
+      return out(
+        'That key is not this Torii\u2019s owner. Switch your signer to the owner key, then try again.',
+        'switch-signer',
+      );
+    case 'challenge_expired':
+      return out('The login request expired before it was signed. Try again.', 'retry');
     case 'agent_rejected':
       return out(
         `Your agent rejected the signature${detail ? `: ${detail}` : ''}.`,

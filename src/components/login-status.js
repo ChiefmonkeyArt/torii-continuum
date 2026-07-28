@@ -14,11 +14,7 @@
  * a new failure mode cannot reach the screen without one.
  */
 import { h, clear } from '../views/util.js';
-
-const INSTALL_LINKS = [
-  ['Chrome', 'https://chromewebstore.google.com/detail/plebeian-signer-nostr-ide/ijbiankmnehjephbkfdgphckcdgbgoho'],
-  ['Firefox', 'https://addons.mozilla.org/en-US/firefox/addon/plebeian-signer/'],
-];
+import { KNOWN_SIGNERS } from '../signer-compat.js';
 
 /**
  * @param {HTMLElement|null} el status container
@@ -69,12 +65,22 @@ export function renderLoginStatus(el, s, opts = {}) {
     el.appendChild(h('div', { class: 'login-inline-actions' }, actions));
   }
 
-  // A missing extension is the one failure a button cannot fix.
-  if (s.signerMissing || s.recovery === 'install-signer') {
+  // Two failures no button can fix, and both are answered with the same thing:
+  // the list of signers that work. 'install-signer' is "you have none";
+  // 'switch-signer' is "the one you have, or the key in it, is the problem" —
+  // which for a NIP-46 bridge that mangles the event means the remedy really is
+  // a different signer, and offering Retry there was a loop with no exit.
+  if (s.signerMissing || s.recovery === 'install-signer' || s.recovery === 'switch-signer') {
     el.appendChild(h('div', { class: 'login-inline-links' },
-      INSTALL_LINKS.flatMap(([label, href], i) => [
+      KNOWN_SIGNERS.flatMap((signer, i) => [
         i ? h('span', { class: 'login-links-sep', 'aria-hidden': 'true' }, [' · ']) : null,
-        h('a', { href, target: '_blank', rel: 'noopener' }, [label]),
+        h('span', { class: 'login-signer-option' }, [
+          h('span', { class: 'login-signer-name', text: `${signer.name} ` }),
+          ...signer.links.flatMap(([label, href], j) => [
+            j ? h('span', { class: 'login-links-sep', 'aria-hidden': 'true' }, ['/']) : null,
+            h('a', { href, target: '_blank', rel: 'noopener' }, [label]),
+          ]).filter(Boolean),
+        ]),
       ]).filter(Boolean),
     ));
   }

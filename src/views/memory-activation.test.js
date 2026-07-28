@@ -223,3 +223,73 @@ describe('runActivation — retry after a terminal error', () => {
     expect(second.state).toBe(S.SUCCESS);
   });
 });
+
+describe('activation tolerates the signers that actually exist (CONT-SIGNER-1)', () => {
+  const runTo = async (overrides) => {
+    const seen = [];
+    const r = await runActivation(happyDeps(overrides), (t) => seen.push(t));
+    return { r, seen };
+  };
+
+  it('activates when the signer answers with only {id, sig}', async () => {
+    // A NIP-46 bridge shape. Forwarded verbatim it reached the agent with no
+    // kind, no tags and no pubkey, and was refused as our own malformed payload.
+    let posted;
+    const { r } = await runTo({
+      signEvent: async () => ({ id: 'id', sig: 'sig' }),
+      postActivate: async (body) => { posted = body.event; return { ok: true, data: { ok: true } }; },
+    });
+
+    expect(r.state).toBe(S.SUCCESS);
+    expect(posted).toMatchObject({
+      kind: 22242, content: 'chal-123', id: 'id', sig: 'sig', pubkey: 'ownerhex',
+    });
+    expect(posted.tags).toContainEqual(['challenge', 'chal-123']);
+  });
+
+  it('fills pubkey from the signer, not from anywhere else', async () => {
+    let posted;
+    const { r } = await runTo({
+      getPublicKey: async () => 'a-different-key',
+      signEvent: async () => ({ id: 'id', sig: 'sig' }),
+      postActivate: async (body) => { posted = body.event; return { ok: true, data: { ok: true } }; },
+    });
+
+    expect(r.state).toBe(S.SUCCESS);
+    expect(posted.pubkey).toBe('a-different-key');
+  });
+
+  it('preserves a created_at the signer rewrote', async () => {
+    // Permitted by NIP-07 and accepted by the agent, because the signature
+    // covers whatever the signer chose. A merge preferring our own values would
+    // have quietly broken this.
+    let posted;
+    const { r } = await runTo({
+      signEvent: async (e) => ({ ...e, created_at: 1, id: 'id', sig: 'sig', pubkey: 'ownerhex' }),
+      postActivate: async (body) => { posted = body.event; return { ok: true, data: { ok: true } }; },
+    });
+
+    expect(r.state).toBe(S.SUCCESS);
+    expect(posted.created_at).toBe(1);
+  });
+
+  it('rejects an unsigned answer without posting anything', async () => {
+    const postActivate = vi.fn(async () => ({ ok: true, data: { ok: true } }));
+    const { r } = await runTo({ signEvent: async (e) => ({ ...e, id: 'id' }), postActivate });
+
+    expect(r.state).toBe(S.SIGNER_REJECTED);
+    expect(postActivate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a signer that altered the challenge, and blames the signer', async () => {
+    const postActivate = vi.fn(async () => ({ ok: true, data: { ok: true } }));
+    const { r } = await runTo({
+      signEvent: async (e) => ({ ...e, tags: [], id: 'id', sig: 'sig', pubkey: 'ownerhex' }),
+      postActivate,
+    });
+
+    expect(r.state).toBe(S.SIGNER_REJECTED);
+    expect(r.reason).toMatch(/signer/i);
+    expect(postActivate).not.toHaveBeenCalled();
+  });
+});

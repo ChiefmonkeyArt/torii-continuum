@@ -51,6 +51,13 @@ import {
   describeStageFailure,
   busyStatus,
 } from './login-stages.js';
+import {
+  reconcileSignedEvent,
+  signerAlteredChallenge,
+  awaitSigner,
+  describeVerifyCode,
+  SIGNER_WAIT_MS,
+} from './signer-compat.js';
 
 const NIP42_KIND = 22242;
 
@@ -433,10 +440,19 @@ export async function startLogin(opts = {}) {
     return;
   }
 
-  // No NIP-07 extension: keep the useful "install a signer" guidance, inline.
+  // No NIP-07 extension — but decided after a brief wait, not from one
+  // synchronous read (CONT-SIGNER-1). Extensions inject `window.nostr` from a
+  // content script that is not ordered against our bundle, so an early click
+  // could see nothing and tell an operator who HAS a signer to install one —
+  // and no_signer offers no retry, so that was a dead end for a working setup.
   if (!hasSigner()) {
-    onStatus({ phase: 'error', ...describeStageFailure('challenge', 'no_signer'), signerMissing: true });
-    return;
+    const appeared = await awaitSigner({
+      hasSigner, timeoutMs: SIGNER_WAIT_MS, setTimer, clearTimer,
+    });
+    if (!appeared) {
+      onStatus({ phase: 'error', ...describeStageFailure('challenge', 'no_signer'), signerMissing: true });
+      return;
+    }
   }
 
   const gen = ++loginGeneration;
@@ -491,6 +507,7 @@ export async function startLogin(opts = {}) {
     // when it runs long — a screen that still looks like it is trying is worth
     // a great deal against one that looks hung.
     enter('signer');
+    const built = buildLoginEvent(challenge, window.location.origin);
     attemptTimers.push(setTimer(() => {
       if (live() && currentStage === 'signer') {
         say({
@@ -507,7 +524,7 @@ export async function startLogin(opts = {}) {
     let signed;
     try {
       signed = await withTimeout(
-        window.nostr.signEvent(buildLoginEvent(challenge, window.location.origin)),
+        window.nostr.signEvent(built),
         STAGE_TIMEOUTS_MS.signer,
         setTimer,
         clearTimer,
@@ -519,11 +536,54 @@ export async function startLogin(opts = {}) {
       return;
     }
     if (!live()) return;
-    if (!signed || typeof signed !== 'object') { fail('signer', 'empty'); return; }
+
+    // Reconcile what the signer returned with what we asked it to sign. Signers
+    // disagree about how much of the event to echo back — some return only
+    // { id, sig } — and forwarding the answer verbatim put a malformed payload
+    // on the wire, which the agent then refused as its own complaint. The
+    // signer's values always win; we only fill gaps, which is both what keeps a
+    // signer that rewrote created_at working and the only direction that is
+    // safe, since the agent recomputes the id hash over the whole event.
+    const reconciled = reconcileSignedEvent(built, signed);
+    if (!reconciled.ok) { fail('signer', reconciled.kind); return; }
+
+    // The one hole reconciliation cannot fill locally: `pubkey` is hashed into
+    // the id but the browser never knew it, so a signer that answered with only
+    // { id, sig } leaves it absent. NIP-07 requires getPublicKey(), and it names
+    // the very key that produced the signature, so this is the correct source
+    // rather than a guess — and if the signer will not tell us, the honest
+    // conclusion is that we cannot build the event, not that the agent is at
+    // fault. Bounded by the signer deadline: it is the same extension.
+    if (reconciled.missing.includes('pubkey')) {
+      try {
+        const pk = await withTimeout(
+          Promise.resolve(window.nostr.getPublicKey?.()),
+          STAGE_TIMEOUTS_MS.signer, setTimer, clearTimer,
+        );
+        if (!live()) return;
+        if (typeof pk !== 'string' || !pk) { fail('signer', 'signer_incompatible'); return; }
+        reconciled.event.pubkey = pk;
+      } catch (e) {
+        if (!live()) return;
+        if (e && e.message === 'timeout') fail('signer', 'timeout');
+        else fail('signer', 'signer_incompatible', e?.message || String(e));
+        return;
+      }
+    }
+
+    // A signer that altered the challenge has produced something unverifiable.
+    // Say so here rather than letting the agent report "missing challenge tag",
+    // which blames the agent and offers a retry against a signer that will do
+    // the same thing again. Re-adding the tag is not an option: it would change
+    // the id and break the signature.
+    if (signerAlteredChallenge(reconciled.event, challenge)) {
+      fail('signer', 'signer_changed_challenge');
+      return;
+    }
 
     // 3. Verify — bounded like the challenge.
     enter('verify');
-    const verified = await verifyChallenge(signed, { timeoutMs: STAGE_TIMEOUTS_MS.verify });
+    const verified = await verifyChallenge(reconciled.event, { timeoutMs: STAGE_TIMEOUTS_MS.verify });
     if (!live()) {
       // Abandoned in the instant between the token landing and this check. The
       // epoch could not catch this one, so undo it: the operator is looking at
@@ -537,7 +597,15 @@ export async function startLogin(opts = {}) {
       return;
     }
     if (!verified.ok) {
-      fail('verify', verified.timeout ? 'timeout' : (verified.offline ? 'offline' : 'agent_rejected'), verified.reason);
+      // Route on the agent's code, not its prose. `not_owner` can never be
+      // fixed by pressing Try again with the same key, and offering that button
+      // was an invitation to loop forever; an unknown or absent code still
+      // lands on agent_rejected, so an older agent behaves exactly as before.
+      let kind;
+      if (verified.timeout) kind = 'timeout';
+      else if (verified.offline) kind = 'offline';
+      else kind = describeVerifyCode(verified.code);
+      fail('verify', kind, verified.reason);
       return;
     }
 

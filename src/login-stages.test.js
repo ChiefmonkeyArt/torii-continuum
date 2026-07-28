@@ -18,8 +18,13 @@ import {
   busyStatus,
 } from './login-stages.js';
 
-const KINDS = ['timeout', 'offline', 'rejected', 'empty', 'cancelled', 'no_signer', 'no_agent', 'agent_rejected'];
-const RECOVERIES = ['retry', 'install-signer', 'check-agent', 'none'];
+const KINDS = [
+  'timeout', 'offline', 'rejected', 'empty', 'unsigned', 'cancelled',
+  'no_signer', 'no_agent', 'agent_rejected',
+  // CONT-SIGNER-1
+  'signer_incompatible', 'signer_changed_challenge', 'not_owner', 'challenge_expired',
+];
+const RECOVERIES = ['retry', 'install-signer', 'check-agent', 'switch-signer', 'none'];
 
 describe('stage deadlines', () => {
   it('bounds every stage of the flow, not only the signer', () => {
@@ -176,5 +181,60 @@ describe('a click on an already-running attempt', () => {
     expect(busyStatus('signer').recovery).toBe('cancel');
     expect(busyStatus('challenge').cancellable).toBe(false);
     expect(busyStatus('verify').cancellable).toBe(false);
+  });
+});
+
+describe('signer-compatibility failures (CONT-SIGNER-1)', () => {
+  it('offers a way out, not a retry, when the signer itself is the problem', () => {
+    // These three used to arrive as agent_rejected with recovery:'retry'. For
+    // not_owner in particular that was a button the operator could press
+    // forever: the same key will be refused every time.
+    for (const kind of ['signer_incompatible', 'signer_changed_challenge', 'not_owner']) {
+      const d = describeStageFailure('signer', kind);
+      expect(d.recovery, kind).toBe('switch-signer');
+      expect(d.retryable, kind).toBe(false);
+    }
+  });
+
+  it('blames the signer, not the agent, for a signer fault', () => {
+    // The sentence may still mention the agent — "your signer produced an event
+    // your agent could not verify" is both true and useful — but the SUBJECT has
+    // to be the signer. The old copy led with "Your agent rejected…", which sent
+    // operators to check a healthy VPS.
+    for (const kind of ['signer_incompatible', 'signer_changed_challenge']) {
+      const { message } = describeStageFailure('signer', kind);
+      expect(message, kind).toMatch(/^Your signer/);
+      expect(message, kind).toMatch(/signer/i);
+    }
+  });
+
+  it('DOES offer a retry for an expired challenge, which a retry does fix', () => {
+    const d = describeStageFailure('verify', 'challenge_expired');
+    expect(d.recovery).toBe('retry');
+    expect(d.retryable).toBe(true);
+  });
+
+  it('tells the operator whose key is wrong without naming a vendor', () => {
+    const d = describeStageFailure('verify', 'not_owner');
+    expect(d.message).toMatch(/owner/i);
+    expect(d.message).not.toMatch(/plebeian|alby|nos2x/i);
+  });
+
+  it('separates an unsigned answer from an absent one', () => {
+    expect(describeStageFailure('signer', 'unsigned').message)
+      .not.toBe(describeStageFailure('signer', 'empty').message);
+    expect(describeStageFailure('signer', 'unsigned').retryable).toBe(true);
+  });
+
+  it('names no single signer vendor anywhere in the copy', () => {
+    // The install list is a registry now (src/signer-compat.js). Hard-coding one
+    // vendor here told an operator already running a different NIP-07 signer
+    // that their setup was unsupported.
+    for (const stage of [...STAGE_ORDER, 'unknown']) {
+      for (const kind of KINDS) {
+        expect(describeStageFailure(stage, kind).message).not.toMatch(/plebeian|alby|nos2x/i);
+      }
+      expect(stageMessage(stage, { slow: true })).not.toMatch(/plebeian|alby|nos2x/i);
+    }
   });
 });

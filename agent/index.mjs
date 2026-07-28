@@ -508,11 +508,13 @@ app.post('/api/auth/challenge', { config: rateLimitConfig(authChallengeMax, '/ap
 
 app.post('/api/auth/verify', { config: rateLimitConfig(authVerifyMax, '/api/auth/verify') }, async (req, reply) => {
   const event = req.body?.event;
-  if (!event) return reply.code(400).send({ error: 'body.event required' });
+  if (!event) return reply.code(400).send({ ok: false, code: 'malformed_event', error: 'body.event required' });
   const result = await auth.verifyChallenge(event, req.ip);
   if (!result.ok) {
     // auth.mjs already emitted the structured auth.verify.fail line.
-    return reply.code(401).send({ error: result.reason });
+    // Carry its code as well as its prose: refresh does, and the browser needs
+    // it to distinguish a refusal worth retrying from one that never will be.
+    return reply.code(401).send({ ok: false, code: result.code || null, error: result.reason });
   }
   // auth.mjs already emitted auth.verify.success.
   return { token: result.token, expires_at: result.expires_at };

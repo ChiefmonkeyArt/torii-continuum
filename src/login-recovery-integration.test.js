@@ -357,12 +357,24 @@ describe('recovering', () => {
 
   it('offers install links, and no retry, when there is no extension', async () => {
     const w = mk({ noSigner: true });
+    const { SIGNER_WAIT_MS, KNOWN_SIGNERS } = await import('./signer-compat.js');
     const t = await harness(w);
-    await t.start();
+    const done = t.start();
+
+    // "No signer" is now concluded after a brief wait, not from one synchronous
+    // read, because extensions inject from a content script that is not ordered
+    // against our bundle (CONT-SIGNER-1). So the clock has to move before the
+    // verdict lands — and on fake timers it only moves when we say so.
+    await vi.advanceTimersByTimeAsync(SIGNER_WAIT_MS + 50);
+    await done;
     await flush();
 
-    // A missing extension is the one failure a button cannot fix.
-    expect(t.el.querySelectorAll('.login-inline-links a').length).toBe(2);
+    // A missing extension is the one failure a button cannot fix. Every signer
+    // in the registry is offered, not one hand-picked vendor.
+    const links = t.el.querySelectorAll('.login-inline-links a');
+    const expected = KNOWN_SIGNERS.reduce((n, sg) => n + sg.links.length, 0);
+    expect(links.length).toBe(expected);
+    expect(expected).toBeGreaterThan(2);
     expect(t.retryBtn()).toBeNull();
     expect(t.auth.isLoginInFlight()).toBe(false);
   });
