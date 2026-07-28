@@ -15,6 +15,7 @@ import {
   stageLabel,
   stageMessage,
   describeStageFailure,
+  describeCompletionFailure,
   busyStatus,
 } from './login-stages.js';
 
@@ -23,6 +24,8 @@ const KINDS = [
   'no_signer', 'no_agent', 'agent_rejected',
   // CONT-SIGNER-1
   'signer_incompatible', 'signer_changed_challenge', 'not_owner', 'challenge_expired',
+  // CONT-COMPLETE-1
+  'no_session', 'session_not_stored', 'session_expired',
 ];
 const RECOVERIES = ['retry', 'install-signer', 'check-agent', 'switch-signer', 'none'];
 
@@ -166,6 +169,64 @@ describe('every failure names a way forward', () => {
   });
 });
 
+describe('a 200 from verify is not a session (CONT-COMPLETE-1)', () => {
+  const NOW = 1_700_000_000;
+  const live = { replyHadToken: true, storedToken: 'tok', expiresAt: NOW + 3600, nowSec: NOW };
+
+  it('accepts the one case that really is a session', () => {
+    expect(describeCompletionFailure(live)).toBeNull();
+  });
+
+  it('still accepts a session that is already inside its refresh window', () => {
+    // `expiring` is authorised — renewing soon is not the same as not signed in,
+    // and refusing here would reject a short-lived token the agent meant to issue.
+    expect(describeCompletionFailure({ ...live, expiresAt: NOW + 30 })).toBeNull();
+  });
+
+  it('reports no_session when the agent returned a 200 carrying no token', () => {
+    // A proxy that strips the body, or a body that is not JSON, both land here.
+    expect(describeCompletionFailure({
+      ...live, replyHadToken: false, storedToken: null, expiresAt: null,
+    })).toBe('no_session');
+  });
+
+  it('distinguishes a token this browser could not keep from one never sent', () => {
+    // Same visible outcome, different component at fault: blocked site data is
+    // the browser's doing, and "check your agent" would be a wrong turn.
+    expect(describeCompletionFailure({
+      ...live, replyHadToken: true, storedToken: null, expiresAt: null,
+    })).toBe('session_not_stored');
+  });
+
+  it('reports session_expired when the issued session is already dead', () => {
+    // Clock skew between a self-hosted agent and the operator's machine. The
+    // token stores and reads back fine; it is simply born expired.
+    expect(describeCompletionFailure({ ...live, expiresAt: NOW - 10 })).toBe('session_expired');
+  });
+
+  it('treats a stored token with no readable expiry as no session', () => {
+    // Nothing can reason about its lifetime, so the app cannot claim a session.
+    expect(describeCompletionFailure({ ...live, expiresAt: null })).toBe('no_session');
+  });
+
+  it('returns a kind describeStageFailure can always render', () => {
+    for (const kind of ['no_session', 'session_not_stored', 'session_expired']) {
+      const d = describeStageFailure('verify', kind);
+      expect(RECOVERIES, kind).toContain(d.recovery);
+      expect(d.message.length, kind).toBeGreaterThan(0);
+    }
+  });
+
+  it('offers a recovery for every completion failure', () => {
+    // None of these is a dead end: the agent/proxy can be fixed, storage can be
+    // allowed, a clock can be corrected — and then the attempt can be redone.
+    for (const kind of ['no_session', 'session_not_stored', 'session_expired']) {
+      const d = describeStageFailure('verify', kind);
+      expect(d.retryable, kind).toBe(true);
+    }
+  });
+});
+
 describe('a click on an already-running attempt', () => {
   it('is always answered', () => {
     for (const stage of STAGE_ORDER) {
@@ -224,6 +285,14 @@ describe('signer-compatibility failures (CONT-SIGNER-1)', () => {
     expect(describeStageFailure('signer', 'unsigned').message)
       .not.toBe(describeStageFailure('signer', 'empty').message);
     expect(describeStageFailure('signer', 'unsigned').retryable).toBe(true);
+  });
+
+  it('does not blame the signer for a completion fault', () => {
+    // These three happen AFTER the signature was accepted. Leading with "your
+    // signer" would send the operator to replace a component that just worked.
+    for (const kind of ['no_session', 'session_not_stored', 'session_expired']) {
+      expect(describeStageFailure('verify', kind).message, kind).not.toMatch(/^Your signer/);
+    }
   });
 
   it('names no single signer vendor anywhere in the copy', () => {

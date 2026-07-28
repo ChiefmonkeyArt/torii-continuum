@@ -14,9 +14,11 @@
  *   3. window.nostr.signEvent({ kind: 22242, content: challenge, tags: [...] }),
  *      guarded by a timeout so a hung/never-answered extension fails cleanly.
  *   4. POST /api/auth/verify { event } → { token, expires_at }; token stored.
- *   5. On success, dispatch continuum:session-changed (router navigates to the
- *      dashboard). On ANY failure (cancel, missing extension, denial, timeout,
- *      bad signature) we stay put and report inline.
+ *   5. Confirm a session actually resulted (CONT-COMPLETE-1) — a 200 is the
+ *      agent's opinion, not a session — then dispatch continuum:session-changed
+ *      (router navigates to the dashboard). On ANY failure (cancel, missing
+ *      extension, denial, timeout, bad signature, or a 200 that produced no
+ *      usable session) we stay put and report inline.
  *
  * A module-level in-flight guard prevents double invocation / races from rapid
  * clicks or a second surface triggering login while one is running.
@@ -49,6 +51,7 @@ import {
   stageMessage,
   stageLabel,
   describeStageFailure,
+  describeCompletionFailure,
   busyStatus,
 } from './login-stages.js';
 import {
@@ -609,14 +612,32 @@ export async function startLogin(opts = {}) {
       return;
     }
 
-    // 4. Success → persist the non-secret session marker (so a fresh tab can
-    // rehydrate the authenticated shell) then let the router navigate to the
-    // dashboard. The pubkey is the third field of the HMAC token
+    // 4. A 200 is the agent's opinion, not a session (CONT-COMPLETE-1). Confirm
+    // one actually landed before saying so, because every way this can fail used
+    // to end the same way: "Signed in." followed by a route change that the
+    // guard immediately reversed, dropping the operator back on the login card
+    // with a blank status line while the agent log read auth.verify.success.
+    const completionFailure = describeCompletionFailure({
+      replyHadToken: Boolean(verified.data?.token),
+      storedToken: getStoredToken(),
+      expiresAt: sessionExpiry(),
+      nowSec: Math.floor(Date.now() / 1000),
+    });
+    if (completionFailure) { fail('verify', completionFailure); return; }
+
+    // Persist the non-secret session marker so a fresh tab can rehydrate the
+    // authenticated shell. The pubkey is the third field of the HMAC token
     // (iat.exp.pubkey.oiat.sig) — display-only, never the secret key.
     const pubkey = (getStoredToken() || '').split('.')[2] || '';
     writeSessionMarker({ npub: pubkey, connected_at: Math.floor(Date.now() / 1000) });
-    startSessionRefresh();
+
+    // Say it BEFORE the side effects. Both of the calls below re-render — the
+    // session change re-routes, and the router re-resolves even when the hash is
+    // unchanged, which rebuilds the very element this message is written to. A
+    // 'done' announced afterwards was therefore painted into a detached node on
+    // any path that did not leave the login surface.
     say({ phase: 'done', message: 'Signed in.', done: true });
+    startSessionRefresh();
     document.dispatchEvent(new CustomEvent('continuum:session-changed'));
   } finally {
     // Only tear down if we are still the current attempt — a cancel has already
