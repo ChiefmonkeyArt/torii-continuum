@@ -104,7 +104,7 @@ describe('src/auth.js — direct invocation, no modal (source structure)', () =>
     expect(auth).toContain("continuum:session-changed");
     // The verify call and the success dispatch both live in the flow body; the
     // dispatch must come after the verify call (not the leading docstring).
-    const verifyIdx = auth.indexOf('await verifyChallenge(signed,');
+    const verifyIdx = auth.indexOf('await verifyChallenge(reconciled.event,');
     const dispatchIdx = auth.lastIndexOf('continuum:session-changed');
     expect(verifyIdx).toBeGreaterThan(-1);
     expect(dispatchIdx).toBeGreaterThan(verifyIdx);

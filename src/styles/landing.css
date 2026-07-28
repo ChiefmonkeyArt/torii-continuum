@@ -452,12 +452,22 @@
 .login-inline-status:empty { margin-top: 0; }
 .login-inline-status.error { color: hsl(var(--destructive, 0 72% 62%)); }
 .login-inline-status.done { color: hsl(140 55% 62%); }
-.login-inline-links { margin-top: 4px; display: flex; gap: 4px; justify-content: center; }
+.login-inline-links {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: center;
+}
 .login-inline-links a {
   color: hsl(var(--primary));
   text-decoration: none;
   border-bottom: 1px dotted hsl(var(--primary) / 0.5);
 }
+/* CONT-SIGNER-1: several signers are offered, not one, so each name has to
+   stay glued to its own store links when the row wraps. */
+.login-signer-option { white-space: nowrap; }
+.login-signer-name { opacity: 0.8; }
 
 /* CONT-LOGIN-1: progress + recovery affordances, shared by both surfaces. */
 .login-inline-step,

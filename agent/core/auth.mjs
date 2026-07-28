@@ -162,19 +162,28 @@ export function createAuth(cfg, deps = {}) {
   }
 
   /**
-   * @returns Promise<{ ok: true, token, expiresAt } | { ok: false, reason }>
+   * @returns Promise<{ ok: true, token, expiresAt } | { ok: false, code, reason }>
    *
    * Async because a successful first-touch verification persists the admin
    * claim to disk before issuing a token.
+   *
+   * `reason` is prose for the operator's log; `code` is the contract. The
+   * browser has to tell apart refusals whose remedies are opposites — retrying
+   * a `not_owner` refusal can never succeed, while `challenge_expired` almost
+   * always does — and it cannot do that by matching on English. Refresh already
+   * returns a code for precisely this reason; verify was the odd one out.
+   *
+   * Vocabulary: malformed_event · wrong_kind · not_owner · challenge_expired ·
+   * bad_signature · claim_failed.
    */
   async function verifyChallenge(event, clientIp) {
     if (!event || typeof event !== 'object') {
       log.warn({ evt: 'auth.verify.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'malformed_event' });
-      return { ok: false, reason: 'no event' };
+      return { ok: false, code: 'malformed_event', reason: 'no event' };
     }
     if (event.kind !== CHALLENGE_KIND) {
       log.warn({ evt: 'auth.verify.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'wrong_kind' });
-      return { ok: false, reason: 'wrong kind (expected 22242)' };
+      return { ok: false, code: 'wrong_kind', reason: 'wrong kind (expected 22242)' };
     }
     // Cheap early reject only once an admin is CLAIMED. In bootstrap mode we
     // cannot pre-judge the pubkey, so we fall through to full signature
@@ -186,14 +195,14 @@ export function createAuth(cfg, deps = {}) {
         pubkey_prefix: prefix(event.pubkey || ''),
         reason: 'notadmin',
       });
-      return { ok: false, reason: 'pubkey is not admin npub' };
+      return { ok: false, code: 'not_owner', reason: 'pubkey is not admin npub' };
     }
 
     // Find the challenge tag
     const tag = (event.tags || []).find((t) => Array.isArray(t) && t[0] === 'challenge');
     if (!tag || !tag[1]) {
       log.warn({ evt: 'auth.verify.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'malformed_event' });
-      return { ok: false, reason: 'missing challenge tag' };
+      return { ok: false, code: 'malformed_event', reason: 'missing challenge tag' };
     }
     const challenge = tag[1];
 
@@ -205,7 +214,7 @@ export function createAuth(cfg, deps = {}) {
         challenge_prefix: prefix(challenge),
         reason: 'notfound',
       });
-      return { ok: false, reason: 'unknown or expired challenge' };
+      return { ok: false, code: 'challenge_expired', reason: 'unknown or expired challenge' };
     }
     if (entry.expiresAt < now()) {
       challenges.delete(challenge);
@@ -215,7 +224,7 @@ export function createAuth(cfg, deps = {}) {
         challenge_prefix: prefix(challenge),
         reason: 'expired',
       });
-      return { ok: false, reason: 'expired challenge' };
+      return { ok: false, code: 'challenge_expired', reason: 'expired challenge' };
     }
     if (entry.ip && clientIp && entry.ip !== clientIp) {
       // Not fatal — mobile networks reissue IPs. Warn but allow.
@@ -230,7 +239,7 @@ export function createAuth(cfg, deps = {}) {
         challenge_prefix: prefix(challenge),
         reason: 'malformed_event',
       });
-      return { ok: false, reason: 'content/tag mismatch' };
+      return { ok: false, code: 'malformed_event', reason: 'content/tag mismatch' };
     }
 
     // Verify id + signature
@@ -244,7 +253,7 @@ export function createAuth(cfg, deps = {}) {
           challenge_prefix: prefix(challenge),
           reason: 'malformed_event',
         });
-        return { ok: false, reason: 'id mismatch' };
+        return { ok: false, code: 'malformed_event', reason: 'id mismatch' };
       }
       sigOk = verifyEvent(event);
     } catch (e) {
@@ -254,7 +263,7 @@ export function createAuth(cfg, deps = {}) {
         challenge_prefix: prefix(challenge),
         reason: 'badsig',
       });
-      return { ok: false, reason: `sig verify threw: ${e.message}` };
+      return { ok: false, code: 'bad_signature', reason: `sig verify threw: ${e.message}` };
     }
     if (!sigOk) {
       log.warn({
@@ -263,7 +272,7 @@ export function createAuth(cfg, deps = {}) {
         challenge_prefix: prefix(challenge),
         reason: 'badsig',
       });
-      return { ok: false, reason: 'bad signature' };
+      return { ok: false, code: 'bad_signature', reason: 'bad signature' };
     }
 
     // Signature is valid. Consume the challenge so it can't be replayed even
@@ -275,7 +284,7 @@ export function createAuth(cfg, deps = {}) {
     // leaves a live session for an unpersisted admin.
     if (!adminHex) {
       const claim = await claimAdmin(event.pubkey, clientIp);
-      if (!claim.ok) return { ok: false, reason: claim.reason };
+      if (!claim.ok) return { ok: false, code: 'claim_failed', reason: claim.reason };
     }
 
     log.info({

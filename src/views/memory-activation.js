@@ -17,6 +17,8 @@
  *     (unlocked_for_owner) — the UI never flips to "unlocked" on optimism.
  */
 
+import { reconcileSignedEvent, signerAlteredChallenge } from '../signer-compat.js';
+
 export const ACTIVATION_STATES = Object.freeze({
   READY: 'ready',
   REQUESTING_SIGNATURE: 'requesting-signature',
@@ -145,16 +147,35 @@ export async function runActivation(deps, onState = () => {}) {
 
   // 3. Owner authorization: read pubkey + sign the challenge in the signer.
   //    Anything the signer throws here is a rejection/cancellation.
-  let pubkey; let signed;
+  let pubkey; let signed; let built;
   try {
     pubkey = await deps.getPublicKey();
-    signed = await deps.signEvent(buildActivationEvent(chal.data.challenge, deps.origin, now()));
+    built = buildActivationEvent(chal.data.challenge, deps.origin, now());
+    signed = await deps.signEvent(built);
   } catch (e) {
     return emit(S.SIGNER_REJECTED, { reason: reason(e) });
   }
-  if (!signed || typeof signed !== 'object') {
-    return emit(S.SIGNER_REJECTED, { reason: 'signer returned no signature' });
+
+  // Signers disagree about how much of the event they echo back — some answer
+  // with only { id, sig } — so the raw answer is reconciled against what we
+  // asked them to sign before it goes anywhere (CONT-SIGNER-1). The signer's
+  // values always win; we only fill gaps, and `pubkey` is filled from the
+  // signer's own getPublicKey() above. The agent still recomputes the id hash
+  // and verifies the signature, so this can only produce a well-shaped payload,
+  // never an acceptance.
+  const reconciled = reconcileSignedEvent(built, signed);
+  if (!reconciled.ok) {
+    return emit(S.SIGNER_REJECTED, {
+      reason: reconciled.kind === 'unsigned'
+        ? 'signer returned an unsigned event'
+        : 'signer returned no signature',
+    });
   }
+  if (reconciled.missing.includes('pubkey')) reconciled.event.pubkey = pubkey;
+  if (signerAlteredChallenge(reconciled.event, chal.data.challenge)) {
+    return emit(S.SIGNER_REJECTED, { reason: 'signer altered the request, so it cannot be verified' });
+  }
+  signed = reconciled.event;
 
   // 4. Pull the encrypted-at-rest blobs (network/server failure → error).
   let ct;
