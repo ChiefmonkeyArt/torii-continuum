@@ -637,6 +637,18 @@ export async function startLogin(opts = {}) {
     // 'done' announced afterwards was therefore painted into a detached node on
     // any path that did not leave the login surface.
     say({ phase: 'done', message: 'Signed in.', done: true });
+
+    // Retire the attempt BEFORE publishing (CONT-NAVSYNC-1). The session change
+    // is now rendered synchronously by its listener, so the dashboard is built
+    // while this call is still on the stack — and it used to be built with the
+    // login latch still held and the never-wedge watchdog still armed, which
+    // meant a signer control on the new screen was told "already signing in"
+    // and a slow-signer timer could still write an error over a surface the
+    // attempt no longer owns. endAttempt drops the timers and releases the
+    // latch, so the app transitions into an idle login module. The token was
+    // persisted and read back above, so the epoch bump it performs cannot undo
+    // anything.
+    endAttempt(clearTimer);
     startSessionRefresh();
     document.dispatchEvent(new CustomEvent('continuum:session-changed'));
   } finally {
