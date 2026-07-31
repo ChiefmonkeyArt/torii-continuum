@@ -181,8 +181,15 @@ function boot() {
   // login otherwise); navigate() re-resolves even when the hash is unchanged, so
   // the view always transitions to match the new auth state.
   document.addEventListener('continuum:session-changed', () => {
-    renderSidebar();
     const authed = isSessionLive();
+    // NAVIGATE FIRST (CONT-NAVSYNC-1). A listener exception never reaches
+    // dispatchEvent, so anything that threw ahead of this line silently ate the
+    // transition and left the operator on the surface they just signed in from
+    // — with the session already persisted, so only a reload showed it. The
+    // route transition is the one step that must not be downstream of a render
+    // that can fail, and it re-renders the sidebar for every app route anyway;
+    // the explicit call below covers the routes that do not (root/login) and
+    // now runs with currentRoute() already pointing at the new surface.
     // REPLACE in BOTH directions. Sign-out has always replaced, so the
     // authenticated surface being left is not retained for Back to restore.
     // Sign-in now replaces too: pushing left the login surface sitting in
@@ -191,6 +198,7 @@ function boot() {
     // The entry being replaced is the one the operator just finished with, in
     // both directions, so neither is worth keeping.
     navigate(sessionChangeTarget(authed), { replace: true });
+    renderSidebar();
   });
 
   // Sign-out must remain a hard boundary across BROWSER history + bfcache, not
