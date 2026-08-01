@@ -35,7 +35,9 @@ function resolveDeps(opts) {
     cancelRaf: opts.cancelRaf || (g.cancelAnimationFrame ? g.cancelAnimationFrame.bind(g) : g.clearTimeout && g.clearTimeout.bind(g)) || (() => {}),
     setTimeout: opts.setTimeout || (g.setTimeout ? g.setTimeout.bind(g) : (fn) => fn()),
     reducedMotion: opts.reducedMotion,
-    matchMedia: opts.matchMedia || g.matchMedia,
+    // Bound like its neighbours: called as `deps.matchMedia(...)` the raw Window
+    // method would be brand-checked against `deps` and throw (CONT-NAVSYNC-3).
+    matchMedia: opts.matchMedia || (g.matchMedia ? g.matchMedia.bind(g) : null),
   };
 }
 
