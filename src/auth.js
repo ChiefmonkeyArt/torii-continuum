@@ -296,8 +296,15 @@ export function stopSessionRefresh() {
 export function startSessionRefresh(overrides = {}) {
   stopSessionRefresh();
   deps = {
-    setTimer: setTimeout,
-    clearTimer: clearTimeout,
+    // WRAPPED, NOT REFERENCED (CONT-NAVSYNC-3). `setTimeout` on a real Window is
+    // a WebIDL operation with a brand check on its receiver, so storing it as a
+    // property and calling `deps.setTimer(...)` invokes it with `deps` as `this`
+    // and throws "Illegal invocation". Node's timers ignore `this`, so every
+    // test passed while every browser threw. Calling the natives as bare
+    // identifiers keeps the receiver undefined, which WebIDL resolves to the
+    // global. Overrides still replace them wholesale.
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (id) => clearTimeout(id),
     nowSec: () => Math.floor(Date.now() / 1000),
     refresh: refreshSessionToken,
     onExpired: () => endSession(),
@@ -323,7 +330,16 @@ function arm(delayOverrideMs = null) {
     ? msUntilRefresh(sessionExpiry(), deps.nowSec())
     : delayOverrideMs;
   if (wait === null) return;
-  refreshTimer = deps.setTimer(tick, wait);
+  // Arming must never be fatal. rehydrateSession() runs inside EVERY route
+  // handler, so a throw here does not degrade renewal — it takes the whole
+  // screen down through the router's fail-closed panel while the session is
+  // perfectly valid. A session that stops auto-renewing still works until its
+  // expiry; a shell that will not render does not.
+  try {
+    refreshTimer = deps.setTimer(tick, wait);
+  } catch (_e) {
+    refreshTimer = null;
+  }
 }
 
 async function tick() {
