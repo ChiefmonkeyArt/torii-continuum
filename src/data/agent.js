@@ -522,6 +522,20 @@ export async function genesisCreate(fields) {
   });
 }
 
+/**
+ * POST /api/genesis/constitution/acknowledge — the owner of an already-activated
+ * bot explicitly adopts a newer covenant.
+ *
+ * The (version, digest) pair sent is the one the owner was SHOWN, and the agent
+ * refuses if it does not match the bytes it holds — so a stale or doctored card
+ * cannot obtain consent to text the owner never read. The birth version is never
+ * rewritten; adoption is recorded alongside it.
+ * @param {{ version: string, digest: string }} target
+ */
+export async function genesisAcknowledgeConstitution({ version, digest } = {}) {
+  return req('POST', '/api/genesis/constitution/acknowledge', { version, digest });
+}
+
 // ─── MEMORY-1: consent, scoped storage, portability ─────────
 //
 // Durable AI memory is a PROPOSAL until the owner explicitly approves it, and

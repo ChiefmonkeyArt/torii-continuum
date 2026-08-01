@@ -792,6 +792,29 @@ app.get('/api/genesis', { preHandler: requireAdmin }, async (req, reply) => {
   return r;
 });
 
+// POST /api/genesis/constitution/acknowledge — an already-activated bot's owner
+// explicitly adopts a newer covenant. The version the bot was BORN under is
+// never rewritten; adoption is recorded alongside it. Default-deny: without this
+// call the bot stays on the covenant it was born under (the safety floor is the
+// single exception, and it binds without asking — see lib/constitution.mjs).
+app.post(
+  '/api/genesis/constitution/acknowledge',
+  { preHandler: requireAdmin, config: rateLimitConfig(genesisMax, '/api/genesis') },
+  async (req, reply) => {
+    const body = req.body || {};
+    const result = await genesis.acknowledgeConstitution({
+      ownerNpub: req.session.npub,
+      toVersion: body.version,
+      toDigest: body.digest,
+    });
+    if (!result.ok) {
+      app.log.warn({ evt: 'genesis.constitution.acknowledge.reject', code: result.code });
+      return reply.code(400).send(result);
+    }
+    return result;
+  },
+);
+
 app.post(
   '/api/genesis',
   { preHandler: requireAdmin, config: rateLimitConfig(genesisMax, '/api/genesis') },

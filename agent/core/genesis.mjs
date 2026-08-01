@@ -30,7 +30,13 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { nip19 } from 'nostr-tools';
-import { getConstitution, digestOf, verifyConstitutionDigest } from '../lib/constitution.mjs';
+import {
+  getConstitution,
+  getConstitutionByVersion,
+  constitutionUpgrade,
+  digestOf,
+  verifyConstitutionDigest,
+} from '../lib/constitution.mjs';
 
 const MANIFEST_SCHEMA = 'torii.continuum.genesis_manifest/1';
 const MANIFEST_VERSION = 1;
@@ -133,6 +139,17 @@ export function createGenesis(deps = {}) {
     }
   }
 
+  async function writeManifest(ownerHex, manifest) {
+    // Atomic: temp file in the owner dir, then rename over the target, so a
+    // crash mid-write never leaves a torn manifest that a later read would
+    // treat as corrupt (and refuse).
+    const dir = ownerDir(ownerHex);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const tmp = join(dir, `.manifest.${randomBytes(8).toString('hex')}.tmp`);
+    await writeFile(tmp, JSON.stringify(manifest, null, 2), { mode: 0o600 });
+    await rename(tmp, manifestPath(ownerHex));
+  }
+
   /**
    * Read the caller's own manifest. Default-deny: a caller only ever addresses
    * their OWN namespace (derived from their verified npub), so cross-owner
@@ -161,8 +178,111 @@ export function createGenesis(deps = {}) {
       // "born under an earlier version" (constitution_ok:true, is_current:false).
       constitution_is_current: check.ok ? check.pinned_is_current === true : false,
       constitution_current_version: check.current_version,
+      // Where this bot stands relative to the current covenant: what binds it
+      // now, what a newer version would add, and the safety floor that binds
+      // regardless of which version it was born under.
+      constitution_upgrade: constitutionUpgrade(
+        manifest?.constitution?.version,
+        manifest?.constitution?.acknowledged_version,
+      ),
       manifest_digest_ok: manifestDigest(manifest) === manifest.manifest_digest,
     };
+  }
+
+  /**
+   * Record the owner's explicit acknowledgement of a newer constitution.
+   *
+   * The version the bot was BORN under is never rewritten — `constitution.version`
+   * and `constitution.digest` stay exactly as minted, so the birth certificate
+   * keeps verifying against its frozen bytes forever. Adoption is recorded
+   * alongside it as `acknowledged_version`/`acknowledged_digest` plus an append-
+   * only history, which is what makes this a migration rather than a forgery.
+   *
+   * Fails closed on every uncertainty: unknown version, digest that does not
+   * match the registry's bytes for that version, or a target that is not the
+   * current covenant. An owner can only ever acknowledge something we can show
+   * them in full.
+   *
+   * @param {object} params
+   * @param {string} params.ownerNpub VERIFIED npub from the session (authority)
+   * @param {string} params.toVersion version being acknowledged
+   * @param {string} params.toDigest  digest the client displayed to the owner
+   * @returns {Promise<{ ok, code?, reason?, acknowledged?, manifest? }>}
+   */
+  async function acknowledgeConstitution(params = {}) {
+    const ownerHex = ownerHexFromNpub(params.ownerNpub);
+    if (!ownerHex) return { ok: false, code: 'bad_owner', reason: 'invalid owner npub' };
+
+    const manifest = await readRaw(ownerHex);
+    if (!manifest) return { ok: false, code: 'no_manifest', reason: 'no genesis manifest for this owner' };
+
+    const current = getConstitution();
+    const target = getConstitutionByVersion(params.toVersion);
+    if (!target) {
+      return { ok: false, code: 'unknown_version', reason: `unknown constitution version ${params.toVersion}` };
+    }
+    if (target.version !== current.version) {
+      return {
+        ok: false,
+        code: 'not_current',
+        reason: `only the current constitution (${current.version}) can be acknowledged`,
+      };
+    }
+    // The digest the client showed the owner must be the digest of the bytes we
+    // hold. A mismatch means they consented to something other than this text.
+    if (params.toDigest !== target.digest) {
+      return { ok: false, code: 'digest_mismatch', reason: 'digest does not match the named version' };
+    }
+    if (manifest?.constitution?.acknowledged_version === target.version) {
+      return { ok: true, acknowledged: false, manifest };
+    }
+
+    const ts = now();
+    const history = Array.isArray(manifest.constitution_acknowledgements)
+      ? manifest.constitution_acknowledgements
+      : [];
+    const next = {
+      ...manifest,
+      constitution: {
+        ...manifest.constitution,
+        acknowledged_version: target.version,
+        acknowledged_digest: target.digest,
+        acknowledged_at: ts,
+      },
+      constitution_acknowledgements: [
+        ...history,
+        {
+          from_version: manifest?.constitution?.acknowledged_version || manifest?.constitution?.version || null,
+          to_version: target.version,
+          to_digest: target.digest,
+          acknowledged_at: ts,
+          acknowledged_at_iso: new Date(ts * 1000).toISOString(),
+        },
+      ],
+      updated_at: ts,
+    };
+    delete next.manifest_digest;
+    next.manifest_digest = manifestDigest(next);
+
+    await writeManifest(ownerHex, next);
+    log.info(`[genesis] owner ${ownerHex.slice(0, 12)} acknowledged constitution ${target.version}`);
+
+    if (audit && typeof audit.append === 'function') {
+      try {
+        await audit.append('genesis.constitution.acknowledge', {
+          bot_id: next.bot_id,
+          owner_pubkey_prefix: ownerHex.slice(0, 12),
+          born_version: next?.constitution?.version || null,
+          acknowledged_version: target.version,
+          acknowledged_digest: target.digest,
+          manifest_digest: next.manifest_digest,
+        });
+      } catch (e) {
+        log.error(`[genesis] audit append failed after acknowledge: ${e.message}`);
+      }
+    }
+
+    return { ok: true, acknowledged: true, manifest: next };
   }
 
   /**
@@ -238,16 +358,10 @@ export function createGenesis(deps = {}) {
     };
     manifest.manifest_digest = manifestDigest(manifest);
 
-    // Atomic write: temp file in the owner dir, then rename over the target so a
-    // crash mid-write never leaves a torn manifest that a retry would treat as
-    // corrupt (and refuse). O_EXCL on the final path is not used because rename
-    // is the atomicity primitive; the pre-write existence check above plus the
-    // single-writer process make a duplicate-create race a no-op.
-    const dir = ownerDir(ownerHex);
-    await mkdir(dir, { recursive: true, mode: 0o700 });
-    const tmp = join(dir, `.manifest.${randomBytes(8).toString('hex')}.tmp`);
-    await writeFile(tmp, JSON.stringify(manifest, null, 2), { mode: 0o600 });
-    await rename(tmp, manifestPath(ownerHex));
+    // O_EXCL on the final path is not used because rename is the atomicity
+    // primitive; the pre-write existence check above plus the single-writer
+    // process make a duplicate-create race a no-op.
+    await writeManifest(ownerHex, manifest);
 
     log.info(`[genesis] created bot ${manifest.bot_id.slice(0, 8)} for owner ${ownerHex.slice(0, 12)} (constitution ${constitution.version})`);
 
@@ -271,5 +385,5 @@ export function createGenesis(deps = {}) {
     return { ok: true, created: true, manifest };
   }
 
-  return { create, read, _baseDir: baseDir, _manifestPath: manifestPath };
+  return { create, read, acknowledgeConstitution, _baseDir: baseDir, _manifestPath: manifestPath };
 }

@@ -12,6 +12,9 @@
  *   • files are written 0600 under a 0700 dir (restrictive perms)
  *   • a genesis.create audit line is appended and the chain verifies
  *   • path traversal via the owner namespace is structurally impossible
+ *   • acknowledgeConstitution migrates an already-activated bot WITHOUT ever
+ *     rewriting the version it was born under, and fails closed on every
+ *     uncertainty (bad owner, no manifest, unknown/stale version, wrong digest)
  *
  * All npubs are throwaway test keys. No private key material appears anywhere.
  *
@@ -27,7 +30,11 @@ import { getPublicKey } from 'nostr-tools/pure';
 import { nip19 } from 'nostr-tools';
 import { createGenesis, ownerHexFromNpub, manifestDigest } from '../core/genesis.mjs';
 import { createAudit } from '../lib/audit.mjs';
-import { getConstitution } from '../lib/constitution.mjs';
+import {
+  getConstitution,
+  getConstitutionByVersion,
+  getSafetyFloor,
+} from '../lib/constitution.mjs';
 
 function hexToBytes(hex) {
   const out = new Uint8Array(hex.length / 2);
@@ -194,6 +201,248 @@ test('genesis.create appends a verifiable audit line', async () => {
     const v = await audit.verify();
     assert.equal(v.ok, true);
     assert.equal(v.count, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Constitution migration for already-activated bots (GENESIS-1 / CONST-1.2.0)
+// ---------------------------------------------------------------------------
+
+const OLD = 'genesis-1.1.0';
+
+/**
+ * Rewrite an existing manifest so it looks like a bot BORN under an earlier
+ * covenant — which is the only state in which an upgrade is on offer. The
+ * manifest digest is recomputed so the bot is genuinely old, not tampered.
+ */
+function ageManifestTo(genesis, ownerHex, version) {
+  const path = genesis._manifestPath(ownerHex);
+  const m = JSON.parse(readFileSync(path, 'utf8'));
+  const old = getConstitutionByVersion(version);
+  m.constitution.version = old.version;
+  m.constitution.digest = old.digest;
+  delete m.manifest_digest;
+  m.manifest_digest = manifestDigest(m);
+  writeFileSync(path, JSON.stringify(m, null, 2));
+  return m;
+}
+
+test('read offers an upgrade to a bot born under an older covenant', async () => {
+  const root = tmpRoot();
+  try {
+    const { genesis } = harness(root);
+    await genesis.create({ ownerNpub: NPUB_A, displayName: 'Aria' });
+    ageManifestTo(genesis, PK_A, OLD);
+
+    const r = await genesis.read(NPUB_A);
+    // An older-but-valid version is honest provenance, not drift.
+    assert.equal(r.constitution_ok, true);
+    assert.equal(r.manifest_digest_ok, true);
+    assert.equal(r.constitution_is_current, false);
+
+    const up = r.constitution_upgrade;
+    const con = getConstitution();
+    assert.equal(up.pinned_version, OLD);
+    assert.equal(up.active_version, OLD);
+    assert.equal(up.current_version, con.version);
+    assert.equal(up.current_digest, con.digest);
+    assert.equal(up.is_current, false);
+    assert.equal(up.upgrade_available, true);
+    assert.equal(up.acknowledgement_required, true);
+    // The floor binds regardless of which version it was born under.
+    assert.ok(up.safety_floor_rule_ids.includes('no-credential-custody'));
+    // Pareto changes prioritisation, so it waits for consent rather than
+    // binding silently.
+    assert.ok(up.newly_binding_rule_ids.includes('pareto-focus'));
+    assert.ok(!up.safety_floor_rule_ids.includes('pareto-focus'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('acknowledge adopts the current covenant WITHOUT rewriting the birth pin', async () => {
+  const root = tmpRoot();
+  try {
+    const { genesis } = harness(root);
+    await genesis.create({ ownerNpub: NPUB_A, displayName: 'Aria' });
+    const born = ageManifestTo(genesis, PK_A, OLD);
+    const con = getConstitution();
+
+    const r = await genesis.acknowledgeConstitution({
+      ownerNpub: NPUB_A, toVersion: con.version, toDigest: con.digest,
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.acknowledged, true);
+
+    const m = r.manifest;
+    // The birth certificate is untouched — that is what makes this a migration
+    // and not a forgery.
+    assert.equal(m.constitution.version, OLD);
+    assert.equal(m.constitution.digest, born.constitution.digest);
+    // Adoption is recorded ALONGSIDE it.
+    assert.equal(m.constitution.acknowledged_version, con.version);
+    assert.equal(m.constitution.acknowledged_digest, con.digest);
+    assert.equal(typeof m.constitution.acknowledged_at, 'number');
+    // Append-only history with the transition it represents.
+    assert.equal(m.constitution_acknowledgements.length, 1);
+    assert.equal(m.constitution_acknowledgements[0].from_version, OLD);
+    assert.equal(m.constitution_acknowledgements[0].to_version, con.version);
+    assert.equal(m.constitution_acknowledgements[0].to_digest, con.digest);
+    // Digest recomputed, so the manifest still self-verifies on disk.
+    assert.equal(manifestDigest(m), m.manifest_digest);
+
+    const after = await genesis.read(NPUB_A);
+    assert.equal(after.manifest_digest_ok, true);
+    assert.equal(after.constitution_upgrade.active_version, con.version);
+    assert.equal(after.constitution_upgrade.is_current, true);
+    assert.equal(after.constitution_upgrade.upgrade_available, false);
+    assert.deepEqual(after.constitution_upgrade.newly_binding_rule_ids, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('acknowledge is idempotent — a repeat click changes nothing', async () => {
+  const root = tmpRoot();
+  try {
+    const { genesis } = harness(root);
+    await genesis.create({ ownerNpub: NPUB_A, displayName: 'Aria' });
+    ageManifestTo(genesis, PK_A, OLD);
+    const con = getConstitution();
+    const args = { ownerNpub: NPUB_A, toVersion: con.version, toDigest: con.digest };
+
+    const first = await genesis.acknowledgeConstitution(args);
+    assert.equal(first.acknowledged, true);
+    const second = await genesis.acknowledgeConstitution(args);
+    assert.equal(second.ok, true);
+    assert.equal(second.acknowledged, false);
+    // History does not grow on a no-op.
+    assert.equal(second.manifest.constitution_acknowledgements.length, 1);
+    assert.equal(
+      second.manifest.constitution.acknowledged_at,
+      first.manifest.constitution.acknowledged_at,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('acknowledge fails closed on every uncertainty', async () => {
+  const root = tmpRoot();
+  try {
+    const { genesis } = harness(root);
+    const con = getConstitution();
+
+    // No manifest yet — nothing to migrate.
+    const none = await genesis.acknowledgeConstitution({
+      ownerNpub: NPUB_A, toVersion: con.version, toDigest: con.digest,
+    });
+    assert.equal(none.ok, false);
+    assert.equal(none.code, 'no_manifest');
+
+    await genesis.create({ ownerNpub: NPUB_A, displayName: 'Aria' });
+    ageManifestTo(genesis, PK_A, OLD);
+    const path = genesis._manifestPath(PK_A);
+    const before = readFileSync(path, 'utf8');
+
+    const bad = await genesis.acknowledgeConstitution({
+      ownerNpub: 'nope', toVersion: con.version, toDigest: con.digest,
+    });
+    assert.equal(bad.code, 'bad_owner');
+
+    const unknown = await genesis.acknowledgeConstitution({
+      ownerNpub: NPUB_A, toVersion: 'genesis-9.9.9', toDigest: con.digest,
+    });
+    assert.equal(unknown.code, 'unknown_version');
+
+    // A real, known, but superseded version cannot be adopted.
+    const stale = getConstitutionByVersion(OLD);
+    const notCurrent = await genesis.acknowledgeConstitution({
+      ownerNpub: NPUB_A, toVersion: stale.version, toDigest: stale.digest,
+    });
+    assert.equal(notCurrent.code, 'not_current');
+
+    // The digest shown to the owner must be the digest of the bytes we hold —
+    // otherwise they consented to text they never read.
+    const mismatch = await genesis.acknowledgeConstitution({
+      ownerNpub: NPUB_A, toVersion: con.version, toDigest: 'f'.repeat(64),
+    });
+    assert.equal(mismatch.code, 'digest_mismatch');
+
+    // Not one of those wrote a byte.
+    assert.equal(readFileSync(path, 'utf8'), before);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('acknowledge is default-deny across owners', async () => {
+  const root = tmpRoot();
+  try {
+    const { genesis } = harness(root);
+    await genesis.create({ ownerNpub: NPUB_A, displayName: 'Aria' });
+    ageManifestTo(genesis, PK_A, OLD);
+    const con = getConstitution();
+
+    // B has no manifest of their own and cannot reach into A's namespace.
+    const r = await genesis.acknowledgeConstitution({
+      ownerNpub: NPUB_B, toVersion: con.version, toDigest: con.digest,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'no_manifest');
+
+    const a = await genesis.read(NPUB_A);
+    assert.equal(a.manifest.constitution.acknowledged_version, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('acknowledge appends a verifiable audit line naming both versions', async () => {
+  const root = tmpRoot();
+  try {
+    const { genesis, audit } = harness(root);
+    await genesis.create({ ownerNpub: NPUB_A, displayName: 'Aria' });
+    ageManifestTo(genesis, PK_A, OLD);
+    const con = getConstitution();
+    await genesis.acknowledgeConstitution({
+      ownerNpub: NPUB_A, toVersion: con.version, toDigest: con.digest,
+    });
+
+    const v = await audit.verify();
+    assert.equal(v.ok, true);
+    assert.equal(v.count, 2);
+
+    const lines = readFileSync(join(root, 'memory', 'audit.jsonl'), 'utf8')
+      .trim().split('\n').map((l) => JSON.parse(l));
+    const ack = lines.find((l) => l.event === 'genesis.constitution.acknowledge');
+    assert.ok(ack, 'acknowledge is auditable');
+    assert.equal(ack.born_version, OLD);
+    assert.equal(ack.acknowledged_version, con.version);
+    assert.equal(ack.acknowledged_digest, con.digest);
+    // No key material ever reaches the log — only a short public prefix.
+    assert.equal(ack.owner_pubkey_prefix, PK_A.slice(0, 12));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the safety floor binds an un-acknowledged bot regardless of birth version', async () => {
+  const root = tmpRoot();
+  try {
+    const { genesis } = harness(root);
+    await genesis.create({ ownerNpub: NPUB_A, displayName: 'Aria' });
+    ageManifestTo(genesis, PK_A, 'genesis-1.0.0');
+
+    const up = (await genesis.read(NPUB_A)).constitution_upgrade;
+    const floorIds = getSafetyFloor().map((r) => r.id);
+    assert.ok(floorIds.includes('no-credential-custody'));
+    assert.deepEqual(up.safety_floor_rule_ids, floorIds);
+    // A floor rule can only ever produce a refusal, so it is never listed as
+    // "would newly bind" — it already does.
+    for (const id of floorIds) assert.ok(!up.newly_binding_rule_ids.includes(id));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

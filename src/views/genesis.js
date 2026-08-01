@@ -17,7 +17,7 @@
  */
 import { h, clear } from './util.js';
 import { shortNpub } from '../lib/npub.js';
-import { constitution, genesisRead, genesisCreate } from '../data/agent.js';
+import { constitution, genesisRead, genesisCreate, genesisAcknowledgeConstitution } from '../data/agent.js';
 import { setChatContext } from '../chat.js';
 
 export function renderGenesis(mount) {
@@ -61,7 +61,13 @@ async function load(body) {
 
   if (data.exists && data.manifest) {
     body.appendChild(provenanceCard(data));
-    if (con) body.appendChild(constitutionCard(con, { compact: true }));
+    const upgrade = data.constitution_upgrade;
+    const offerUpgrade = !!(upgrade && upgrade.upgrade_available && con);
+    if (offerUpgrade) body.appendChild(upgradeCard(upgrade, con, () => load(body)));
+    // Normally the covenant is summarised (the owner already agreed to it). While
+    // an adoption is on offer it is expanded in full: consenting to a version
+    // whose text is not on screen is not consent.
+    if (con) body.appendChild(constitutionCard(con, { compact: !offerUpgrade }));
     if (con && con.layers) body.appendChild(layersCard(con.layers));
     return;
   }
@@ -146,7 +152,12 @@ function provenanceCard(data) {
     ['Owner', shortNpub(m.owner?.npub || m.owner?.pubkey_hex || '')],
     ['Display name', m.display_name || '—'],
     ['Archetype', m.archetype || '—'],
-    ['Constitution', `${m.constitution?.version} · ${String(m.constitution?.digest || '').slice(0, 12)}…`],
+    ['Born under', `${m.constitution?.version} · ${String(m.constitution?.digest || '').slice(0, 12)}…`],
+    // The covenant actually in force. Absent until the owner adopts a newer one,
+    // in which case the birth row above is preserved untouched beside it.
+    ['Covenant in force', m.constitution?.acknowledged_version
+      ? `${m.constitution.acknowledged_version} · ${String(m.constitution.acknowledged_digest || '').slice(0, 12)}… (adopted)`
+      : `${m.constitution?.version} · as born`],
     ['Command mode', m.policy?.command_mode || '—'],
     ['Created', m.created_at_iso || (m.created_at ? new Date(m.created_at * 1000).toISOString() : '—')],
   ];
@@ -173,11 +184,14 @@ function provenanceCard(data) {
   const stageNote = h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 14px;', text: `Provenance stage: ${m.provenance?.stage || 'genesis-1'} · LoRA: ${m.provenance?.lora || 'not-started'} · RAG: ${m.provenance?.rag || 'not-started'}. These are subsequent stages and are not active yet.` });
 
   // Covenant currency: a bot born under an earlier-but-valid constitution version
-  // is honest provenance, NOT tampering. Only show this when the pin is valid
-  // (conOk) but no longer the current version.
+  // is honest provenance, NOT tampering. Only shown when the pin is valid (conOk)
+  // but no longer current AND the owner has already adopted the current text —
+  // otherwise the upgrade card says all of this and offers the action, so
+  // repeating it here would only be noise.
   let currencyNote = null;
-  if (conOk && data.constitution_is_current === false && data.constitution_current_version) {
-    currencyNote = h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 6px;', text: `This bot was born under constitution ${m.constitution?.version} — still valid and verified. The current constitution is ${data.constitution_current_version}; the birth covenant is preserved and pinned, never rewritten.` });
+  const upgrade = data.constitution_upgrade;
+  if (conOk && data.constitution_is_current === false && data.constitution_current_version && upgrade?.is_current) {
+    currencyNote = h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 6px;', text: `This bot was born under constitution ${m.constitution?.version} and has since adopted ${data.constitution_current_version}. The birth covenant is preserved and pinned, never rewritten — both remain verifiable.` });
   }
 
   const children = [
@@ -203,6 +217,90 @@ function tamperBadge(label, ok) {
     title: ok ? 'Digest matches — no tampering detected' : 'Digest mismatch — tamper evidence',
     text: `${ok ? '✓' : '✕'} ${label}`,
   });
+}
+
+// ─── Covenant upgrade / acknowledgement ─────────────────────
+//
+// A bot already alive under an earlier covenant is NOT silently rebound to a
+// newer one: adopting text its owner never agreed to would be exactly the
+// unconsented change explicit-command-only exists to prevent. So adoption is an
+// explicit owner act, taken here, against the version + digest displayed on this
+// page — the agent refuses if that pair is not the bytes it holds.
+//
+// The single exception is the safety floor. Those rules can only ever cause the
+// bot to REFUSE — never to act, spend, publish or retain — so withholding them
+// pending a click would leave existing bots permitted to do the very thing the
+// rule forbids. They bind immediately and are labelled as already in force.
+
+/** Human labels for rule ids. Falls back to the machine `rule`/`id` on anything new. */
+const RULE_LABELS = {
+  'selective-revelation': 'Selective revelation',
+  'verify-dont-trust': 'Verify, don’t trust',
+  'four-freedoms-forkable': 'Four freedoms & forkability',
+  'no-credential-custody': 'No credential or key custody',
+  'pareto-focus': 'Pareto focus (80/20)',
+};
+
+function ruleLabel(r) {
+  return RULE_LABELS[r?.id] || r?.rule || r?.id || 'Rule';
+}
+
+function upgradeCard(upgrade, con, reload) {
+  const c = con.constitution || {};
+  const allRules = [
+    ...(Array.isArray(c.invariants) ? c.invariants : []),
+    ...(Array.isArray(c.operating_rules) ? c.operating_rules : []),
+  ];
+  const byId = new Map(allRules.map((r) => [r.id, r]));
+  const names = (ids) => (Array.isArray(ids) ? ids : []).map((id) => ruleLabel(byId.get(id) || { id }));
+
+  const errorEl = h('div', { class: 'muted', style: 'color: var(--accent-danger); min-height: 18px; font-size: 12.5px; margin-top: 8px;', role: 'alert' });
+  const btn = h('button', { class: 'primary', onClick: adopt }, [`Adopt constitution ${upgrade.current_version}`]);
+
+  async function adopt() {
+    errorEl.textContent = '';
+    btn.disabled = true;
+    btn.textContent = 'Adopting…';
+    // Send the pair the owner was SHOWN, not the pair the agent believes is
+    // current — a mismatch must fail rather than quietly consent to other bytes.
+    const r = await genesisAcknowledgeConstitution({ version: con.version, digest: con.digest });
+    btn.disabled = false;
+    btn.textContent = `Adopt constitution ${upgrade.current_version}`;
+    if (!r.ok) {
+      errorEl.textContent = r.data?.reason || r.reason || 'Could not record acknowledgement.';
+      return;
+    }
+    reload();
+  }
+
+  const children = [
+    h('div', { style: 'display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;' }, [
+      h('h2', { class: 'page-title', style: 'font-size: 17px; margin: 0;', text: 'A newer covenant is available' }),
+      h('span', { class: 'mono muted', style: 'font-size: 12px;', text: `${upgrade.active_version || upgrade.pinned_version || 'unknown'} → ${upgrade.current_version}` }),
+    ]),
+    h('div', { class: 'muted', style: 'font-size: 12.5px; margin: 6px 0 4px;', text: 'Your bot stays bound to the covenant it is on until you adopt this one. Nothing changes without this explicit act, and the version it was born under is preserved either way — adoption is recorded alongside it, never over it.' }),
+  ];
+
+  if (!upgrade.known_pinned_version) {
+    children.push(h('div', { class: 'muted', style: 'font-size: 12.5px; color: var(--accent-danger); margin: 4px 0;', text: `This bot pins constitution ${upgrade.pinned_version || '(none)'}, whose text this agent does not hold. That is not something we can show you, so treat the pin as unverifiable.` }));
+  }
+
+  const floor = names(upgrade.safety_floor_rule_ids);
+  if (floor.length) {
+    children.push(h('div', { class: 'muted', style: 'font-size: 12px; font-weight: 600; margin: 12px 0 2px; text-transform: uppercase; letter-spacing: 0.04em;', text: 'Already binding — safety floor' }));
+    children.push(h('div', { class: 'muted', style: 'font-size: 12.5px;', text: `${floor.join(' · ')} — in force on every bot regardless of covenant version, because these rules can only cause a refusal, never an action.` }));
+  }
+
+  const newly = names(upgrade.newly_binding_rule_ids);
+  children.push(h('div', { class: 'muted', style: 'font-size: 12px; font-weight: 600; margin: 12px 0 2px; text-transform: uppercase; letter-spacing: 0.04em;', text: 'Would newly bind on adoption' }));
+  children.push(h('div', { class: 'muted', style: 'font-size: 12.5px;', text: newly.length ? newly.join(' · ') : 'No new rules — this version revises existing wording only.' }));
+
+  children.push(h('div', { class: 'mono muted', style: 'font-size: 11.5px; margin-top: 10px; word-break: break-all;', text: `adopting ${con.version} · digest ${con.digest}` }));
+  children.push(h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;', text: 'The full text of this version is shown below. Read it before adopting.' }));
+  children.push(h('div', { class: 'form-actions', style: 'margin-top: 12px;' }, [btn]));
+  children.push(errorEl);
+
+  return h('div', { class: 'card' }, children);
 }
 
 // ─── Constitution preview ───────────────────────────────────
@@ -235,20 +333,42 @@ function constitutionCard(con, { compact }) {
     ]));
   }
 
-  // Layer-A sovereignty invariants (added in genesis-1.1.0). Rendered the same
-  // way as the humanitarian articles — textContent only, no raw HTML.
+  // Layer-A sovereignty invariants (added in genesis-1.1.0) and the operating
+  // rules (added in genesis-1.2.0). Rendered the same way as the humanitarian
+  // articles — textContent only, no raw HTML.
   const invariants = Array.isArray(c.invariants) ? c.invariants : [];
   if (invariants.length && !compact) {
-    children.push(h('div', { class: 'muted', style: 'font-size: 12px; font-weight: 600; margin: 12px 0 2px; text-transform: uppercase; letter-spacing: 0.04em;', text: 'Sovereignty invariants' }));
-    for (const inv of invariants) {
-      children.push(h('div', { style: 'padding: 8px 0; border-top: 1px solid hsl(var(--border));' }, [
-        h('div', { style: 'font-size: 13px; font-weight: 600; margin-bottom: 2px;', text: inv.rule || inv.id || 'Invariant' }),
-        inv.statement ? h('div', { class: 'muted', style: 'font-size: 12.5px;', text: inv.statement }) : null,
-      ]));
-    }
+    children.push(sectionHeading('Sovereignty invariants'));
+    for (const inv of invariants) children.push(ruleRow(inv));
+  }
+
+  // Kept a distinct section, not folded into the invariants, because an
+  // operating rule is a priority heuristic rather than a sovereignty guarantee —
+  // and this one explicitly yields to every duty above it.
+  const operating = Array.isArray(c.operating_rules) ? c.operating_rules : [];
+  if (operating.length && !compact) {
+    children.push(sectionHeading('Operating rules'));
+    for (const r of operating) children.push(ruleRow(r));
   }
 
   return h('div', { class: 'card' }, children);
+}
+
+function sectionHeading(text) {
+  return h('div', { class: 'muted', style: 'font-size: 12px; font-weight: 600; margin: 12px 0 2px; text-transform: uppercase; letter-spacing: 0.04em;', text });
+}
+
+function ruleRow(r) {
+  const title = h('div', { style: 'display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 2px;' }, [
+    h('span', { style: 'font-size: 13px; font-weight: 600;', text: ruleLabel(r) }),
+    // A floor rule binds every bot immediately, even one born under an older
+    // covenant, so say so here rather than only on the upgrade card.
+    r.safety_floor ? h('span', { class: 'pill', style: 'font-size: 11px;', title: 'Binds every bot immediately, on any constitution version', text: 'safety floor' }) : null,
+  ]);
+  return h('div', { style: 'padding: 8px 0; border-top: 1px solid hsl(var(--border));' }, [
+    title,
+    r.statement ? h('div', { class: 'muted', style: 'font-size: 12.5px;', text: r.statement }) : null,
+  ]);
 }
 
 // ─── Layered principles provenance (Layer B + Layer C) ──────

@@ -57,6 +57,9 @@ export function buildWorkingValues() {
   if (Array.isArray(c.body.invariants) && c.body.invariants.length) {
     lines.push('Invariants: ' + c.body.invariants.map((i) => shortRule(i.id)).join('; ') + '.');
   }
+  if (Array.isArray(c.body.operating_rules) && c.body.operating_rules.length) {
+    lines.push('Operating rules: ' + c.body.operating_rules.map((r) => shortRule(r.id)).join('; ') + '.');
+  }
   lines.push('Normative order: ' + (layers.normative_hierarchy || []).join(' > ') + '.');
   const header = lines.join('\n');
 
@@ -102,6 +105,20 @@ function shortRule(id) {
     'selective-revelation': 'disclose only what is required; privacy is control',
     'verify-dont-trust': 'verify signed data; do not trust the relay/server',
     'four-freedoms-forkable': 'owner may run/study/modify/redistribute; forkable',
+    // Deliberately the longest line in the header. This is a refusal rule the
+    // model has to apply mid-turn, and a terse paraphrase ("never store keys")
+    // loses the parts that decide real cases: per-use confirmation, the
+    // use/retain distinction, and what to do when neither is available.
+    'no-credential-custody':
+      'never use a human password without fresh explicit confirmation for that specific use; ' +
+      'never store, log, reproduce, expose or take custody of passwords, Bitcoin private keys ' +
+      'or seed phrases, Nostr private keys or nsec values, or equivalent secrets; use a secure ' +
+      'external credential reference so you never see the secret; consent to use is not consent ' +
+      'to retain; if confirmation or secure handling is unavailable, fail closed and refuse',
+    'pareto-focus':
+      'prioritise the ~20% of actions giving ~80% of the useful outcome and say what you are ' +
+      'leaving aside, but never let efficiency override safety, consent, privacy, correctness ' +
+      'or any duty above',
   };
   return map[id] || id;
 }

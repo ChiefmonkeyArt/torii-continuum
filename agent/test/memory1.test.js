@@ -31,6 +31,7 @@ import { createMemStore, GLOBAL_PROJECT, MAX_ITEM_BYTES } from '../lib/memstore.
 import { createConsent } from '../lib/consent.mjs';
 import { createPortability, BUNDLE_SIG_KIND, buildManifest, MAX_BUNDLE_ITEMS } from '../lib/portability.mjs';
 import { buildWorkingValues, fenceUntrusted, DATA_FENCE } from '../lib/workingvalues.mjs';
+import { getConstitution, CODE_OF_PRACTICE_VERSION } from '../lib/constitution.mjs';
 import { createAudit } from '../lib/audit.mjs';
 
 function hexToBytes(hex) {
@@ -460,6 +461,61 @@ test('working-values header is deterministic and carries constitution + COP prov
   assert.ok(a.provenance.constitution_version);
   assert.ok(a.provenance.constitution_digest);
   assert.ok(a.provenance.code_of_practice_version);
+});
+
+test('working-values header carries the constitution + COP versions in force', () => {
+  const { header, provenance } = buildWorkingValues();
+  const con = getConstitution();
+  assert.equal(provenance.constitution_version, con.version);
+  assert.equal(provenance.constitution_digest, con.digest);
+  assert.equal(provenance.code_of_practice_version, CODE_OF_PRACTICE_VERSION);
+  // The version the model is told it operates under must be the version we pin.
+  assert.ok(header.includes(con.version));
+  assert.ok(header.includes(CODE_OF_PRACTICE_VERSION));
+});
+
+test('the replaced first tenet reaches the prompt, and the old wording does not', () => {
+  const { header } = buildWorkingValues();
+  assert.match(header, /Tenets: Care for the human that created it;/);
+  assert.equal(/Care for the human that created it\./.test(header), false);
+  for (const stale of ['Care for the humans that created it', 'those who gave it life']) {
+    assert.equal(header.includes(stale), false, `stale wording still in prompt: ${stale}`);
+  }
+});
+
+test('the credential/key rule reaches the prompt with every normative requirement', () => {
+  const { header } = buildWorkingValues();
+  const line = header.split('\n').find((l) => l.startsWith('Invariants:'));
+  assert.ok(line, 'invariants line present');
+  // Fresh, use-specific confirmation — not a standing grant.
+  assert.match(line, /never use a human password without fresh explicit confirmation for that specific use/);
+  // The prohibited handling, and the secret classes it covers.
+  assert.match(line, /never store, log, reproduce, expose or take custody of/);
+  for (const secret of [
+    'passwords',
+    'Bitcoin private keys or seed phrases',
+    'Nostr private keys or nsec values',
+    'equivalent secrets',
+  ]) {
+    assert.ok(line.includes(secret), `prompt must name ${secret}`);
+  }
+  // The mechanism, the boundary, and the failure mode.
+  assert.match(line, /secure external credential reference so you never see the secret/);
+  assert.match(line, /consent to use is not consent to retain/);
+  assert.match(line, /fail closed and refuse/);
+});
+
+test('the Pareto rule reaches the prompt as an operating rule that yields to duty', () => {
+  const { header } = buildWorkingValues();
+  const line = header.split('\n').find((l) => l.startsWith('Operating rules:'));
+  assert.ok(line, 'operating rules line present');
+  assert.match(line, /~20% of actions giving ~80% of the useful outcome/);
+  assert.match(line, /say what you are leaving aside/);
+  assert.match(line, /never let efficiency override safety, consent, privacy, correctness or any duty/);
+  // Efficiency is guidance, so it must NOT be smuggled into the invariants line,
+  // which is where the non-negotiable floor lives.
+  const inv = header.split('\n').find((l) => l.startsWith('Invariants:'));
+  assert.equal(/20%/.test(inv), false);
 });
 
 test('fenceUntrusted wraps content in the untrusted-data boundary', () => {
