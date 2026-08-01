@@ -11,7 +11,7 @@
 #   - verifies exact annotated release tags + version markers before mutating live state
 #       torii-base            v0.1.4
 #       torii-continuum       v0.2.67-alpha  (this script's own release tag)
-#       onboarding preview    v0.1.21-preview
+#       onboarding preview    v0.1.22-preview
 #   - backs up the current Torii base state to a root-only timestamped directory
 #   - redeploys torii-base via its sanctioned bootstrap (TORII_DOMAIN + SKIP_CERTBOT=1)
 #   - bootstraps + triggers the Continuum OPS-DEPLOY-2 unattended pull, pins the tag,
@@ -118,8 +118,8 @@ readonly BASE_VERSION="0.1.4"
 readonly CONTINUUM_REPO="https://github.com/ChiefmonkeyArt/torii-continuum.git"
 readonly CONTINUUM_TAG="v0.2.67-alpha"
 readonly CONTINUUM_VERSION="0.2.67-alpha"
-readonly PREVIEW_DIR_NAME="onboarding-v0.1.21"
-readonly PREVIEW_VERSION="0.1.21-preview"
+readonly PREVIEW_DIR_NAME="onboarding-v0.1.22"
+readonly PREVIEW_VERSION="0.1.22-preview"
 # Canonical CTA label — kept for logs/reports only, NOT for matching.
 readonly PREVIEW_CTA="Sign in with browser extension"
 # Robust CTA matcher. Detection matches the sign-in *intent* ("sign in … with|using

@@ -113,7 +113,7 @@ grep -qF 'BASE_TAG="v0.1.4"' "$CUTOVER"                 && ok "pins torii-base v
 grep -qF 'BASE_VERSION="0.1.4"' "$CUTOVER"              && ok "pins torii-base VERSION 0.1.4"      || bad "torii-base version not pinned"
 grep -qF 'CONTINUUM_TAG="v0.2.67-alpha"' "$CUTOVER"     && ok "pins its own Continuum tag v0.2.67-alpha" || bad "continuum tag not pinned to v0.2.67-alpha"
 grep -qF 'CONTINUUM_VERSION="0.2.67-alpha"' "$CUTOVER"  && ok "pins Continuum version 0.2.67-alpha" || bad "continuum version not pinned"
-grep -qF 'PREVIEW_VERSION="0.1.21-preview"' "$CUTOVER"  && ok "pins onboarding preview 0.1.21-preview" || bad "preview version not pinned"
+grep -qF 'PREVIEW_VERSION="0.1.22-preview"' "$CUTOVER"  && ok "pins onboarding preview 0.1.22-preview" || bad "preview version not pinned"
 grep -qF 'PREVIEW_CTA="Sign in with browser extension"' "$CUTOVER" && ok "keeps the canonical CTA label" || bad "canonical CTA label missing"
 
 # Annotated-tag verification: only an annotated tag object (cat-file -t == tag)
@@ -558,7 +558,7 @@ cta_pass '<button><svg></svg><span>Sign in with browser extension</span></button
 cta_pass 'Sign in with a browser extension' 'reworded: "a browser"'
 cta_pass 'Sign in using a Nostr extension' 'reworded: "using a Nostr"'
 cta_pass '<span>Sign in with</span><svg/><span>browser extension</span>' 'label split across spans'
-cta_pass "$(cat "${REPO_ROOT}/preview-assets/onboarding-v0.1.21/index.html")" 'the shipped v0.1.21 asset'
+cta_pass "$(cat "${REPO_ROOT}/preview-assets/onboarding-v0.1.22/index.html")" 'the shipped v0.1.22 asset'
 cta_fail '<html><body><h1>Console</h1></body></html>' 'valid HTML without the CTA'
 cta_fail '404 Not Found' 'error page'
 cta_fail '' 'empty body'
