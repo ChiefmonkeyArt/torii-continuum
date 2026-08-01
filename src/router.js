@@ -57,15 +57,20 @@ function toRegex(pattern) {
 }
 
 /**
- * Render whatever the current hash names.
- * @param {{force?: boolean}} [opts]
+ * Render the route for `path`, or — when no path is given — for whatever the
+ * current hash names.
+ * @param {{force?: boolean, path?: string|null}} [opts]
  *   force — resolve even when this hash is already the rendered one. Every
  *   deliberate resolve (boot, navigate, auth revalidation) forces; only the
  *   `hashchange` listener does not, because that event is the trailing echo of
  *   a URL write navigate() has already rendered.
+ *   path — the destination navigate() was ASKED for (CONT-NAVSYNC-2). Rendering
+ *   from the argument instead of re-reading `window.location.hash` is what makes
+ *   the transition independent of whether the browser has published the URL
+ *   write yet; see navigate().
  */
-function resolve({ force = false } = {}) {
-  const hash = window.location.hash || '#/';
+function resolve({ force = false, path: navPath = null } = {}) {
+  const hash = navPath != null ? '#' + navPath : (window.location.hash || '#/');
   if (!force && hash === renderedHash) return;
   const path = hash.slice(1);
   for (const r of routes) {
@@ -90,9 +95,12 @@ function resolve({ force = false } = {}) {
       return;
     }
   }
-  // Fallback to landing
+  // Fallback to landing. Render it here too rather than leaving it to the
+  // hashchange the URL write only schedules — an unmatched hash must not be
+  // able to strand the operator on the previous screen.
   renderedHash = null;
-  window.location.hash = '#/';
+  writeLocation('#/', false);
+  if (hash !== '#/') resolve({ force: true, path: '/' });
 }
 
 export function currentRoute() { return currentHandler; }
@@ -109,25 +117,48 @@ export function currentRoute() { return currentHandler; }
  */
 export function navigate(path, opts = {}) {
   const target = '#' + path;
-  if (window.location.hash !== target) {
-    if (opts.replace && typeof window.location.replace === 'function') {
+  if (window.location.hash !== target) writeLocation(target, opts.replace);
+  // Render in the SAME turn as the URL write (CONT-NAVSYNC-1), and render the
+  // path we were ASKED for rather than reading the URL back (CONT-NAVSYNC-2).
+  //
+  // v0.2.98 moved the render here but still let `resolve()` re-read
+  // `window.location.hash` to decide WHAT to render — a value the app has just
+  // written but does not own. A `location.replace()` fragment navigation is put
+  // through the session-history traversal queue, so the read-back is not
+  // guaranteed to reflect the write in the same turn, and the write itself can
+  // be refused outright. When the read came back stale the router rendered the
+  // route for the OLD hash — the login card the operator had just signed in
+  // from — and the trailing `hashchange` that would have corrected it is the
+  // very event these browsers coalesce, defer or withhold. That is the
+  // "signed in, still on the login page, fixed by Ctrl+R" report.
+  //
+  // Passing the path makes the destination an argument instead of an
+  // observation, so the transition no longer depends on the URL write being
+  // visible, synchronous, permitted, or announced.
+  resolve({ force: true, path });
+}
+
+/**
+ * Write the address bar, best effort. The URL is BOOKKEEPING, not the trigger:
+ * navigate() renders from the path it was given, so a write that is deferred,
+ * refused or throws must degrade to a stale address bar and nothing worse. It
+ * used to run before the render with nothing catching it, which made a blocked
+ * `location.replace()` swallow the whole transition.
+ * @param {string} target the hash to write, including '#'
+ * @param {boolean} [replace] replace the history entry instead of pushing
+ */
+function writeLocation(target, replace) {
+  if (replace && typeof window.location.replace === 'function') {
+    try {
       const { pathname, search } = window.location;
       window.location.replace(`${pathname || ''}${search || ''}${target}`);
-    } else {
-      window.location.hash = path;
+      return;
+    } catch (_e) {
+      // Fall through: a pushed entry is a far smaller problem than a screen
+      // that never changes.
     }
   }
-  // Render in the SAME turn as the URL write (CONT-NAVSYNC-1). Writing the hash
-  // only *schedules* a `hashchange`, and the render used to be that event's job
-  // alone — so between a completed sign-in and the browser delivering the event
-  // the address bar said /dashboard while the login card was still the only
-  // thing on screen. Any browser that coalesces, defers or (for a
-  // location.replace() fragment navigation) withholds that event left the
-  // operator there permanently, with a perfectly good session in storage that
-  // only a reload would surface. Resolving here makes the transition part of
-  // the navigation instead of a hope about the event loop; the trailing
-  // hashchange then dedupes against renderedHash.
-  resolve({ force: true });
+  try { window.location.hash = target.slice(1); } catch (_e) {}
 }
 
 // Re-resolve the current hash against the route table. Exposed so auth
