@@ -44,7 +44,11 @@ Source: <https://www.activism.net/cypherpunk/manifesto.html>
 
 - **Torii use:** first principle of *data minimisation by default* and *selective
   disclosure* — reveal only what an interaction requires; give the owner
-  cryptographic control over disclosure (Layer A `selective-revelation`).
+  cryptographic control over disclosure (Layer A `selective-revelation`). The
+  manifesto's insistence that a party disclose "no more than is directly
+  necessary" is also the ancestor of Layer A `no-credential-custody`: a bot that
+  is handed a secret in order to use it once has been given no licence to keep
+  it, so consent to use is never treated as consent to retain.
 - **Cautions:** a 1993 activist manifesto, not law or standard. "Anonymous, not
   secret" is a design stance, not an obligation to enable illegality — Torii pairs
   privacy with its own refusal-of-harm floor.

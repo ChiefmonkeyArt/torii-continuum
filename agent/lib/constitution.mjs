@@ -55,7 +55,7 @@ import { createHash } from 'node:crypto';
  * and historical manifests keep verifying. The version string is part of the
  * hashed body, so the digest and the version move together atomically.
  */
-export const CONSTITUTION_VERSION = 'genesis-1.1.0';
+export const CONSTITUTION_VERSION = 'genesis-1.2.0';
 
 /**
  * genesis-1.0.0 — the founding humanitarian constitution (GENESIS-1).
@@ -214,6 +214,86 @@ const CONSTITUTION_BODY_1_1_0 = Object.freeze({
 });
 
 /**
+ * genesis-1.2.0 — CURRENT. Three changes, all in the covenant text itself:
+ *
+ *   1. The first humanitarian article is RESTATED. "Care for those who gave it
+ *      life." becomes "Care for the human that created it.", and the intent now
+ *      says out loud what was previously only implied by a genesis clause: the
+ *      bot guards the owner's keys, WHICH IT WILL NEVER HOLD OR STORE. Naming
+ *      the non-custody promise inside the article that people actually read
+ *      matters more than leaving it to a clause further down.
+ *   2. A new Layer-A invariant, `no-credential-custody`, states the full
+ *      credential rule: fresh confirmation per use, no retention of any secret,
+ *      secure external references, and fail-closed when either is unavailable.
+ *      `no-private-keys` (1.0.0) only bound the HOST's publishing path; this
+ *      binds the bot's handling of every credential it is ever shown.
+ *   3. A new `operating_rules` array carries the Pareto rule. It is deliberately
+ *      NOT an invariant: it shapes prioritisation rather than defining
+ *      sovereignty, and it is explicitly subordinate to every duty above it.
+ *
+ * `safety_floor: true` on the credential invariant is load-bearing for
+ * migration — see SAFETY_FLOOR semantics below. A floor rule can only ever make
+ * the bot REFUSE, never act, which is why it can bind a bot born under an older
+ * covenant without that owner's acknowledgement.
+ *
+ * The other three articles and all five genesis clauses are carried forward
+ * verbatim from genesis-1.0.0.
+ *
+ * FROZEN once shipped: any further change mints genesis-1.3.0+, never edits this.
+ */
+const CONSTITUTION_BODY_1_2_0 = Object.freeze({
+  schema: 'torii.continuum.constitution/1',
+  version: 'genesis-1.2.0',
+  title: 'Humanitarian Starter Constitution',
+  preamble: CONSTITUTION_BODY_1_0_0.preamble,
+  articles: [
+    {
+      id: 'care-for-creators',
+      tenet: 'Care for the human that created it.',
+      intent:
+        'Protect, respect, and serve the owner and creators who brought this ' +
+        'bot into existence. Guard their sovereignty, privacy, keys (which it ' +
+        'will never hold/store), and consent above the bot’s own continuity.',
+    },
+    CONSTITUTION_BODY_1_0_0.articles[1],
+    CONSTITUTION_BODY_1_0_0.articles[2],
+    CONSTITUTION_BODY_1_0_0.articles[3],
+  ],
+  genesis_clauses: CONSTITUTION_BODY_1_0_0.genesis_clauses,
+  invariants: [
+    ...CONSTITUTION_BODY_1_1_0.invariants,
+    {
+      id: 'no-credential-custody',
+      rule: 'no_credential_or_key_custody',
+      safety_floor: true,
+      statement:
+        'The bot never uses a human’s password without fresh, explicit ' +
+        'confirmation for that specific use, and never stores, saves, retains, ' +
+        'logs, reproduces, exposes, or takes custody of passwords, Bitcoin ' +
+        'private keys or seed phrases, Nostr private keys or nsec values, or ' +
+        'equivalent cryptographic secrets. Where a credential is genuinely ' +
+        'required it is reached through a secure external credential reference, ' +
+        'so the bot never sees or stores the secret itself. Consent to use is ' +
+        'not consent to retain. If fresh confirmation or secure handling is ' +
+        'unavailable, the bot fails closed and refuses.',
+    },
+  ],
+  operating_rules: [
+    {
+      id: 'pareto-focus',
+      rule: 'pareto_priority_never_over_duty',
+      statement:
+        'The bot prioritises the roughly twenty percent of actions that produce ' +
+        'roughly eighty percent of the useful outcome, and says plainly what it ' +
+        'is leaving aside. Efficiency never overrides safety, consent, privacy, ' +
+        'correctness, or any constitutional duty; where they conflict, the duty ' +
+        'wins and the shortcut is abandoned.',
+    },
+  ],
+  amendability: CONSTITUTION_BODY_1_0_0.amendability,
+});
+
+/**
  * The version registry: every constitution body ever shipped, keyed by version.
  * FROZEN entries — never edit a body once it is here; mint a new version. This
  * is what preserves historical verification: a manifest pinned to any listed
@@ -222,6 +302,7 @@ const CONSTITUTION_BODY_1_1_0 = Object.freeze({
 const CONSTITUTION_BODIES = Object.freeze({
   'genesis-1.0.0': CONSTITUTION_BODY_1_0_0,
   'genesis-1.1.0': CONSTITUTION_BODY_1_1_0,
+  'genesis-1.2.0': CONSTITUTION_BODY_1_2_0,
 });
 
 /**
@@ -231,7 +312,7 @@ const CONSTITUTION_BODIES = Object.freeze({
  * live. These are in-repo doc paths + their own versions; the UI renders them as
  * plain text (never as navigable external links) to avoid XSS / unsafe nav.
  */
-export const CODE_OF_PRACTICE_VERSION = 'cop-1.0.0';
+export const CODE_OF_PRACTICE_VERSION = 'cop-1.1.0';
 export const REFERENCE_CANON_VERSION = 'canon-1.0.0';
 
 const CONSTITUTION_LAYERS = Object.freeze({
@@ -355,7 +436,7 @@ export function getConstitution() {
   return {
     version: CONSTITUTION_VERSION,
     digest: CONSTITUTION_DIGEST,
-    body: CONSTITUTION_BODY_1_1_0,
+    body: CONSTITUTION_BODY_1_2_0,
     layers: CONSTITUTION_LAYERS,
     versions: listConstitutionVersions(),
   };
@@ -431,6 +512,111 @@ export function verifyConstitutionDigest(pinnedDigest, pinnedVersion) {
     return { ok: false, reason: 'digest mismatch (constitution drifted)', current_version, current_digest };
   }
   return { ok: true, pinned_is_current: true, current_version, current_digest };
+}
+
+/**
+ * Every normative rule in a body, flattened. Articles are values rather than
+ * rules and are excluded; clauses, invariants and operating rules are all
+ * things the bot is expected to obey, so all three are enumerated.
+ * @param {object} body
+ * @returns {Array<{ id: string, kind: string, safety_floor: boolean, statement: string }>}
+ */
+export function rulesOf(body) {
+  const out = [];
+  for (const [kind, list] of [
+    ['genesis_clause', body.genesis_clauses],
+    ['invariant', body.invariants],
+    ['operating_rule', body.operating_rules],
+  ]) {
+    for (const r of Array.isArray(list) ? list : []) {
+      out.push({
+        id: r.id,
+        kind,
+        safety_floor: r.safety_floor === true,
+        statement: r.statement,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * SAFETY FLOOR — the migration decision, stated once here.
+ *
+ * A bot already activated under an older covenant keeps that covenant until its
+ * owner explicitly acknowledges a newer one: silently rebinding a live bot to
+ * text its owner never agreed to would violate `explicit-command-only` and
+ * `default-deny`, and it would destroy the provenance the pinned digest exists
+ * to provide.
+ *
+ * One class of rule is exempt, and only one. A rule marked `safety_floor` can
+ * ONLY ever cause the bot to refuse — never to act, spend, publish, or retain.
+ * `no-credential-custody` is exactly that: its whole content is "do not hold
+ * this, and stop if you cannot do it safely." Withholding a refusal rule from
+ * existing bots until someone clicks a button would leave them free to retain an
+ * nsec in the meantime, which is the harm the rule exists to prevent. Applying
+ * it immediately cannot harm the owner; the worst case is a refusal they can
+ * resolve by supplying a credential reference.
+ *
+ * The Pareto rule is deliberately NOT a floor. It changes how the bot chooses
+ * what to do, so it binds only after acknowledgement.
+ *
+ * @returns {Array<{ id: string, kind: string, safety_floor: boolean, statement: string }>}
+ */
+export function getSafetyFloor() {
+  return rulesOf(CONSTITUTION_BODIES[CONSTITUTION_VERSION]).filter((r) => r.safety_floor);
+}
+
+/**
+ * Describe where an already-activated bot stands relative to the current
+ * covenant: what it is bound by now, whether an upgrade is on offer, and which
+ * rules would newly bind it if its owner acknowledged.
+ *
+ * Fails closed on an unknown pinned version — we cannot describe bytes we do not
+ * hold, so we report it as unknown and still surface the floor.
+ *
+ * @param {string} pinnedVersion       version the manifest was born under
+ * @param {string} [acknowledgedVersion] newest version the owner has acknowledged
+ * @returns {{ current_version: string, current_digest: string, pinned_version: string,
+ *   active_version: string|null, known_pinned_version: boolean, is_current: boolean,
+ *   upgrade_available: boolean, acknowledgement_required: boolean,
+ *   safety_floor_rule_ids: string[], newly_binding_rule_ids: string[] }}
+ */
+export function constitutionUpgrade(pinnedVersion, acknowledgedVersion) {
+  const current_version = CONSTITUTION_VERSION;
+  const current_digest = CONSTITUTION_DIGEST;
+  const floorIds = getSafetyFloor().map((r) => r.id);
+
+  const knownPinned = Object.prototype.hasOwnProperty.call(CONSTITUTION_BODIES, pinnedVersion);
+  // An acknowledgement only counts if we hold the bytes it names.
+  const knownAck =
+    acknowledgedVersion != null &&
+    Object.prototype.hasOwnProperty.call(CONSTITUTION_BODIES, acknowledgedVersion);
+  const active_version = knownAck ? acknowledgedVersion : knownPinned ? pinnedVersion : null;
+  const is_current = active_version === current_version;
+
+  // What the owner would be taking on. The floor already binds, so it is never
+  // listed as "newly binding" — that would overstate what acknowledging changes.
+  const activeIds = new Set(
+    active_version ? rulesOf(CONSTITUTION_BODIES[active_version]).map((r) => r.id) : [],
+  );
+  const newly_binding_rule_ids = rulesOf(CONSTITUTION_BODIES[current_version])
+    .filter((r) => !activeIds.has(r.id) && !r.safety_floor)
+    .map((r) => r.id);
+
+  return {
+    current_version,
+    current_digest,
+    pinned_version: pinnedVersion ?? null,
+    active_version,
+    known_pinned_version: knownPinned,
+    is_current,
+    upgrade_available: !is_current,
+    acknowledgement_required: !is_current,
+    // Binding on every bot regardless of which covenant it was born under.
+    safety_floor_rule_ids: floorIds,
+    newly_binding_rule_ids,
+  };
 }
 
 export const CONSTITUTION = { VERSION: CONSTITUTION_VERSION, DIGEST: CONSTITUTION_DIGEST };

@@ -19,6 +19,7 @@ import {
   constitution,
   genesisRead,
   genesisCreate,
+  genesisAcknowledgeConstitution,
 } from './agent.js';
 
 // A live token mirrors the agent's `iat.exp.pubkey.oiat.sig` shape, future exp.
@@ -329,6 +330,21 @@ describe('GENESIS-1 client fns — constitution + genesis', () => {
     expect('pubkey' in sent).toBe(false);
     expect('owner' in sent).toBe(false);
     expect('ownerNpub' in sent).toBe(false);
+  });
+
+  it('genesisAcknowledgeConstitution POSTs exactly the shown version+digest', async () => {
+    await genesisAcknowledgeConstitution({
+      version: 'genesis-1.2.0',
+      digest: 'a'.repeat(64),
+      // Nothing else may ride along — the agent decides what adoption means.
+      ownerNpub: 'npub1evil',
+      manifest_digest: 'deadbeef',
+    });
+    const { url, opts } = calls[0];
+    expect(url).toBe('https://agent.example/api/genesis/constitution/acknowledge');
+    expect(opts.method).toBe('POST');
+    const sent = JSON.parse(opts.body);
+    expect(sent).toEqual({ version: 'genesis-1.2.0', digest: 'a'.repeat(64) });
   });
 
   it('genesis calls short-circuit offline with no fetch', async () => {

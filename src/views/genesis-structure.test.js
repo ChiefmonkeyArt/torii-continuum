@@ -92,8 +92,63 @@ describe('genesis view — layered principles provenance (Layer B + C)', () => {
     expect(src).not.toMatch(/h\('a'/);
   });
 
-  it('shows the genesis-1.1.0 sovereignty invariants', () => {
+  it('shows the sovereignty invariants', () => {
     expect(src).toMatch(/invariants/);
     expect(src).toMatch(/Sovereignty invariants/i);
+  });
+});
+
+describe('genesis view — operating rules and the safety floor', () => {
+  it('renders the operating rules alongside the invariants', () => {
+    expect(src).toMatch(/operating_rules/);
+    expect(src).toMatch(/Operating rules/i);
+  });
+
+  it('labels the credential/key and Pareto rules', () => {
+    expect(src).toMatch(/'no-credential-custody':/);
+    expect(src).toMatch(/'pareto-focus':/);
+  });
+
+  it('marks safety-floor rules as binding regardless of version', () => {
+    expect(src).toMatch(/safety_floor/);
+    expect(src).toMatch(/safety floor/i);
+  });
+});
+
+describe('genesis view — constitution migration for activated bots', () => {
+  it('offers an upgrade from the read response', () => {
+    expect(src).toMatch(/constitution_upgrade/);
+    expect(src).toMatch(/upgrade_available/);
+    expect(src).toMatch(/upgradeCard\(/);
+  });
+
+  it('acknowledges through the dedicated endpoint helper', () => {
+    expect(src).toMatch(/genesisAcknowledgeConstitution/);
+  });
+
+  it('sends the version+digest pair it actually displayed', () => {
+    // Consenting to a version whose bytes are not on screen is not consent, so
+    // the adopt call must send con.version/con.digest — the shown pair — and
+    // the agent refuses if it does not match the bytes it holds.
+    expect(src).toMatch(/genesisAcknowledgeConstitution\(\{[\s\S]{0,120}con\.version/);
+    expect(src).toMatch(/genesisAcknowledgeConstitution\(\{[\s\S]{0,160}con\.digest/);
+  });
+
+  it('expands the covenant in full while an adoption is on offer', () => {
+    expect(src).toMatch(/compact:\s*!offerUpgrade/);
+  });
+
+  it('separates what already binds from what would newly bind', () => {
+    expect(src).toMatch(/safety_floor_rule_ids/);
+    expect(src).toMatch(/newly_binding_rule_ids/);
+  });
+
+  it('warns rather than reassures when the pinned version is unknown', () => {
+    expect(src).toMatch(/known_pinned_version/);
+  });
+
+  it('distinguishes the birth version from the covenant in force', () => {
+    expect(src).toMatch(/Born under/);
+    expect(src).toMatch(/acknowledged_version/);
   });
 });
