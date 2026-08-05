@@ -28,6 +28,10 @@ export function renderProjects(mount, opts = {}) {
   const grid = h('div', { class: 'grid-auto' });
   const projects = S.listProjects();
   for (const p of projects) {
+    // A record with no usable slug (missing/blank `content`, or `content.slug`)
+    // is malformed — never let it crash the whole list; skip just that card so
+    // every OTHER project on the screen still opens normally.
+    if (!p || !p.content || !p.content.slug) continue;
     grid.appendChild(renderProjectCard(p, S, opts));
   }
   grid.appendChild(renderAddCard(demo));

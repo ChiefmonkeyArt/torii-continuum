@@ -152,7 +152,7 @@ function boardStatsFor(slug) {
  */
 export const demoStore = Object.freeze({
   listProjects: () => DEMO_PROJECTS.slice(),
-  getProject: (slug) => DEMO_PROJECTS.find((p) => p.content.slug === slug) || null,
+  getProject: (slug) => DEMO_PROJECTS.find((p) => p && p.content && p.content.slug === slug) || null,
   milestonesFor: wrapMilestones,
   todosFor: wrapTodos,
   sessionsFor: wrapSessions,

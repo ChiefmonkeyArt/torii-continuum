@@ -105,7 +105,10 @@ export function listProjects() {
 }
 
 export function getProject(slug) {
-  return state.projects.find((p) => p.content.slug === slug) || null;
+  // A malformed persisted record (missing `content`, e.g. from a corrupted
+  // write or a future schema this build doesn't know about) must not crash
+  // the lookup for every OTHER project — treat it as unmatched, not fatal.
+  return state.projects.find((p) => p && p.content && p.content.slug === slug) || null;
 }
 
 export function createProject({ name, description, source, sourceUrl, tags = [] }) {
