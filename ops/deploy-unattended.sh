@@ -55,6 +55,21 @@
 #   CONTINUUM_DEPLOY_ROOT=/opt/deploy
 #   CONTINUUM_KEEP_RELEASES=3
 #   CONTINUUM_GNUPGHOME=/etc/torii/deploy-gnupg   # keyring for signed-tag checks
+#   CONTINUUM_DEPLOY_MODE=artifact              # artifact (default, fast) | source-build
+#   CONTINUUM_ALLOW_SOURCE_FALLBACK=0           # 1 = fall back to source-build on artifact failure
+#
+# OPS-ARTIFACT-1 (v0.2.103-alpha) — RELEASE-ARTIFACT FAST PATH
+# --------------------------------------------------------------
+# Historically this wrapper only cloned the small ops/ansible tooling checkout
+# and delegated the SLOW work (SPA build, two npm ci passes) to the Ansible
+# role, which repeated that work on every single upgrade. Now, in the default
+# 'artifact' mode, this wrapper ALSO downloads the CI-built release tarball
+# (dist/ + agent source + agent's already-installed production node_modules)
+# from the GitHub Release for the target tag, verifies its checksum against
+# the co-published .sha256 sidecar, and hands the verified local path to the
+# role via the extra-vars file. The role then just extracts it — no clone, no
+# npm, no build, on the VPS. FAIL CLOSED: a missing asset or checksum mismatch
+# aborts before Ansible ever runs, unless CONTINUUM_ALLOW_SOURCE_FALLBACK=1.
 
 set -euo pipefail
 
@@ -68,6 +83,17 @@ set -euo pipefail
 : "${CONTINUUM_KEEP_RELEASES:=3}"
 : "${CONTINUUM_GNUPGHOME:=}"
 : "${CONTINUUM_LOCKFILE:=/run/torii-continuum-deploy.lock}"
+: "${CONTINUUM_DEPLOY_MODE:=artifact}"
+: "${CONTINUUM_ALLOW_SOURCE_FALLBACK:=0}"
+: "${CONTINUUM_ARTIFACT_CACHE:=/opt/deploy/artifacts}"
+: "${CONTINUUM_GITHUB_API:=https://api.github.com}"
+
+# Directory this script lives in, so the co-located verify library resolves
+# correctly regardless of the caller's cwd (systemd unit, manual invocation,
+# or test harness sourcing this file from a different directory).
+CONTINUUM_WRAPPER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+readonly CONTINUUM_WRAPPER_DIR
+readonly CONTINUUM_ARTIFACT_VERIFY_LIB="${CONTINUUM_WRAPPER_DIR}/lib/artifact-verify.sh"
 
 # Strict release-tag grammar: a v-prefixed semver with an optional pre-release
 # suffix of [0-9A-Za-z.-]. This is the FIRST line of defence — it rejects
@@ -179,22 +205,121 @@ all:
 YAML
 }
 
-# write_extra_vars <path> <domain> <version-tag> <repo> — emit the deterministic,
-# non-secret extra-vars JSON passed to ansible-playbook as `-e @<path>`. Only the
-# per-host values live here; every structural var comes from role defaults. All
-# three inputs are strictly pre-validated (validate_domain/validate_tag/
-# validate_repo) before this is called, so verbatim interpolation is injection-
-# safe. continuum_version carries the leading "v" exactly as the tag; the role
-# strips it where a bare semver is needed. No secret is ever written here.
+# write_extra_vars <path> <domain> <version-tag> <repo> [artifact-path] [deploy-mode] [allow-fallback] —
+# emit the deterministic, non-secret extra-vars JSON passed to ansible-playbook
+# as `-e @<path>`. Only the per-host values live here; every structural var
+# comes from role defaults. All string inputs are strictly pre-validated
+# (validate_domain/validate_tag/validate_repo) before this is called, so
+# verbatim interpolation is injection-safe. continuum_version carries the
+# leading "v" exactly as the tag; the role strips it where a bare semver is
+# needed. No secret is ever written here. artifact-path is either an absolute
+# filesystem path with no shell/JSON metacharacters (produced by this same
+# script, never user input) or empty.
 write_extra_vars() {
   local path="${1:?}" domain="${2:?}" tag="${3:?}" repo="${4:?}"
+  local artifact_path="${5:-}" deploy_mode="${6:-artifact}" allow_fallback="${7:-false}"
   cat > "$path" <<JSON
 {
   "torii_domain": "${domain}",
   "continuum_version": "${tag}",
-  "continuum_repo": "${repo}"
+  "continuum_repo": "${repo}",
+  "continuum_artifact_path": "${artifact_path}",
+  "continuum_deploy_mode": "${deploy_mode}",
+  "continuum_deploy_allow_source_fallback": ${allow_fallback}
 }
 JSON
+}
+
+# ── Release-artifact download (OPS-ARTIFACT-1) ───────────────────────────────
+
+# artifact_repo_slug <https-git-url> — "Owner/Repo" from a validated
+# https://github.com/Owner/Repo.git URL, for building the Releases API path.
+# Returns empty (caller must treat as "cannot resolve") for any non-GitHub
+# host — the fast path is GitHub-Releases-specific; other hosts fall back to
+# source-build automatically since no artifact can be located for them.
+artifact_repo_slug() {
+  local url="${1:?}"
+  [[ "$url" =~ ^https://github\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)\.git$ ]] || { printf ''; return 0; }
+  printf '%s' "${BASH_REMATCH[1]}"
+}
+
+# download_release_artifact <repo-url> <tag> <cache-dir> — downloads the three
+# published release assets (tarball, .sha256, .manifest.json) for <tag> into
+# <cache-dir>, verifies checksum + manifest immediately, and prints the local
+# tarball path on stdout on success. Returns non-zero (prints nothing) on ANY
+# failure: unresolvable repo host, missing release, missing asset, network
+# error, checksum mismatch, or manifest/tag mismatch — the caller decides
+# whether that is fatal or a trigger for the source-build fallback. Never
+# retries indefinitely; a single attempt per asset, fail closed.
+download_release_artifact() {
+  local repo_url="${1:?}" tag="${2:?}" cache_dir="${3:?}"
+  local slug; slug="$(artifact_repo_slug "$repo_url")"
+  if [[ -z "$slug" ]]; then
+    dep_log "artifact download: repo '${repo_url}' is not a plain https://github.com/OWNER/REPO.git URL; cannot resolve a Releases API path." >&2
+    return 1
+  fi
+  command -v curl >/dev/null || { dep_log "artifact download: curl not found." >&2; return 1; }
+
+  mkdir -p "$cache_dir"
+  local tarball="${cache_dir}/torii-continuum-${tag}.tar.gz"
+  local sumfile="${tarball}.sha256"
+  local manifest="${cache_dir}/torii-continuum-${tag}.manifest.json"
+
+  # Reuse a cached artifact only if it already passes verification (handles
+  # re-runs/retries without re-downloading; never trusts a cache hit blindly).
+  if [[ -f "$tarball" && -f "$sumfile" && -f "$manifest" ]]; then
+    # shellcheck disable=SC1090
+    if ( source "$CONTINUUM_ARTIFACT_VERIFY_LIB" 2>/dev/null && \
+         artifact_verify_checksum "$tarball" "$sumfile" && \
+         artifact_verify_manifest "$manifest" "$tag" ) >/dev/null 2>&1; then
+      dep_log "artifact download: reusing already-verified cached artifact for ${tag}." >&2
+      printf '%s' "$tarball"
+      return 0
+    fi
+    dep_log "artifact download: cached artifact for ${tag} failed verification; re-downloading." >&2
+    rm -f -- "$tarball" "$sumfile" "$manifest"
+  fi
+
+  local api="${CONTINUUM_GITHUB_API}/repos/${slug}/releases/tags/${tag}"
+  dep_log "artifact download: querying release metadata (${api})" >&2
+  local release_json
+  release_json="$(curl -fsS --max-time 15 -H 'Accept: application/vnd.github+json' -- "$api" 2>/dev/null || true)"
+  if [[ -z "$release_json" ]]; then
+    dep_log "artifact download: no GitHub Release found for ${tag} (or API unreachable)." >&2
+    return 1
+  fi
+
+  local asset
+  for asset in "torii-continuum-${tag}.tar.gz" "torii-continuum-${tag}.tar.gz.sha256" "torii-continuum-${tag}.manifest.json"; do
+    local dl_url
+    dl_url="$(printf '%s' "$release_json" | sed -n "s/.*\"browser_download_url\"[[:space:]]*:[[:space:]]*\"\\([^\"]*${asset}\\)\".*/\\1/p" | head -1)"
+    if [[ -z "$dl_url" ]]; then
+      dep_log "artifact download: release ${tag} has no '${asset}' asset." >&2
+      return 1
+    fi
+    local dest="${cache_dir}/${asset}"
+    dep_log "artifact download: fetching ${asset}" >&2
+    if ! curl -fsSL --max-time 120 -o "${dest}.part" -- "$dl_url" 2>/dev/null; then
+      dep_log "artifact download: failed to fetch ${asset} from ${dl_url}." >&2
+      rm -f -- "${dest}.part"
+      return 1
+    fi
+    mv -f -- "${dest}.part" "$dest"
+  done
+
+  # shellcheck disable=SC1090
+  source "$CONTINUUM_ARTIFACT_VERIFY_LIB"
+  if ! artifact_verify_checksum "$tarball" "$sumfile"; then
+    dep_log "artifact download: checksum verification FAILED for ${tag}." >&2
+    return 1
+  fi
+  if ! artifact_verify_manifest "$manifest" "$tag"; then
+    dep_log "artifact download: manifest verification FAILED for ${tag}." >&2
+    return 1
+  fi
+  dep_log "artifact download: verified OK for ${tag} (${tarball})." >&2
+  printf '%s' "$tarball"
+  return 0
 }
 
 # prune_releases <deploy-root> <keep> <live-tag> — keep the newest <keep>
@@ -282,7 +407,34 @@ run_deploy() {
   local ans="${src}/ops/ansible"
   [[ -f "${ans}/site.yml" ]] || dep_die "checkout is missing ops/ansible/site.yml."
   write_localhost_inventory "$ans"
-  write_extra_vars "${ans}/continuum-deploy.extra.json" "$domain" "$tag" "$CONTINUUM_REPO"
+
+  # ── Release-artifact fast path (default) ────────────────────────────────
+  # Download + verify the CI-built tarball BEFORE Ansible ever runs, so a
+  # missing/tampered artifact is caught here (with a clear log line) rather
+  # than deep inside the role. The role independently re-verifies the same
+  # artifact (defence in depth) before ever extracting it into staging.
+  local artifact_path="" deploy_mode="$CONTINUUM_DEPLOY_MODE" allow_fallback="false"
+  [[ "$CONTINUUM_ALLOW_SOURCE_FALLBACK" == "1" ]] && allow_fallback="true"
+
+  if [[ "$deploy_mode" == "artifact" ]]; then
+    dep_log "artifact mode: attempting release-artifact fast path for ${tag}."
+    if artifact_path="$(download_release_artifact "$CONTINUUM_REPO" "$tag" "$CONTINUUM_ARTIFACT_CACHE")"; then
+      dep_log "artifact mode: using verified artifact ${artifact_path}."
+    else
+      artifact_path=""
+      if [[ "$allow_fallback" == "true" ]]; then
+        dep_log "WARN artifact download/verification failed for ${tag}; falling back to source-build (CONTINUUM_ALLOW_SOURCE_FALLBACK=1)."
+        deploy_mode="source-build"
+      else
+        dep_die "artifact download/verification failed for ${tag} and CONTINUUM_ALLOW_SOURCE_FALLBACK is not set; refusing to silently fall back to a slow source build. Publish the release-artifact workflow for this tag, or set CONTINUUM_ALLOW_SOURCE_FALLBACK=1 to allow the slow path."
+      fi
+    fi
+  else
+    dep_log "deploy mode is '${deploy_mode}' (explicit source-build); skipping artifact download."
+  fi
+
+  write_extra_vars "${ans}/continuum-deploy.extra.json" "$domain" "$tag" "$CONTINUUM_REPO" \
+    "$artifact_path" "$deploy_mode" "$allow_fallback"
 
   # Delegate to the hardened role. It performs: fail-closed state backup,
   # staging build, atomic swap, restart-before-readiness, version-asserting

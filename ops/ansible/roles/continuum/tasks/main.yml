@@ -179,44 +179,126 @@
     group: "{{ continuum_user }}"
     mode: '0750'
 
-- name: Clone (or check out) torii-continuum INTO STAGING
-  ansible.builtin.git:
-    repo: "{{ continuum_repo }}"
-    dest: "{{ continuum_release_dir }}"
-    version: "{{ continuum_version }}"
-    force: true
-    depth: 1
-  become_user: "{{ continuum_user }}"
-  register: continuum_git
+- name: Determine whether the artifact fast path is usable for this run
+  ansible.builtin.set_fact:
+    continuum_artifact_mount_ok: "{{ continuum_vite_agent_url == '/continuum' }}"
 
-- name: Install npm dependencies in staging (dev + prod, needed for vite build)
-  ansible.builtin.command:
-    cmd: npm ci
-    chdir: "{{ continuum_release_dir }}"
-  become_user: "{{ continuum_user }}"
-  environment:
-    NODE_ENV: development
-  register: npm_install
-  changed_when: npm_install.rc == 0
+- name: Populate staging via the FAST release-artifact path (default)
+  when: continuum_deploy_mode == 'artifact'
+  block:
+    - name: Fail closed — artifact mode requires a non-default mount to explicitly opt into source-build
+      ansible.builtin.fail:
+        msg: >-
+          continuum_deploy_mode=artifact but continuum_vite_agent_url
+          ('{{ continuum_vite_agent_url }}') differs from the CI-built
+          artifact's baked-in default ('/continuum'). The published artifact's
+          dist/ would serve the wrong agent URL. Set
+          continuum_deploy_mode=source-build for this non-default mount, or
+          set continuum_deploy_allow_source_fallback=true to auto-fall back.
+      when:
+        - not (continuum_artifact_mount_ok | bool)
+        - not (continuum_deploy_allow_source_fallback | bool)
 
-- name: Build Continuum SPA in staging (base-path aware)
-  ansible.builtin.command:
-    cmd: npm run build
-    chdir: "{{ continuum_release_dir }}"
-  become_user: "{{ continuum_user }}"
-  environment:
-    NODE_ENV: production
-    VITE_AGENT_URL: "{{ continuum_vite_agent_url }}"
-  register: continuum_build
-  changed_when: continuum_build.rc == 0
+    - name: Verify the pre-staged release artifact (checksum + manifest + tag + contents + no-secrets)
+      ansible.builtin.script: >-
+        {{ continuum_adopt_lib }} artifact-verify
+        {{ continuum_artifact_path | quote }}
+        {{ continuum_version | quote }}
+      register: continuum_artifact_verify
+      when: continuum_artifact_mount_ok | bool
+      changed_when: false
+      failed_when: false
 
-- name: Install agent production dependencies in staging
-  ansible.builtin.command:
-    cmd: npm ci --omit=dev
-    chdir: "{{ continuum_release_agent_dir }}"
-  become_user: "{{ continuum_user }}"
-  args:
-    creates: "{{ continuum_release_agent_dir }}/node_modules"
+    - name: Fail closed when artifact verification failed and fallback is disabled
+      ansible.builtin.fail:
+        msg: >-
+          Release artifact verification failed for {{ continuum_version }}
+          ({{ continuum_artifact_verify.stdout | default('no artifact path configured') }}).
+          Refusing to promote an unverified artifact. Set
+          continuum_deploy_allow_source_fallback=true to fall back to a full
+          source build instead, or publish/re-run the release-artifact CI
+          workflow for this tag.
+      when:
+        - continuum_artifact_mount_ok | bool
+        - continuum_artifact_verify.rc | default(1) != 0
+        - not (continuum_deploy_allow_source_fallback | bool)
+
+    - name: Extract the verified artifact directly into staging (replaces clone+npm+build+npm)
+      ansible.builtin.unarchive:
+        src: "{{ continuum_artifact_path }}"
+        dest: "{{ continuum_release_dir }}"
+        remote_src: true
+        extra_opts: ["--strip-components=1"]
+      become_user: "{{ continuum_user }}"
+      register: continuum_artifact_extract
+      when:
+        - continuum_artifact_mount_ok | bool
+        - continuum_artifact_verify.rc | default(1) == 0
+
+    - name: Record that the fast path supplied staging
+      ansible.builtin.set_fact:
+        continuum_staging_populated: "{{ continuum_artifact_mount_ok | bool and (continuum_artifact_verify.rc | default(1) == 0) }}"
+
+- name: Populate staging via the SOURCE-BUILD path (opt-in fallback, or non-default mount)
+  when: >-
+    continuum_deploy_mode == 'source-build'
+    or not (continuum_staging_populated | default(false) | bool)
+  block:
+    - name: Fail closed if source-build was not explicitly enabled and artifact mode was requested
+      ansible.builtin.fail:
+        msg: >-
+          Artifact fast path did not populate staging and
+          continuum_deploy_allow_source_fallback is false. Refusing to
+          silently fall back to the slow source build. Set
+          continuum_deploy_allow_source_fallback=true, or
+          continuum_deploy_mode=source-build, to build from source
+          explicitly.
+      when:
+        - continuum_deploy_mode == 'artifact'
+        - not (continuum_deploy_allow_source_fallback | bool)
+
+    - name: "SOURCE-BUILD: clone (or check out) torii-continuum INTO STAGING"
+      ansible.builtin.git:
+        repo: "{{ continuum_repo }}"
+        dest: "{{ continuum_release_dir }}"
+        version: "{{ continuum_version }}"
+        force: true
+        depth: 1
+      become_user: "{{ continuum_user }}"
+      register: continuum_git
+
+    - name: "SOURCE-BUILD: install npm dependencies in staging (dev + prod, needed for vite build)"
+      ansible.builtin.command:
+        cmd: npm ci
+        chdir: "{{ continuum_release_dir }}"
+      become_user: "{{ continuum_user }}"
+      environment:
+        NODE_ENV: development
+      register: npm_install
+      changed_when: npm_install.rc == 0
+
+    - name: "SOURCE-BUILD: build Continuum SPA in staging (base-path aware)"
+      ansible.builtin.command:
+        cmd: npm run build
+        chdir: "{{ continuum_release_dir }}"
+      become_user: "{{ continuum_user }}"
+      environment:
+        NODE_ENV: production
+        VITE_AGENT_URL: "{{ continuum_vite_agent_url }}"
+      register: continuum_build
+      changed_when: continuum_build.rc == 0
+
+    - name: "SOURCE-BUILD: install agent production dependencies in staging"
+      ansible.builtin.command:
+        cmd: npm ci --omit=dev
+        chdir: "{{ continuum_release_agent_dir }}"
+      become_user: "{{ continuum_user }}"
+      args:
+        creates: "{{ continuum_release_agent_dir }}/node_modules"
+
+    - name: Record that the source-build path supplied staging
+      ansible.builtin.set_fact:
+        continuum_staging_populated: true
 
 # Optional (guarded) drift diagnostic: when the vault vars ARE present, render a
 # candidate config to a ROOT-ONLY temp path (never into staging/app) and compare

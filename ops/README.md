@@ -472,6 +472,126 @@ verification. The `deploy-unattended` test suite adds **55** hermetic assertions
 (tag grammar incl. injection strings, version gate, allowlist fail-closed,
 prune-keeps-live, scoped-sudo/no-general-sudo, 0600 pin file, root-only wrapper).
 
+### Release-artifact fast path (OPS-ARTIFACT-1, v0.2.103-alpha)
+
+Unattended upgrades previously cloned the repo and ran two `npm ci`s plus a
+`vite build` **on the VPS itself** every time — commonly 20-35 minutes on a
+resource-constrained box, because dependency-graph resolution and disk I/O
+scale with package count and CPU speed, not with how much code actually
+changed. As of this release, unattended upgrades default to a much faster
+path: a single pre-built, checksum-verified **release artifact** downloaded
+from the tag's GitHub Release, instead of rebuilding on the VPS.
+
+**How it works.** For every tag pushed matching `v*.*.*`/`v*.*.*-*`, CI
+(`.github/workflows/release-artifact.yml`, pinned to Node 22.4.0 to match
+`agent/package.json`'s `engines.node`) builds and tests the tag, then runs
+`ops/lib/build-release-artifact.sh` to produce and publish three assets to
+the GitHub Release: `torii-continuum-<tag>.tar.gz` (production `dist/` +
+agent source + agent's **production-only** `node_modules`, from `npm ci
+--omit=dev`), `torii-continuum-<tag>.tar.gz.sha256`, and
+`torii-continuum-<tag>.manifest.json` (tag, version, commit, build time,
+builder platform/node/npm, subtree hashes). The builder refuses to produce an
+artifact if the tag grammar is invalid, if the root/agent/tag versions
+disagree, if any native `*.node` addon is found in `agent/node_modules`
+(today's agent deps are all pure JS — this is a portability trip-wire, not a
+current limitation), or if any secret-shaped path
+(`agent/{test,config.yaml,memory,ciphertexts,pending,.env,.env.local}`) is
+present in the staged tree.
+
+On the VPS, `ops/deploy-unattended.sh` downloads the tag's three release
+assets via the GitHub Releases API (atomic `.part`→`mv` writes; a
+previously-verified cached artifact for the same tag is reused without
+re-hitting the network), and the `continuum` Ansible role verifies the
+artifact (checksum, checksum-filename-matches-tarball-basename, manifest
+tag/version match, required contents present, no secrets present — via
+`ops/lib/artifact-verify.sh` / `continuum-adopt.sh artifact-verify`) before
+extracting it directly into the existing atomic staging directory with
+`--strip-components=1`. **No `npm ci` and no `vite build` run on the VPS** in
+this default path — only a download, a checksum, and an extract.
+
+**Fail-closed, by default, at every layer.** `continuum_deploy_allow_source_fallback`
+defaults to `false` in both the Ansible role and the wrapper: a missing
+release, a checksum/tag/manifest mismatch, or a corrupted download is a loud
+failure, never a silent slow-path fallback. The one thing that *is* checked
+automatically is the SPA's baked-in mount path: the artifact is built by CI
+with `continuum_vite_agent_url`'s default (`/continuum`), so if your VPS uses
+a **non-default** mount path, the role detects the mismatch via the
+`continuum_artifact_mount_ok` fact and falls back to source-build for you —
+serving a mismatched artifact would silently break the agent URL, so this is
+the one case where "fall back automatically" is the safer default rather than
+"fail closed."
+
+**Source-build never goes away.** It is a fully-supported, explicit opt-in —
+useful for air-gapped hosts, hosts without outbound GitHub access, or a
+non-default mount path — via either of:
+
+```bash
+# In /etc/torii/continuum-deploy.conf on the VPS:
+CONTINUUM_DEPLOY_MODE=source-build
+# ...or keep the fast path as the primary attempt but allow falling back:
+CONTINUUM_ALLOW_SOURCE_FALLBACK=1
+```
+
+Or at the Ansible-role level (`group_vars/all.yml`):
+
+```yaml
+continuum_deploy_mode: source-build          # or: artifact (default)
+continuum_deploy_allow_source_fallback: true # default: false (fail closed)
+```
+
+**Existing installations transition automatically** — nothing to migrate by
+hand. The default `continuum_deploy_mode: artifact` applies on the next
+upgrade; a non-default mount path is detected and routed to source-build
+without any action from the operator; and everything downstream of "populate
+staging" (atomic promote, health/version gate, rollback/rescue, disk
+retention, systemd/nginx registration, `config.yaml`/encrypted-state
+preservation) is the exact same code path it always was — only *how staging
+gets populated* changed.
+
+**Simple upgrade instructions** (unattended pull, artifact mode — the
+default, no change from the existing pin-file workflow):
+
+```bash
+sudo sed -i \
+  -e 's/^CONTINUUM_TARGET_TAG=.*/CONTINUUM_TARGET_TAG=v0.2.103-alpha/' \
+  /etc/torii/continuum-deploy.conf
+sudo systemctl start torii-continuum-deploy.service
+journalctl -u torii-continuum-deploy -f
+```
+
+**Simple recovery instructions** if an artifact-mode upgrade fails closed
+(e.g. the release for that tag isn't published yet, or its checksum/manifest
+failed verification): the wrapper/role refuse to promote, the currently-live
+release keeps serving, and you have two safe options — (1) wait for/fix the
+CI release publish and retry the same pin, or (2) explicitly allow a
+one-time source-build for that upgrade:
+
+```bash
+sudo sed -i \
+  -e 's/^CONTINUUM_ALLOW_SOURCE_FALLBACK=.*/CONTINUUM_ALLOW_SOURCE_FALLBACK=1/' \
+  /etc/torii/continuum-deploy.conf
+sudo systemctl start torii-continuum-deploy.service
+# once confirmed healthy, consider setting it back to 0 to restore the
+# fail-closed default:
+sudo sed -i \
+  -e 's/^CONTINUUM_ALLOW_SOURCE_FALLBACK=.*/CONTINUUM_ALLOW_SOURCE_FALLBACK=0/' \
+  /etc/torii/continuum-deploy.conf
+```
+
+**Timing.** See `ops/artifact-fast-path-timing.md` for the full breakdown
+with stated assumptions. Sandbox-measured component costs (artifact build
+~14s, 5.6 MB tarball, ~0.12s extraction, ~0.02s checksum) are explicitly
+**not** representative of a constrained VPS; the honest VPS-derated estimate
+is roughly **1-2.5 minutes** end to end (download+verify+extract plus the
+unchanged promote/health-gate/retention overhead that already exists today),
+plausibly up to ~3-4 minutes in a pessimistic network/disk scenario — inside
+or near the 2-3 minute target, but **not yet measured on a real server**.
+
+Tests: `ops/test/release-artifact.test.sh` (27), `ops/test/deploy-artifact-mode.test.sh`
+(20), `ops/test/continuum-role-artifact-path.test.sh` (25) — checksum/tamper/
+missing-artifact/wrong-tag/missing-asset rejection, cache reuse, fail-closed
+wiring, and the preserved source-build fallback.
+
 ### Automatic disk-retention sweep (OPS-RETENTION-1, v0.2.67-alpha)
 
 The deploy/cutover pipeline leaves regenerable artefacts behind that nothing

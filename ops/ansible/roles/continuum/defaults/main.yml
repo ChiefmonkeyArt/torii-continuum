@@ -123,3 +123,46 @@ continuum_deploy_conf: "/etc/torii/continuum-deploy.conf"
 continuum_register_name: "continuum"
 continuum_register_display: "Continuum"
 continuum_register_desc: "App builder + agent"
+
+# ── Release-artifact fast deploy path (OPS-ARTIFACT-1, v0.2.103-alpha) ───────
+# Default unattended upgrades no longer clone+`npm ci`+build+`npm ci --omit=dev`
+# on the VPS. Instead they download the CI-built, checksummed release tarball
+# for the target tag (dist/ + agent/ source + agent's PRODUCTION node_modules,
+# already installed once in CI) and extract it directly into the staging dir.
+# This is what turns a 20-35 minute upgrade into a small-download + extract.
+#
+#   continuum_deploy_mode: "artifact"      (default) fast path: download +
+#                            verify (checksum + manifest + tag match) the
+#                            release tarball; FAIL CLOSED (refuse to promote)
+#                            on any mismatch or missing artifact — never
+#                            silently falls back unless explicitly allowed.
+#                          "source-build"  today's original path: git clone +
+#                            npm ci + vite build + npm ci --omit=dev on the
+#                            VPS. Opt-in only (explicit -e override); this is
+#                            the safety-net path for exotic configs (e.g. a
+#                            non-default continuum_vite_agent_url) or when no
+#                            release artifact was published for a tag.
+continuum_deploy_mode: "artifact"
+
+# When true, an artifact-mode run that fails its verification gates (missing
+# asset, checksum mismatch, tag/version mismatch, non-default mount path the
+# artifact wasn't built for) transparently falls back to the source-build path
+# instead of failing the deploy. Default false: unattended upgrades should
+# FAIL CLOSED on a bad artifact rather than silently taking the slow path,
+# so a supply-chain problem is loud, not masked by "it worked anyway, just
+# slower". Set true only where availability is preferred over that signal.
+continuum_deploy_allow_source_fallback: false
+
+# Local path to a pre-downloaded, pre-verified release artifact tarball
+# (usually staged by ops/deploy-unattended.sh, which owns the network
+# download + first-pass checksum/manifest verification before ever invoking
+# Ansible). When continuum_deploy_mode == 'artifact' and this is empty, the
+# role performs the download+verify itself using continuum_repo's GitHub
+# Releases API — supported for direct `ansible-playbook` runs (e.g. manual
+# ops, tests) that don't go through the wrapper.
+continuum_artifact_path: ""
+
+# GitHub API base used only for the artifact-mode release lookup when
+# continuum_artifact_path is not pre-supplied. Pinned to the public API host;
+# never templated from user input.
+continuum_github_api: "https://api.github.com"

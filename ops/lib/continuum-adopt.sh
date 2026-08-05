@@ -436,6 +436,71 @@ set_root_safe() {
   "$bin" set-root "$effective"
 }
 
+# ── artifact_verify_cli <artifact-path> <expected-tag> ───────────────────────
+#   Thin wrapper the Ansible role's `script` module invokes to verify a
+#   pre-staged release artifact before it is ever extracted into the staging
+#   dir. Delegates the actual gates to artifact-verify.sh (checksum + manifest
+#   + tag + required-contents + no-secrets), which lives alongside this file.
+#   Expects <artifact-path>.sha256 and <artifact-path-without-.tar.gz>.manifest.json
+#   next to the tarball (the layout ops/deploy-unattended.sh downloads and the
+#   CI release workflow publishes). Fails closed (non-zero, message on stdout
+#   so `register: ...stdout` in the playbook can surface it) on any missing
+#   file, checksum mismatch, or tag/version mismatch. Extraction happens
+#   separately (ansible.builtin.unarchive) only after this returns 0.
+artifact_verify_cli() {
+  local artifact="${1:?usage: artifact-verify <artifact-tarball-path> <expected-tag>}"
+  local tag="${2:?usage: artifact-verify <artifact-tarball-path> <expected-tag>}"
+
+  if [ -z "$artifact" ] || [ "$artifact" = "" ]; then
+    echo "artifact_verify_cli: no artifact path configured (continuum_artifact_path is empty)"
+    return 1
+  fi
+  if [ ! -f "$artifact" ]; then
+    echo "artifact_verify_cli: artifact not found at ${artifact}"
+    return 1
+  fi
+
+  local lib_dir; lib_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd -P)"
+  local verifier="${lib_dir}/artifact-verify.sh"
+  if [ ! -f "$verifier" ]; then
+    echo "artifact_verify_cli: verifier library missing at ${verifier}"
+    return 1
+  fi
+  # shellcheck disable=SC1090
+  . "$verifier"
+
+  local sumfile="${artifact}.sha256"
+  local manifest; manifest="$(dirname -- "$artifact")/$(basename -- "$artifact" .tar.gz).manifest.json"
+  local extract_dir; extract_dir="$(mktemp -d)"
+  # Best-effort cleanup of the scratch extraction used only to validate
+  # contents/no-secrets; the real extraction into staging happens afterwards
+  # via ansible.builtin.unarchive, independent of this scratch copy.
+  trap 'rm -rf -- "$extract_dir"' RETURN 2>/dev/null || true
+
+  if ! tar -xzf "$artifact" -C "$extract_dir" 2>&1; then
+    echo "artifact_verify_cli: failed to extract ${artifact} for validation"
+    rm -rf -- "$extract_dir"
+    return 1
+  fi
+  local extracted_root
+  extracted_root="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+  if [ -z "$extracted_root" ]; then
+    echo "artifact_verify_cli: extracted tarball has no top-level directory"
+    rm -rf -- "$extract_dir"
+    return 1
+  fi
+
+  if artifact_verify_all "$artifact" "$sumfile" "$manifest" "$tag" "$extracted_root"; then
+    echo "ok: artifact verified for ${tag}"
+    rm -rf -- "$extract_dir"
+    return 0
+  else
+    echo "artifact verification FAILED for ${tag} (see stderr for the specific gate)"
+    rm -rf -- "$extract_dir"
+    return 1
+  fi
+}
+
 # ── CLI dispatcher (only when executed, not when sourced) ───────────────────────
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   set -euo pipefail
@@ -454,8 +519,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     set-root-safe)   set_root_safe "$@" ;;
     deploy-webroot)  deploy_webroot "$@" ;;
     rollback-webroot) rollback_webroot "$@" ;;
+    artifact-verify) artifact_verify_cli "$@" ;;
     *)
-      echo "usage: continuum-adopt.sh {detect|authoritative|backup|migrate|stage-reset|promote|rollback|config-action|config-drift|normalize-root|set-root-safe|deploy-webroot|rollback-webroot} ..." >&2
+      echo "usage: continuum-adopt.sh {detect|authoritative|backup|migrate|stage-reset|promote|rollback|config-action|config-drift|normalize-root|set-root-safe|deploy-webroot|rollback-webroot|artifact-verify} ..." >&2
       exit 2 ;;
   esac
 fi
