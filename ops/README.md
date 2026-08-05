@@ -483,8 +483,13 @@ path: a single pre-built, checksum-verified **release artifact** downloaded
 from the tag's GitHub Release, instead of rebuilding on the VPS.
 
 **How it works.** For every tag pushed matching `v*.*.*`/`v*.*.*-*`, CI
-(`.github/workflows/release-artifact.yml`, pinned to Node 22.4.0 to match
-`agent/package.json`'s `engines.node`) builds and tests the tag, then runs
+(`.github/workflows/release-artifact.yml`) re-tests the tag under two Node
+versions in the same job — Node 20 for the frontend suite (matching
+`ci.yml`'s frontend job; a few pre-existing jsdom-based tests assign to
+`globalThis.navigator`, which Node 22+ defines as a getter-only accessor and
+Node 20 doesn't define at all) and a floating Node 22 (matching
+`agent/package.json`'s `engines.node >=22.4.0` floor) for the agent suite and
+everything after — then runs
 `ops/lib/build-release-artifact.sh` to produce and publish three assets to
 the GitHub Release: `torii-continuum-<tag>.tar.gz` (production `dist/` +
 agent source + agent's **production-only** `node_modules`, from `npm ci
