@@ -47,10 +47,10 @@ export function renderProjectHome(mount, slug, opts = {}) {
 
   const header = h('div', { class: 'page-header' }, [
     h('div', {}, [
-      h('h1', { class: 'page-title', text: p.content.name }),
+      h('h1', { class: 'page-title', text: p.content.name || slug }),
       h('div', { class: 'page-sub', text: p.content.description || '—' }),
       h('div', { class: 'page-sub', style: 'margin-top: 6px;' }, [
-        h('span', { class: 'pill', text: p.content.source }),
+        h('span', { class: 'pill', text: p.content.source || 'local' }),
         ' ',
         sourceLink,
       ]),
@@ -84,7 +84,7 @@ export function renderProjectHome(mount, slug, opts = {}) {
     h('div', { class: 'card' }, [
       h('div', { class: 'stat' }, [
         h('span', { class: 'label', text: 'Sessions' }),
-        h('span', { class: 'value', text: String(sessionsFor(slug).length) }),
+        h('span', { class: 'value', text: String(S.sessionsFor(slug).length) }),
       ]),
       h('div', { class: 'muted', style: 'margin-top: 12px; font-size: 12px;', text: 'Chat + build sessions logged for this project.' }),
     ]),
