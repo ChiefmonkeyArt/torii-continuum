@@ -22,7 +22,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.4.0'
+          # No engines floor above 20 in the root package.json; pin to the
+          # frontend's actually-supported/tested LTS line rather than the
+          # agent's Node 22 floor. (Node 22.4.0 specifically predates stable
+          # unflagged require(esm) and breaks jsdom's html-encoding-sniffer
+          # -> @exodus/bytes chain; see the agent job below for why 22.x
+          # there is floored at a newer patch instead.)
+          node-version: '20'
           cache: 'npm'
       - name: Install deps
         run: npm ci
@@ -40,7 +46,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.4.0'
+          # agent/package.json requires >=22.4.0, but 22.4.0 itself predates
+          # stable unflagged require(esm) support (landed 22.12+) which some
+          # transitive deps rely on transitively via the frontend's jsdom
+          # chain; use a current 22.x patch to stay within the declared
+          # floor while avoiding that known-bad early-22.x window.
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: agent/package-lock.json
       - name: Install agent deps (incl. dev)
@@ -82,7 +93,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.4.0'
+          # Match the agent job's Node line (>=22.4.0 floor, but a current
+          # patch — see the agent job comment above).
+          node-version: '22'
       - name: Build a throwaway artifact for the current package.json version
         run: |
           set -euo pipefail

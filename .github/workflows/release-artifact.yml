@@ -41,14 +41,18 @@ jobs:
         id: tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      # CI builds on the same Node major/minor floor the agent's engines field
+      # CI builds on the same Node major line the agent's engines field
       # requires (>=22.4.0) and the VPS runs in production, so the packaged
       # agent/node_modules ABI matches the box that will run it byte-for-byte
       # (all current runtime deps are pure JS — no native addons — verified
-      # by the builder script's portability gate below).
+      # by the builder script's portability gate below). Pinned to '22'
+      # (latest 22.x patch) rather than the exact floor '22.4.0': that early
+      # patch predates stable unflagged require(esm), which breaks jsdom's
+      # html-encoding-sniffer -> @exodus/bytes chain used by this same job's
+      # `npm test` step below (fixed upstream in Node 22.12+).
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.4.0'
+          node-version: '22'
 
       - name: Run the full test suites before packaging (defence in depth; CI job also gates on push)
         run: |
