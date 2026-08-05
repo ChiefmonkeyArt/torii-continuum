@@ -36,17 +36,32 @@ bash -n "$CUTOVER" && ok "cutover passes bash -n" || bad "cutover failed bash -n
 
 # ── 1. Anti-partial-delivery brace group ─────────────────────────────────────
 # The first executable (non-comment, non-blank) line must open the brace group.
+#
+# NOTE: these `grep "$CUTOVER" | head/tail` pipelines read the *whole*
+# ~1000-line file upstream of a short-circuiting head/tail. Under
+# `set -o pipefail` a fast-exiting head/tail can SIGPIPE the still-writing
+# grep before it reaches EOF, which some CI runners' pipe-buffer/scheduler
+# timing turns into a real (non-flaky-in-intent) pipefail failure though
+# nothing is actually wrong. Scope pipefail off for just these two greps;
+# tail/head themselves still enforce correctness via the `==`/`grep -qF`
+# checks below.
+set +o pipefail
 first_exec="$(grep -nvE '^[[:space:]]*(#|$)' "$CUTOVER" | head -1 | cut -d: -f2-)"
+set -o pipefail
 [[ "$first_exec" == '{' ]] && ok "executable body opens with a '{' brace group" \
   || bad "body does not start with a brace group (got: '${first_exec}')"
 
 # The last non-blank line must be the sentinel comment, and the line above the
 # sentinel must close the group.
+set +o pipefail
 last_nonblank="$(grep -nvE '^[[:space:]]*$' "$CUTOVER" | tail -1 | cut -d: -f2-)"
+set -o pipefail
 printf '%s' "$last_nonblank" | grep -qF 'end of guarded body' \
   && ok "file ends with the anti-truncation sentinel comment" \
   || bad "missing trailing sentinel comment (got: '${last_nonblank}')"
+set +o pipefail
 close_line="$(grep -nvE '^[[:space:]]*$' "$CUTOVER" | tail -2 | head -1 | cut -d: -f2-)"
+set -o pipefail
 [[ "$close_line" == '}' ]] && ok "guarded body is closed by a '}' on the penultimate line" \
   || bad "closing brace not where expected (got: '${close_line}')"
 
