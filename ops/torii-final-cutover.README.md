@@ -10,7 +10,7 @@ It:
   live state:
   - `torii-base` **v0.1.4**
   - `torii-continuum` **v0.2.67-alpha** (this script's own release tag)
-  - onboarding preview **v0.1.21-preview**
+  - onboarding preview **v0.1.22-preview**
 - backs up the current Torii base state to a root-only timestamped directory
 - redeploys `torii-base` v0.1.4 via its sanctioned bootstrap
   (`TORII_DOMAIN=chiefmonkey.art`, `SKIP_CERTBOT=1`)
@@ -27,7 +27,7 @@ It:
 
 The one-time final cutover has been **completed on `chiefmonkey.art`** with
 `torii-continuum` **v0.2.63-alpha** (torii-base v0.1.4, onboarding preview
-v0.1.21-preview). Live acceptance passed:
+v0.1.22-preview). Live acceptance passed:
 
 - Root launcher returns **HTTP 200**; `nginx`, the torii-base **sidecar**, and the
   **continuum-agent** services are **active**.
@@ -302,7 +302,7 @@ The v0.2.65-alpha hotfix (OPS-CUTOVER-6) adds asserts that the CTA probes use th
 robust matcher (no exact-substring CTA check remains) plus functional replays that
 `source` the actual `normalize_cta_text`/`text_has_cta` + `PREVIEW_CTA_REGEX` from
 the script and prove markup-wrapped/reworded-but-valid CTAs (including the shipped
-`v0.1.21` asset) pass while blank/error pages fail closed.
+`v0.1.22` asset) pass while blank/error pages fail closed.
 
 `ops/test/deploy-unattended.test.sh` additionally proves the wrapper passes
 per-host vars via a validated `-e` extra-vars JSON, writes **no**

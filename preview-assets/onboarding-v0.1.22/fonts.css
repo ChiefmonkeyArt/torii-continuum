@@ -1,0 +1,41 @@
+/* Self-hosted webfonts for the Continuum onboarding preview.
+   Replaces the api.fontshare.com CDN stylesheet so the deck makes zero
+   third-party requests. woff2 only: every browser that can run this deck
+   (WebGL2 + ES modules) supports woff2, so the woff/ttf fallbacks the CDN
+   served were dead weight. */
+
+@font-face {
+  font-family: 'Cabinet Grotesk';
+  src: url('./fonts/cabinet-grotesk-500.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Cabinet Grotesk';
+  src: url('./fonts/cabinet-grotesk-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Satoshi';
+  src: url('./fonts/satoshi-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Satoshi';
+  src: url('./fonts/satoshi-500.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Satoshi';
+  src: url('./fonts/satoshi-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
