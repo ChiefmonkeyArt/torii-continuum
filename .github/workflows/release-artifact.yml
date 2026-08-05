@@ -41,24 +41,37 @@ jobs:
         id: tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      # CI builds on the same Node major line the agent's engines field
-      # requires (>=22.4.0) and the VPS runs in production, so the packaged
-      # agent/node_modules ABI matches the box that will run it byte-for-byte
-      # (all current runtime deps are pure JS — no native addons — verified
-      # by the builder script's portability gate below). Pinned to '22'
-      # (latest 22.x patch) rather than the exact floor '22.4.0': that early
-      # patch predates stable unflagged require(esm), which breaks jsdom's
-      # html-encoding-sniffer -> @exodus/bytes chain used by this same job's
-      # `npm test` step below (fixed upstream in Node 22.12+).
-      - uses: actions/setup-node@v4
+      # Defence in depth (ci.yml already gates every push/PR): re-run both
+      # suites here too before packaging, but on the SAME Node major each
+      # already uses in ci.yml — NOT one shared version for both. The
+      # frontend's jsdom-based tests rely on Node having no built-in
+      # `navigator` global (true on Node 20; Node 22+ defines it as a
+      # getter-only accessor, which a few pre-existing test helpers'
+      # `globalThis.navigator = ...` assignment throws against). The agent
+      # requires >=22.4.0. Mixing both under one Node version breaks one or
+      # the other — so this job switches Node version between the two.
+      - name: Frontend deps + tests (Node 20 — matches ci.yml's frontend job)
+        uses: actions/setup-node@v4
         with:
-          node-version: '22'
-
-      - name: Run the full test suites before packaging (defence in depth; CI job also gates on push)
-        run: |
+          node-version: '20'
+      - run: |
           set -euo pipefail
           npm ci
           npm test
+
+      # Pinned to '22' (latest 22.x patch) rather than the exact floor
+      # '22.4.0': that early patch predates stable unflagged require(esm),
+      # which breaks jsdom's html-encoding-sniffer -> @exodus/bytes chain
+      # (fixed upstream in Node 22.12+) — moot for the agent's own tests,
+      # which don't use jsdom, but this Node also runs the builder script
+      # below, so it must stay within the agent's >=22.4.0 engines floor.
+      - name: Switch to Node 22 (agent's engines floor) for agent tests + the artifact build
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Agent deps + tests (Node 22)
+        run: |
+          set -euo pipefail
           cd agent && npm ci && npm test
 
       - name: Build the release artifact
