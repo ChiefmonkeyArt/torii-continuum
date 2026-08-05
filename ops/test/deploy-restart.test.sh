@@ -41,7 +41,20 @@ bad() { printf '  FAIL %s\n' "$1" >&2; fail=$((fail+1)); }
 [[ -f "$UNIT" ]]     || { bad "unit template not found: $UNIT"; exit 1; }
 
 # line-number of the FIRST match of a fixed string in $TASKS, or empty.
-ln_of() { grep -nF -- "$1" "$TASKS" | head -1 | cut -d: -f1; }
+#
+# NOTE: pipefail is scoped off around this specific grep-into-head pipeline.
+# $TASKS is a full-size role file; head -1 can close the pipe (SIGPIPE) before
+# grep finishes scanning to EOF, and some runners' pipe-buffer/scheduler
+# timing turns that into a spurious pipefail failure even though nothing is
+# actually wrong -- head's own exit status (checked implicitly via `cut`'s
+# input) still reflects whether a match was found.
+ln_of() {
+  local rc
+  set +o pipefail
+  rc="$(grep -nF -- "$1" "$TASKS" | head -1 | cut -d: -f1)"
+  set -o pipefail
+  printf '%s' "$rc"
+}
 
 # ── 1. Restart-before-readiness wiring ───────────────────────────────────────
 
@@ -101,8 +114,10 @@ fi
 
 # daemon_reload must precede the restart: the `reload systemd` handler is defined
 # BEFORE `restart continuum-agent`, and flushed handlers run in definition order.
+set +o pipefail
 reload_h="$(grep -nF 'name: reload systemd' "$HANDLERS" | head -1 | cut -d: -f1)"
 restart_h="$(grep -nF 'name: restart continuum-agent' "$HANDLERS" | head -1 | cut -d: -f1)"
+set -o pipefail
 if [[ -n "$reload_h" && -n "$restart_h" && "$reload_h" -lt "$restart_h" ]]; then
   ok "handler order: 'reload systemd' ($reload_h) before 'restart continuum-agent' ($restart_h)"
 else

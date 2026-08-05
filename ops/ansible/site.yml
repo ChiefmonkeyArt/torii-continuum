@@ -26,7 +26,20 @@
 - name: Install Torii Base + Continuum
   hosts: torii
   become: true
+  # OPS-ARTIFACT-1 (v0.2.103-alpha): narrow the fact gather to exactly what the
+  # playbook and role consume (ansible_distribution[_major_version] for the OS
+  # gate, ansible_date_time for the cutover/backup timestamp). The full default
+  # gather also probes hardware, network interfaces, mounts, and (on some
+  # images) virtualization/service facts, which cost real wall-clock time on a
+  # resource-constrained single-vCPU VPS for data this playbook never reads.
+  # `min` already includes distribution/os_family facts; explicitly adding
+  # `date_time` covers continuum_stamp. Any future task that needs a fact
+  # outside this subset will fail loudly (undefined var) rather than silently
+  # working by accident, which is the safer failure mode for a narrowed gather.
   gather_facts: true
+  gather_subset:
+    - min
+    - date_time
 
   pre_tasks:
     - name: Verify Ubuntu 22 or 24

@@ -1,0 +1,111 @@
+name: CI
+
+# Runs on every push/PR: frontend + agent tests, lint/build checks, and the
+# ops shell test suites (hermetic, no VPS/network required). This is the gate
+# that must pass before a release tag's artifact-publish workflow runs.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (vitest + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # No engines floor above 20 in the root package.json; pin to the
+          # frontend's actually-supported/tested LTS line rather than the
+          # agent's Node 22 floor. (Node 22.4.0 specifically predates stable
+          # unflagged require(esm) and breaks jsdom's html-encoding-sniffer
+          # -> @exodus/bytes chain; see the agent job below for why 22.x
+          # there is floored at a newer patch instead.)
+          node-version: '20'
+          cache: 'npm'
+      - name: Install deps
+        run: npm ci
+      - name: Run frontend tests
+        run: npm test
+      - name: Build SPA
+        run: npm run build
+      - name: Assert dist/ was produced
+        run: test -f dist/index.html
+
+  agent:
+    name: Agent (node --test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # agent/package.json requires >=22.4.0, but 22.4.0 itself predates
+          # stable unflagged require(esm) support (landed 22.12+) which some
+          # transitive deps rely on transitively via the frontend's jsdom
+          # chain; use a current 22.x patch to stay within the declared
+          # floor while avoiding that known-bad early-22.x window.
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: agent/package-lock.json
+      - name: Install agent deps (incl. dev)
+        working-directory: agent
+        run: npm ci
+      - name: Run agent tests
+        working-directory: agent
+        run: npm test
+
+  ops-shell-tests:
+    name: Ops shell/Ansible test suites
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ansible-lint prerequisites
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends shellcheck
+      - name: Shellcheck the ops scripts (advisory, non-blocking on warnings)
+        run: |
+          set +e
+          shellcheck -S error ops/*.sh ops/lib/*.sh
+          rc=$?
+          echo "shellcheck exit=$rc"
+          exit "$rc"
+      - name: Run ops test suites
+        run: |
+          set -e
+          for t in ops/test/*.test.sh; do
+            echo "== $t =="
+            bash "$t"
+          done
+
+  release-artifact-smoke:
+    name: Release artifact builder smoke test
+    runs-on: ubuntu-latest
+    needs: [frontend, agent]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Match the agent job's Node line (>=22.4.0 floor, but a current
+          # patch — see the agent job comment above).
+          node-version: '22'
+      - name: Build a throwaway artifact for the current package.json version
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./package.json').version")"
+          tag="v${v}"
+          mkdir -p /tmp/artifact-out
+          bash ops/lib/build-release-artifact.sh "$PWD" "$tag" /tmp/artifact-out
+      - name: Run artifact validation test suite against the built artifact
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./package.json').version")"
+          tag="v${v}"
+          ARTIFACT_DIR=/tmp/artifact-out ARTIFACT_TAG="$tag" bash ops/test/release-artifact.test.sh

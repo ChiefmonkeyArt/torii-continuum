@@ -73,8 +73,14 @@ grep -qF 'node_version_ok "$node_ver"' "$INSTALLER" \
   && ok "installer gates preflight on node_version_ok" \
   || bad "installer no longer calls node_version_ok"
 # The gate must sit before the first state-changing step (user creation).
+# (pipefail scoped off: grep-into-head against a full file can SIGPIPE the
+# still-writing grep on some runners' pipe-buffer/scheduler timing, which is
+# not an actual failure -- see ops/test/torii-final-cutover.test.sh for the
+# fuller explanation of this idiom.)
+set +o pipefail
 gate_ln="$(grep -n 'node_version_ok "\$node_ver"' "$INSTALLER" | head -1 | cut -d: -f1)"
 user_ln="$(grep -n 'creating group\|groupadd --system\|useradd --system' "$INSTALLER" | head -1 | cut -d: -f1)"
+set -o pipefail
 if [[ -n "$gate_ln" && -n "$user_ln" && "$gate_ln" -lt "$user_ln" ]]; then
   ok "node gate ($gate_ln) precedes first state change ($user_ln)"
 else

@@ -1,0 +1,97 @@
+name: Release artifact
+
+# OPS-ARTIFACT-1 (v0.2.103-alpha) — builds and publishes the unattended-deploy
+# release artifact for a pushed release tag. This is the ONLY place the SPA is
+# built and the agent's production dependencies are installed for a shipped
+# release; the VPS never repeats this work — it downloads the published
+# artifact, verifies it, and promotes it (ops/deploy-unattended.sh, fast path).
+#
+# Trigger: an annotated tag matching v<semver>[-prerelease] pushed to the repo
+# (the same grammar ops/deploy-unattended.sh and ops/lib/build-release-
+# artifact.sh enforce). Runs on a clean checkout of exactly that tag — never a
+# branch — so the artifact's provenance is unambiguous.
+#
+# Publishes three assets to a GitHub Release for the tag:
+#   torii-continuum-<tag>.tar.gz            the artifact
+#   torii-continuum-<tag>.tar.gz.sha256     its checksum (VPS verifies before
+#                                            ever extracting the tarball)
+#   torii-continuum-<tag>.manifest.json     non-secret build provenance
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    name: Build + publish release artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve tag name
+        id: tag
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      # CI builds on the same Node major line the agent's engines field
+      # requires (>=22.4.0) and the VPS runs in production, so the packaged
+      # agent/node_modules ABI matches the box that will run it byte-for-byte
+      # (all current runtime deps are pure JS — no native addons — verified
+      # by the builder script's portability gate below). Pinned to '22'
+      # (latest 22.x patch) rather than the exact floor '22.4.0': that early
+      # patch predates stable unflagged require(esm), which breaks jsdom's
+      # html-encoding-sniffer -> @exodus/bytes chain used by this same job's
+      # `npm test` step below (fixed upstream in Node 22.12+).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run the full test suites before packaging (defence in depth; CI job also gates on push)
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          cd agent && npm ci && npm test
+
+      - name: Build the release artifact
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/artifact-out
+          bash ops/lib/build-release-artifact.sh "$PWD" "${{ steps.tag.outputs.tag }}" /tmp/artifact-out
+
+      - name: Validate the built artifact (checksum, manifest, extraction, no-secrets)
+        run: |
+          set -euo pipefail
+          ARTIFACT_DIR=/tmp/artifact-out ARTIFACT_TAG="${{ steps.tag.outputs.tag }}" \
+            bash ops/test/release-artifact.test.sh
+
+      - name: Publish GitHub Release with artifact assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: torii-continuum ${{ steps.tag.outputs.tag }}
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            /tmp/artifact-out/torii-continuum-${{ steps.tag.outputs.tag }}.tar.gz
+            /tmp/artifact-out/torii-continuum-${{ steps.tag.outputs.tag }}.tar.gz.sha256
+            /tmp/artifact-out/torii-continuum-${{ steps.tag.outputs.tag }}.manifest.json
+
+      - name: Upload artifact as a workflow artifact too (debugging / air-gapped mirror)
+        uses: actions/upload-artifact@v4
+        with:
+          name: torii-continuum-${{ steps.tag.outputs.tag }}
+          path: |
+            /tmp/artifact-out/torii-continuum-${{ steps.tag.outputs.tag }}.tar.gz
+            /tmp/artifact-out/torii-continuum-${{ steps.tag.outputs.tag }}.tar.gz.sha256
+            /tmp/artifact-out/torii-continuum-${{ steps.tag.outputs.tag }}.manifest.json
+          retention-days: 90
