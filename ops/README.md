@@ -700,6 +700,38 @@ rewrite + fail-safe state machine + service/bootstrap wiring), plus the agent
 
 ---
 
+## Hermes owner-brain install (HERMES-OWNER-1, `install-hermes-owner.sh`)
+
+The Hermes-led pivot makes Continuum the operator shell: it installs two fully
+isolated Nous Research Hermes brains. `ops/install-hermes-owner.sh` provisions
+the first — the owner's personal/project brain — plus the one shared Ollama the
+NPC brain will later reuse:
+
+- `ollama` system user + local-only Ollama (`127.0.0.1:11434`) serving `qwen3:4b`,
+  with `OLLAMA_KEEP_ALIVE` so the model unloads when idle (RAM headroom on the
+  8.9 GiB / no-swap VPS).
+- `hermes-owner` unprivileged user (HOME `0700`, `umask 077`) + vanilla Hermes
+  with an `owner` profile.
+- Routstr as primary (custom OpenAI-compatible endpoint) when `ROUTSTR_BASE_URL`
+  + `ROUTSTR_MODEL` are supplied, with Hermes-native `fallback_providers` → local
+  Ollama `qwen3:4b`; local Ollama is the primary otherwise. The Routstr key is
+  written to the profile `.env` (`0600`), never committed or logged.
+
+```bash
+sudo env ROUTSTR_BASE_URL=https://<routstr>/v1 ROUTSTR_MODEL=<model> \
+  ./ops/install-hermes-owner.sh          # Routstr-first
+sudo ./ops/install-hermes-owner.sh       # local-first, idempotent
+sudo ./ops/install-hermes-owner.sh --dry-run
+./ops/install-hermes-owner.sh --render-config
+```
+
+Secrets, version pinning, and run-on-VPS acceptance checks live in
+`ops/hermes-owner/rebuild-manifest.md`; the committed, secret-free template is
+`ops/hermes-owner/config.yaml.example`. The NPC brain is a separate slice
+(HERMES-NPC-1) and does not reuse this installer.
+
+---
+
 ## Standalone agent install (`install-agent.sh`)
 
 The Ansible playbook above provisions a whole box. If you already have a

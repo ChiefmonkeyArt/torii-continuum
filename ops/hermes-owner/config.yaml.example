@@ -1,0 +1,24 @@
+# Torii Continuum — hermes-owner profile (HERMES-OWNER-1)
+#
+# Committed, secret-free template. `ops/install-hermes-owner.sh` renders the
+# real config at ~/.hermes/profiles/owner/config.yaml from this same shape,
+# filling the placeholders from ROUTSTR_BASE_URL / ROUTSTR_MODEL. Never put a
+# key in this file.
+#
+# Primary inference = Routstr (custom OpenAI-compatible endpoint).
+# When the primary fails (429/5xx after retries, 401/403/404 immediately, or
+# repeated malformed responses), Hermes's native `fallback_providers` chain
+# swaps to the shared local Ollama below — so the owner brain keeps answering
+# (chat + tools) while Routstr is down. See:
+#   https://hermes-agent.nousresearch.com/docs/user-guide/features/fallback-providers
+
+model:
+  provider: custom
+  default: "REPLACE_WITH_ROUTSTR_MODEL"
+  base_url: "https://REPLACE_WITH_ROUTSTR_NODE/v1"
+  # api_key_env: "ROUTSTR_API_KEY"   # key written to the profile .env (0600) by the installer
+
+fallback_providers:
+  - provider: custom
+    model: "qwen3:4b"
+    base_url: "http://localhost:11434/v1"
