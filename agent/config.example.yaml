@@ -104,39 +104,52 @@ cashu:
 # to allow automatic downgrade to the next entry when the primary fails.
 #
 routstr:
-  # Discovery endpoint (OpenAI-compatible base URL for the primary).
-  endpoint: "https://api.routstr.com"
+  # ── Provider discovery (Routstr Core v0.1.0, RIP-03) ──
+  # Providers are found at runtime, not hard-coded. Live nodes announce
+  # themselves as Nostr kind-38421 events; the agent merges them with the
+  # deterministic bootstrap list below and refreshes every few minutes. Failover
+  # walks the cheapest provider for a model first.
 
-  # Per-skill model pins. Skill name → model id (Routstr provider decides which
-  # underlying provider serves it). "auto" defers to Routstr default routing.
+  # Legacy single endpoint (https). Optional — used only as an offline fallback
+  # when discovery is disabled or yields nothing. Leave empty to rely on
+  # discovery + bootstrap_endpoints.
+  endpoint: ""
+
+  # Explicit operator-pinned bootstrap providers (merged with discovery output).
+  providers:
+    - "https://routstr.otrta.me"
+    - "https://api.nonkycai.com"
+
+  discovery:
+    enabled: true
+    refresh_minutes: 10
+    # Relays queried for kind-38421 provider announcements (RIP-02).
+    relays:
+      - "wss://relay.routstr.com"
+      - "wss://nos.lol"
+      - "wss://relay.damus.io"
+    # Fallback endpoints when Nostr discovery yields nothing.
+    bootstrap_endpoints:
+      - "https://routstr.otrta.me"
+      - "https://api.nonkycai.com"
+      - "https://roustr.nobios.ai"
+
+  # Per-skill model pins. A bare model id (e.g. "gpt-5.6-sol") is looked up
+  # across discovered providers (cheapest serving provider wins); "auto" picks
+  # the cheapest reachable model. A pinned id no provider serves degrades to the
+  # cheapest available model rather than dead-ending chat. Other skills
+  # (summarise, routing, embed) default to "auto".
   models:
-    chat:      "deepseek-v3.2"
-    coding:    "deepseek-v3.2"
-    summarise: "llama-3.1-8b-instruct"
-    routing:   "llama-3.1-8b-instruct"        # tiny "which skill?" classifier
-    embed:     "auto"                         # v2 — not used in v1
-
-  # Fallback ladder per skill. Ordered from strongest to cheapest. Off by
-  # default (fallback: false); flip to true once we've validated the ladder
-  # doesn't silently degrade quality.
-  fallback:
-    enabled: false
-    coding:
-      - "deepseek-v3.2"
-      - "qwen-2.5-coder-32b"
-      - "qwen-2.5-coder-7b"
-    chat:
-      - "deepseek-chat"
-      - "llama-3.1-70b-instruct"
-      - "llama-3.1-8b-instruct"
+    chat:   "auto"
+    coding: "auto"
 
   # Hard limits per request. Protects the float from prompt-injection cost bombs.
   limits:
     max_tokens_out: 2048
     max_sats_per_request: 50
-    # Wall-clock deadline for the completion request. A stalled Routstr edge
-    # used to hold a chat turn open forever; the deadline aborts it and lets the
-    # router fall back to the local Ollama model instead.
+    # Wall-clock deadline for the completion request. A stalled provider edge
+    # held a chat turn open forever; the deadline aborts it and lets the router
+    # fall back to the local Ollama model (or the next provider) instead.
     timeout_ms: 45000
 
   # ── Onboarding provider adapter (v0.2.35-alpha) ──

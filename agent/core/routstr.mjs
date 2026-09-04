@@ -39,6 +39,9 @@ import {
 import {
   createBudget, sliceForProvider, worthAttempting, describeBudget,
 } from '../lib/timeout-budget.mjs';
+import {
+  discoverProviders, fetchProviderCatalog, estimateSatsForModel,
+} from './routstr-discovery.mjs';
 
 /** Wall-clock deadline for a chat completion when config doesn't set one. */
 const DEFAULT_CHAT_TIMEOUT_MS = 45000;
@@ -171,12 +174,76 @@ async function appendCostLog(cfg, entry) {
   await appendFile(path, JSON.stringify(entry) + '\n', { mode: 0o600 });
 }
 
-export function createRoutstr(cfg, wallet, log) {
-  const endpoint = cfg.routstr.endpoint.replace(/\/$/, '');
+export function createRoutstr(cfg, wallet, log, deps = {}) {
   const maxTokens = cfg.routstr.limits?.max_tokens_out || 2048;
   // Without a deadline a hung Routstr edge holds the chat request open forever
   // and the operator sees a spinner instead of the local-model fallback.
   const chatTimeoutMs = cfg.routstr.limits?.timeout_ms || DEFAULT_CHAT_TIMEOUT_MS;
+
+  // Routstr Core v0.1.0 (RIP-03): providers are discovered, not hard-coded.
+  // Deterministic bootstrap endpoints lead (explicit `providers`, then
+  // `discovery.bootstrap_endpoints`, then the legacy single `endpoint`); live
+  // Nostr kind-38421 announcements are merged in. `endpoint` is kept only for
+  // backwards compatibility and as an offline fallback.
+  const discovery = cfg.routstr.discovery || {};
+  const legacyEndpoint = typeof cfg.routstr.endpoint === 'string'
+    ? cfg.routstr.endpoint.replace(/\/$/, '')
+    : null;
+  const bootstrap = [];
+  for (const b of [
+    ...(Array.isArray(cfg.routstr.providers) ? cfg.routstr.providers : []),
+    ...(Array.isArray(discovery.bootstrap_endpoints) ? discovery.bootstrap_endpoints : []),
+    ...(legacyEndpoint ? [legacyEndpoint] : []),
+  ]) {
+    if (typeof b === 'string' && b.trim() && !bootstrap.includes(b)) bootstrap.push(b.trim());
+  }
+  const relays = Array.isArray(discovery.relays) && discovery.relays.length ? discovery.relays : undefined;
+
+  // Provider + model registry, lazily populated on first chat and refreshed
+  // every `refresh_minutes` (default 10) so model churn doesn't hard-code us to
+  // a stale catalog. `deps` seams keep `node --test` hermetic.
+  let catalog = [];
+  let catalogAt = 0;
+  let catalogPromise = null;
+  const refreshMs = (discovery.refresh_minutes ?? 10) * 60 * 1000;
+
+  async function ensureCatalog() {
+    if (catalog.length && Date.now() - catalogAt < refreshMs) return catalog;
+    if (catalogPromise) return catalogPromise;
+    catalogPromise = (async () => {
+      try {
+        let providers;
+        if (discovery.enabled === false) {
+          providers = bootstrap.map((u) => ({ baseUrl: u, name: u, npub: null }));
+        } else {
+          providers = await (deps.discoverProviders || discoverProviders)({
+            bootstrapEndpoints: bootstrap,
+            relays,
+            timeoutMs: discovery.timeout_ms,
+            pool: deps.pool,
+          });
+        }
+        const fetched = await (deps.fetchCatalog || fetchProviderCatalog)(providers, {
+          timeoutMs: discovery.catalog_timeout_ms,
+          fetchFn: deps.fetchFn || fetch,
+        });
+        catalog = fetched.filter((e) => Array.isArray(e.models) && e.models.length > 0);
+        catalogAt = Date.now();
+        const modelCount = catalog.reduce((n, p) => n + p.models.length, 0);
+        if (catalog.length) {
+          log.info(`[routstr] discovery: ${catalog.length} reachable provider(s), ${modelCount} model(s)`);
+        } else {
+          log.warn('[routstr] discovery: no reachable providers');
+        }
+      } catch (e) {
+        log.warn(`[routstr] discovery failed: ${e.message}`);
+      } finally {
+        catalogPromise = null;
+      }
+      return catalog;
+    })();
+    return catalogPromise;
+  }
 
   /**
    * Best-effort refund reclaim for a payment token whose change we may have
@@ -187,11 +254,11 @@ export function createRoutstr(cfg, wallet, log) {
    * we NEVER re-add the original payment token to spendable balance, since after
    * dispatch it is spent/unknown.
    */
-  async function tryRefundReclaim(paymentToken) {
+  async function tryRefundReclaim(baseUrl, paymentToken) {
     if (!paymentToken) return;
     let res, body;
     try {
-      res = await fetchWithTimeout(`${endpoint}/v1/wallet/refund`, {
+      res = await fetchWithTimeout(`${baseUrl}/v1/balance/refund`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Cashu': paymentToken },
       }, 10000);
@@ -226,7 +293,7 @@ export function createRoutstr(cfg, wallet, log) {
     }
   }
 
-  async function callOnce(model, messages, sats, timeoutMs = chatTimeoutMs, allowRetry = true) {
+  async function callOnceAt(baseUrl, model, messages, sats, timeoutMs = chatTimeoutMs, allowRetry = true) {
     const send = await wallet.send(sats);
     if (!send.ok) {
       // A dry / floor-blocked wallet is a payment-path failure: structured so the
@@ -241,7 +308,7 @@ export function createRoutstr(cfg, wallet, log) {
 
     // Retained for refund reclaim. NOT used to roll back into spendable balance.
     const paymentToken = send.token;
-    const url = `${endpoint}/v1/chat/completions`;
+    const url = `${baseUrl}/v1/chat/completions`;
     const started = Date.now();
     let res, body;
     const ac = new AbortController();
@@ -272,7 +339,7 @@ export function createRoutstr(cfg, wallet, log) {
     } catch (e) {
       // AFTER dispatch: the token is spent/unknown — NEVER roll it back into
       // spendable balance. Try to reclaim a lost refund instead.
-      await tryRefundReclaim(paymentToken);
+      await tryRefundReclaim(baseUrl, paymentToken);
       return classifyThrownError(e, { timeoutMs, provider: 'routstr' });
     } finally {
       clearTimeout(timer);
@@ -286,7 +353,7 @@ export function createRoutstr(cfg, wallet, log) {
         if (typeof send.markSpent === 'function') await send.markSpent();
         if (allowRetry) {
           log.warn('[routstr] token_already_spent — quarantined stale proofs, retrying once with fresh');
-          return callOnce(model, messages, sats, timeoutMs, false);
+          return callOnceAt(baseUrl, model, messages, sats, timeoutMs, false);
         }
         return providerFailure(
           ERROR_CODES.TOKEN_ALREADY_SPENT,
@@ -296,7 +363,7 @@ export function createRoutstr(cfg, wallet, log) {
       }
       // A 5xx/520 (or an HTML edge error page) likely dropped the X-Cashu-Refund
       // — attempt refund reclaim before reporting.
-      if (res.status >= 500 || looksLikeHtml(body)) await tryRefundReclaim(paymentToken);
+      if (res.status >= 500 || looksLikeHtml(body)) await tryRefundReclaim(baseUrl, paymentToken);
       // Structured + sanitised: the raw upstream body (often a Cloudflare HTML
       // page) is classified, never spliced into the client-visible reason.
       return classifyHttpFailure({ status: res.status, body, provider: 'routstr' });
@@ -313,7 +380,7 @@ export function createRoutstr(cfg, wallet, log) {
       // worth telling apart: a proxy served an HTML error page under a 200
       // status, or the stream really was empty. The token is already handed off
       // — do NOT roll back; try to reclaim any lost refund instead.
-      await tryRefundReclaim(paymentToken);
+      await tryRefundReclaim(baseUrl, paymentToken);
       if (looksLikeHtml(body)) {
         return classifyHttpFailure({ status: res.status, body, provider: 'routstr' });
       }
@@ -361,79 +428,116 @@ export function createRoutstr(cfg, wallet, log) {
   }
 
   /**
+   * Resolve the candidate list for `modelId` — ordered cheapest first by each
+   * provider's declared max_cost_sats — so a primary failure fails over to the
+   * next-cheapest provider. `modelId === null` means "auto": the cheapest model
+   * across every reachable provider (a sensible default when config doesn't pin
+   * one). Returns [{ baseUrl, model, providerName }].
+   */
+  async function resolveCandidates(modelId) {
+    await ensureCatalog();
+    const matches = [];
+    for (const provider of catalog) {
+      for (const m of provider.models) {
+        if (modelId && m.id !== modelId) continue;
+        matches.push({ baseUrl: provider.baseUrl, model: m, providerName: provider.name });
+      }
+    }
+    matches.sort((a, b) => {
+      const ac = a.model.max_cost_sats ?? Infinity;
+      const bc = b.model.max_cost_sats ?? Infinity;
+      if (ac !== bc) return ac - bc;
+      return String(a.model.id).localeCompare(String(b.model.id));
+    });
+    return matches;
+  }
+
+  /** Sats to over-allocate: model-priced when the catalog exposes sats_pricing, else the config floor. */
+  function satsFor(model, messages) {
+    const est = estimateSatsForModel(model, maxTokens, messages);
+    if (est != null) return est;
+    return estimateSats(cfg, 'chat');
+  }
+
+  /**
    * Public: chat({ skill, messages, budget_ms })
-   * skill selects the model + fallback ladder. `budget_ms` is the wall-clock the
-   * router has left for the WHOLE turn; every attempt below — primary and each
-   * rung of the model ladder — is clamped to what remains of it, and a rung too
-   * thin to finish is not started at all. Omitting it (a provider called
-   * directly, outside the router) keeps the configured per-call timeout.
+   * Resolves the requested model to reachable providers (cheapest first) and
+   * fails over across them within the turn budget. A config-pinned model that no
+   * provider serves (stale config, e.g. the retired deepseek-v3.2) degrades to
+   * the cheapest available model — loudly — rather than dead-ending chat.
    */
   async function chat({ skill = 'chat', messages, budget_ms = null }) {
     if (!Array.isArray(messages) || messages.length === 0) {
-      // Non-retryable: a malformed call is a bug, not an outage. The router must
-      // NOT downgrade to the free local model and hide it.
       return providerFailure(ERROR_CODES.BAD_REQUEST, 'messages must be a non-empty array');
     }
 
-    const primary = modelForSkill(cfg, skill);
-    const sats = estimateSats(cfg, skill);
-    // One budget for the whole ladder. When the router gave us a slice we track
-    // it locally so ladder rung N+1 sees the time rungs 1..N actually consumed.
-    const budget = budget_ms === null || budget_ms === undefined
-      ? null
-      : createBudget(budget_ms);
+    const wanted = modelForSkill(cfg, skill);
+    const requested = wanted === 'auto' ? null : wanted;
+    const budget = budget_ms === null || budget_ms === undefined ? null : createBudget(budget_ms);
     const remaining = () => (budget ? budget.remainingMs() : null);
     const sliceNow = () => sliceForProvider(chatTimeoutMs, remaining());
 
-    let attemptedModels = [primary];
-    let attempt;
-    if (budget && !worthAttempting(budget.remainingMs())) {
-      // Too little of the turn left to pay for a completion nobody will read.
-      // Reported BEFORE wallet.send so no sats leave the wallet.
-      attempt = providerFailure(
-        ERROR_CODES.BUDGET_EXHAUSTED,
-        `routstr skipped: only ${budget.remainingMs()}ms of the turn budget left`,
-      );
-    } else {
-      attempt = await callOnce(primary, messages, sats, sliceNow());
+    let candidates = await resolveCandidates(requested);
+    if (requested && candidates.length === 0) {
+      log.warn(`[routstr] configured model "${requested}" is not served by any reachable provider — degrading to cheapest available`);
+      candidates = await resolveCandidates(null);
     }
 
-    if (!attempt.ok) {
-      log.warn(`[routstr] primary ${primary} failed: ${attempt.reason}`);
-      const ladder = fallbackLadder(cfg, skill);
-      if (ladder) {
-        for (const model of ladder) {
-          if (model === primary) continue;
-          if (budget && !worthAttempting(budget.remainingMs())) {
-            log.warn(`[routstr] skipping ${model}: ${describeBudget(budget)}`);
-            break;
-          }
-          attemptedModels.push(model);
-          log.info(`[routstr] falling back to ${model}`);
-          attempt = await callOnce(model, messages, sats, sliceNow());
-          if (attempt.ok) break;
-          log.warn(`[routstr] fallback ${model} failed: ${attempt.reason}`);
-        }
+    if (candidates.length === 0) {
+      if (budget && !worthAttempting(budget.remainingMs())) {
+        return providerFailure(ERROR_CODES.BUDGET_EXHAUSTED, `routstr skipped: ${describeBudget(budget)}`);
       }
+      // Nothing reachable. Fall back to a directly-configured legacy endpoint
+      // (offline / discovery-disabled operator) before failing closed.
+      if (legacyEndpoint) {
+        const attempt = await callOnceAt(legacyEndpoint, wanted, messages, satsFor(null, messages), sliceNow());
+        await appendCostLog(cfg, {
+          at: new Date().toISOString(), skill, model: wanted,
+          ok: attempt.ok,
+          tokens_in: attempt.tokens_in || 0, tokens_out: attempt.tokens_out || 0,
+          sats_spent: attempt.ok ? attempt.sats_spent : 0, duration_ms: attempt.duration_ms || 0,
+          attempted_models: [wanted],
+          reason: attempt.ok ? null : attempt.reason, code: attempt.ok ? null : attempt.code || null,
+        });
+        return attempt;
+      }
+      return providerFailure(
+        ERROR_CODES.PROVIDER_DISABLED,
+        requested
+          ? `no reachable Routstr provider serves model "${requested}"`
+          : 'no reachable Routstr providers',
+      );
     }
 
-    // Cost log — one line per attempt outcome
+    const attemptedModels = [];
+    let attempt = null;
+    for (const cand of candidates) {
+      attemptedModels.push(cand.model.id);
+      if (budget && !worthAttempting(budget.remainingMs())) {
+        attempt = providerFailure(ERROR_CODES.BUDGET_EXHAUSTED, `routstr skipped: ${describeBudget(budget)}`);
+        break;
+      }
+      const sats = satsFor(cand.model, messages);
+      attempt = await callOnceAt(cand.baseUrl, cand.model.id, messages, sats, sliceNow());
+      if (attempt.ok) break;
+      log.warn(`[routstr] ${cand.model.id}@${cand.baseUrl} failed: ${attempt.reason}`);
+    }
+
     await appendCostLog(cfg, {
-      at: new Date().toISOString(),
-      skill,
-      model: attempt.ok ? attempt.model : attemptedModels[attemptedModels.length - 1],
-      ok: attempt.ok,
-      tokens_in: attempt.tokens_in || 0,
-      tokens_out: attempt.tokens_out || 0,
-      sats_spent: attempt.ok ? attempt.sats_spent : 0,
-      duration_ms: attempt.duration_ms || 0,
+      at: new Date().toISOString(), skill,
+      model: attempt && attempt.ok ? attempt.model : (attemptedModels[attemptedModels.length - 1] || wanted),
+      ok: attempt ? !!attempt.ok : false,
+      tokens_in: attempt ? attempt.tokens_in || 0 : 0,
+      tokens_out: attempt ? attempt.tokens_out || 0 : 0,
+      sats_spent: attempt && attempt.ok ? attempt.sats_spent : 0,
+      duration_ms: attempt ? attempt.duration_ms || 0 : 0,
       attempted_models: attemptedModels,
-      reason: attempt.ok ? null : attempt.reason,
-      code: attempt.ok ? null : attempt.code || null,
+      reason: attempt && !attempt.ok ? attempt.reason : null,
+      code: attempt && !attempt.ok ? attempt.code || null : null,
     });
 
     return attempt;
   }
 
-  return { chat };
+  return { chat, refreshCatalog: ensureCatalog };
 }

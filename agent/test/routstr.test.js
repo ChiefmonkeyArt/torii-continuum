@@ -64,6 +64,8 @@ async function baseCfg() {
   return {
     routstr: {
       endpoint: 'https://api.routstr.com',
+      providers: ['https://api.routstr.com'],
+      discovery: { enabled: false },
       models: { chat: 'deepseek-chat' },
       limits: { max_sats_per_request: 50 },
     },
@@ -79,6 +81,18 @@ function withFetch(fake, fn) {
   })();
 }
 
+// Injected discovery catalog: `fetchCatalog` returns a single provider serving
+// the pinned model, so `chat()` still exercises the real routing path without
+// touching globalThis.fetch (which the tests count to assert "no HTTP call").
+const CATALOG_DEPS = {
+  fetchCatalog: async () => [{
+    baseUrl: 'https://api.routstr.com',
+    name: 'api.routstr.com',
+    npub: null,
+    models: [{ id: 'deepseek-chat', name: 'deepseek-chat', pricing_sats: null, max_cost_sats: null }],
+  }],
+};
+
 test('chat attaches the Cashu token in the X-Cashu header (not Authorization)', async () => {
   const cfg = await baseCfg();
   const wallet = {
@@ -87,7 +101,7 @@ test('chat attaches the Cashu token in the X-Cashu header (not Authorization)', 
   };
   let seen;
   await withFetch(async (url, opts) => { seen = { url, headers: opts.headers }; return completion('hi'); }, async () => {
-    const routstr = createRoutstr(cfg, wallet, silentLog());
+    const routstr = createRoutstr(cfg, wallet, silentLog(), CATALOG_DEPS);
     const r = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
     assert.equal(r.ok, true);
     assert.equal(r.content, 'hi');
@@ -119,7 +133,7 @@ test('chat requests a stream and accumulates multi-delta SSE content into one re
     seenBody = JSON.parse(opts.body);
     return { ok: true, status: 200, headers: new Map(), async text() { return multiDelta; } };
   }, async () => {
-    const routstr = createRoutstr(cfg, wallet, silentLog());
+    const routstr = createRoutstr(cfg, wallet, silentLog(), CATALOG_DEPS);
     const r = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
     assert.equal(r.ok, true);
     assert.equal(r.content, 'Hi! 👋 How are you?');
@@ -136,7 +150,7 @@ test('chat reclaims the X-Cashu-Refund change back into the wallet', async () =>
   };
   let result;
   await withFetch(async () => completion('ok', { 'X-Cashu-Refund': 'cashuREFUND' }), async () => {
-    const routstr = createRoutstr(cfg, wallet, silentLog());
+    const routstr = createRoutstr(cfg, wallet, silentLog(), CATALOG_DEPS);
     result = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
   });
   assert.equal(result.ok, true);
@@ -155,7 +169,7 @@ test('chat reclaims a refund carried in the X-Cashu response header', async () =
   let result;
   // Routstr returns the change in the bare `X-Cashu` response header.
   await withFetch(async () => completion('ok', { 'X-Cashu': 'cashuCHANGE' }), async () => {
-    const routstr = createRoutstr(cfg, wallet, silentLog());
+    const routstr = createRoutstr(cfg, wallet, silentLog(), CATALOG_DEPS);
     result = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
   });
   assert.equal(result.ok, true);
@@ -173,7 +187,7 @@ test('chat without a refund header spends the full allocation and never calls re
   };
   let result;
   await withFetch(async () => completion('ok'), async () => {
-    const routstr = createRoutstr(cfg, wallet, silentLog());
+    const routstr = createRoutstr(cfg, wallet, silentLog(), CATALOG_DEPS);
     result = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
   });
   assert.equal(result.ok, true);
@@ -190,7 +204,7 @@ test('a refund reclaim failure does not fail an otherwise-successful completion'
   };
   let result;
   await withFetch(async () => completion('ok', { 'X-Cashu-Refund': 'cashuBAD' }), async () => {
-    const routstr = createRoutstr(cfg, wallet, silentLog());
+    const routstr = createRoutstr(cfg, wallet, silentLog(), CATALOG_DEPS);
     result = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
   });
   assert.equal(result.ok, true);
@@ -208,7 +222,7 @@ test('below hard_floor: wallet.send error surfaces with the insufficient-funds s
   let fetchCalled = false;
   let result;
   await withFetch(async () => { fetchCalled = true; return completion('nope'); }, async () => {
-    const routstr = createRoutstr(cfg, wallet, silentLog());
+    const routstr = createRoutstr(cfg, wallet, silentLog(), CATALOG_DEPS);
     result = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
   });
   assert.equal(result.ok, false);
@@ -230,7 +244,7 @@ function httpResponse(status, body, headers = {}) {
 // Route a fake fetch by path: the completions call vs the refund-reclaim POST.
 function routedFetch({ onCompletion, onRefund }) {
   return async (url, opts) => {
-    if (String(url).endsWith('/v1/wallet/refund')) {
+    if (String(url).endsWith('/v1/balance/refund')) {
       return (onRefund || (() => httpResponse(404, '')))(url, opts);
     }
     return onCompletion(url, opts);
@@ -262,7 +276,7 @@ test('a 520 after dispatch never rolls back and the next send uses fresh proofs'
     },
   });
   await withFetch(fake, async () => {
-    const routstr = createRoutstr(cfg, wallet, silentLog());
+    const routstr = createRoutstr(cfg, wallet, silentLog(), CATALOG_DEPS);
     const first = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
     const second = await routstr.chat({ messages: [{ role: 'user', content: 'yo again' }] });
     assert.equal(first.ok, false);
@@ -304,7 +318,7 @@ test('token_already_spent quarantines the exact stale proofs and retries once wi
   });
   let result;
   await withFetch(fake, async () => {
-    const routstr = createRoutstr(cfg, wallet, silentLog());
+    const routstr = createRoutstr(cfg, wallet, silentLog(), CATALOG_DEPS);
     result = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
   });
   assert.equal(markSpentCalls, 1, 'the stale proofs must be quarantined exactly once');
@@ -329,7 +343,7 @@ test('token_already_spent with no fresh proofs left surfaces the insufficient-fu
   });
   let result;
   await withFetch(fake, async () => {
-    const routstr = createRoutstr(cfg, wallet, silentLog());
+    const routstr = createRoutstr(cfg, wallet, silentLog(), CATALOG_DEPS);
     result = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
   });
   assert.equal(result.ok, false);
@@ -360,7 +374,7 @@ test('a lost refund header triggers a refund reclaim POST and claims it via wall
     },
   });
   await withFetch(fake, async () => {
-    const routstr = createRoutstr(cfg, wallet, silentLog());
+    const routstr = createRoutstr(cfg, wallet, silentLog(), CATALOG_DEPS);
     await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
   });
   assert.equal(refundReqToken, 'cashuPAID', 'refund reclaim must send the ORIGINAL payment token');

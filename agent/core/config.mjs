@@ -6,8 +6,7 @@
  *   1. admin_npub must be a valid "npub1" string OR empty (first-touch claim)
  *   2. session_secret must be >=64 hex chars (32 bytes)
  *   3. server.host + server.port must be set
- *   4. routstr.endpoint must be https
- *   5. routstr.models.chat + .coding must be set
+ *   4. routstr.endpoint must be https WHEN set (provider discovery makes it optional)
  *
  * Any of those failing = the daemon refuses to start. Better to crash on
  * boot than serve requests with a broken sovereignty story.
@@ -73,11 +72,8 @@ export function loadConfig(path) {
   if (!cfg.server?.host || !cfg.server?.port) {
     errors.push('server.host and server.port must both be set');
   }
-  if (!cfg.routstr?.endpoint || !cfg.routstr.endpoint.startsWith('https://')) {
-    errors.push('routstr.endpoint must be a https:// URL');
-  }
-  if (!cfg.routstr?.models?.chat || !cfg.routstr?.models?.coding) {
-    errors.push('routstr.models.chat and .coding must both be set');
+  if (cfg.routstr?.endpoint && typeof cfg.routstr.endpoint === 'string' && !cfg.routstr.endpoint.startsWith('https://')) {
+    errors.push('routstr.endpoint must be a https:// URL when set');
   }
 
   // project_sources (v0.2.47-alpha, CONT-KANBAN-SYNC): read-only import of
@@ -156,6 +152,31 @@ export function loadConfig(path) {
   cfg.cashu.max_mint_sats ??= 100_000;
   cfg.routstr.limits ??= { max_tokens_out: 2048, max_sats_per_request: 50 };
   cfg.routstr.fallback ??= { enabled: false };
+  // Routstr Core v0.1.0 (RIP-03): models are no longer hard-required — a
+  // missing pin defaults to "auto" (cheapest reachable model). Provider
+  // discovery (core/routstr-discovery.mjs) lazily finds live nodes via Nostr
+  // kind-38421 and merges them with a deterministic bootstrap list. `providers`
+  // is an operator-supplied explicit bootstrap; `endpoint` remains only as a
+  // legacy single-provider fallback.
+  cfg.routstr.models ??= {};
+  cfg.routstr.models.chat ??= 'auto';
+  cfg.routstr.models.coding ??= 'auto';
+  cfg.routstr.providers ??= [];
+  cfg.routstr.discovery ??= {};
+  cfg.routstr.discovery.enabled ??= true;
+  cfg.routstr.discovery.refresh_minutes ??= 10;
+  cfg.routstr.discovery.timeout_ms ??= 8000;
+  cfg.routstr.discovery.catalog_timeout_ms ??= 12000;
+  cfg.routstr.discovery.relays ??= [
+    'wss://relay.routstr.com',
+    'wss://nos.lol',
+    'wss://relay.damus.io',
+  ];
+  cfg.routstr.discovery.bootstrap_endpoints ??= [
+    'https://routstr.otrta.me',
+    'https://api.nonkycai.com',
+    'https://roustr.nobios.ai',
+  ];
   cfg.skills ??= {};
   cfg.logging ??= { destination: 'stdout', level: 'info' };
   cfg.logging.cost_log ??= 'memory/costs.jsonl';

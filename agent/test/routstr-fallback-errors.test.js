@@ -34,6 +34,8 @@ async function baseCfg(extraLimits = {}) {
   return {
     routstr: {
       endpoint: 'https://api.routstr.com',
+      providers: ['https://api.routstr.com'],
+      discovery: { enabled: false },
       models: { chat: 'deepseek-chat' },
       limits: { max_sats_per_request: 50, ...extraLimits },
     },
@@ -59,6 +61,17 @@ function withFetch(fake, fn) {
   })();
 }
 
+// Injected discovery catalog so `chat()` routes without touching globalThis.fetch
+// (several tests count fetch calls to assert "no network" on a dry wallet).
+const CATALOG_DEPS = {
+  fetchCatalog: async () => [{
+    baseUrl: 'https://api.routstr.com',
+    name: 'api.routstr.com',
+    npub: null,
+    models: [{ id: 'deepseek-chat', name: 'deepseek-chat', pricing_sats: null, max_cost_sats: null }],
+  }],
+};
+
 /** A non-OK response double. */
 function errorResponse(status, body) {
   return {
@@ -76,10 +89,10 @@ test('a 5xx yields a retryable upstream_5xx and never echoes the raw body', asyn
   const leaky = 'internal-host.example exploded: stacktrace at /srv/secret/path.py:42';
   await withFetch(async (url) => {
     // The refund-reclaim probe also hits fetch; answer it harmlessly.
-    if (url.endsWith('/v1/wallet/refund')) return errorResponse(404, 'no');
+    if (url.endsWith('/v1/balance/refund')) return errorResponse(404, 'no');
     return errorResponse(503, leaky);
   }, async () => {
-    const routstr = createRoutstr(cfg, okWallet(), silentLog());
+    const routstr = createRoutstr(cfg, okWallet(), silentLog(), CATALOG_DEPS);
     const r = await routstr.chat({ messages: MSGS });
     assert.equal(r.ok, false);
     assert.equal(r.code, ERROR_CODES.UPSTREAM_5XX);
@@ -93,10 +106,10 @@ test('an HTML error page under a 5xx is classified as upstream_html', async () =
   const cfg = await baseCfg();
   const html = '<!doctype html><html><head><title>520 Origin Error</title></head><body>cf</body></html>';
   await withFetch(async (url) => {
-    if (url.endsWith('/v1/wallet/refund')) return errorResponse(404, 'no');
+    if (url.endsWith('/v1/balance/refund')) return errorResponse(404, 'no');
     return errorResponse(520, html);
   }, async () => {
-    const routstr = createRoutstr(cfg, okWallet(), silentLog());
+    const routstr = createRoutstr(cfg, okWallet(), silentLog(), CATALOG_DEPS);
     const r = await routstr.chat({ messages: MSGS });
     assert.equal(r.code, ERROR_CODES.UPSTREAM_HTML);
     assert.equal(r.retryable, true);
@@ -110,10 +123,10 @@ test('an HTML error page served under a 200 is upstream_html, not an empty strea
   const cfg = await baseCfg();
   const html = '<html><body>Bad gateway</body></html>';
   await withFetch(async (url) => {
-    if (url.endsWith('/v1/wallet/refund')) return errorResponse(404, 'no');
+    if (url.endsWith('/v1/balance/refund')) return errorResponse(404, 'no');
     return { ok: true, status: 200, headers: new Map(), async text() { return html; } };
   }, async () => {
-    const routstr = createRoutstr(cfg, okWallet(), silentLog());
+    const routstr = createRoutstr(cfg, okWallet(), silentLog(), CATALOG_DEPS);
     const r = await routstr.chat({ messages: MSGS });
     assert.equal(r.code, ERROR_CODES.UPSTREAM_HTML);
     assert.equal(r.retryable, true);
@@ -123,10 +136,10 @@ test('an HTML error page served under a 200 is upstream_html, not an empty strea
 test('a genuinely empty 200 stream is upstream_empty (distinct from HTML)', async () => {
   const cfg = await baseCfg();
   await withFetch(async (url) => {
-    if (url.endsWith('/v1/wallet/refund')) return errorResponse(404, 'no');
+    if (url.endsWith('/v1/balance/refund')) return errorResponse(404, 'no');
     return { ok: true, status: 200, headers: new Map(), async text() { return 'data: [DONE]\n\n'; } };
   }, async () => {
-    const routstr = createRoutstr(cfg, okWallet(), silentLog());
+    const routstr = createRoutstr(cfg, okWallet(), silentLog(), CATALOG_DEPS);
     const r = await routstr.chat({ messages: MSGS });
     assert.equal(r.code, ERROR_CODES.UPSTREAM_EMPTY);
     assert.equal(r.retryable, true);
@@ -140,7 +153,7 @@ test('the completion fetch is given an AbortSignal deadline', async () => {
     if (url.endsWith('/v1/chat/completions')) sawSignal = !!opts?.signal;
     return errorResponse(500, 'boom');
   }, async () => {
-    const routstr = createRoutstr(cfg, okWallet(), silentLog());
+    const routstr = createRoutstr(cfg, okWallet(), silentLog(), CATALOG_DEPS);
     await routstr.chat({ messages: MSGS });
   });
   assert.equal(sawSignal, true, 'a hung upstream must be abortable');
@@ -149,7 +162,7 @@ test('the completion fetch is given an AbortSignal deadline', async () => {
 test('an aborted completion yields a retryable upstream_timeout', async () => {
   const cfg = await baseCfg({ timeout_ms: 25 });
   await withFetch(async (url, opts) => {
-    if (url.endsWith('/v1/wallet/refund')) return errorResponse(404, 'no');
+    if (url.endsWith('/v1/balance/refund')) return errorResponse(404, 'no');
     // Never settle on its own — only the client's deadline ends this.
     return new Promise((_resolve, reject) => {
       opts.signal.addEventListener('abort', () => {
@@ -157,7 +170,7 @@ test('an aborted completion yields a retryable upstream_timeout', async () => {
       });
     });
   }, async () => {
-    const routstr = createRoutstr(cfg, okWallet(), silentLog());
+    const routstr = createRoutstr(cfg, okWallet(), silentLog(), CATALOG_DEPS);
     const r = await routstr.chat({ messages: MSGS });
     assert.equal(r.ok, false);
     assert.equal(r.code, ERROR_CODES.UPSTREAM_TIMEOUT);
@@ -174,7 +187,7 @@ test('a dry wallet is a retryable insufficient_funds without dispatching a reque
   };
   let dispatched = false;
   await withFetch(async () => { dispatched = true; return errorResponse(500, 'x'); }, async () => {
-    const routstr = createRoutstr(cfg, dryWallet, silentLog());
+    const routstr = createRoutstr(cfg, dryWallet, silentLog(), CATALOG_DEPS);
     const r = await routstr.chat({ messages: MSGS });
     assert.equal(r.ok, false);
     assert.equal(r.code, ERROR_CODES.INSUFFICIENT_FUNDS);
@@ -185,7 +198,7 @@ test('a dry wallet is a retryable insufficient_funds without dispatching a reque
 
 test('an empty messages array is a non-retryable bad_request', async () => {
   const cfg = await baseCfg();
-  const routstr = createRoutstr(cfg, okWallet(), silentLog());
+  const routstr = createRoutstr(cfg, okWallet(), silentLog(), CATALOG_DEPS);
   const r = await routstr.chat({ messages: [] });
   assert.equal(r.ok, false);
   assert.equal(r.code, ERROR_CODES.BAD_REQUEST);

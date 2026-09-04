@@ -9,6 +9,18 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.105-alpha — Routstr Core v0.1.0 provider discovery (2026-09-05)
+
+`api.routstr.com` is decommissioned (Routstr shipped Core v0.1.0), so the hard-coded
+endpoint + pinned `deepseek-v3.2` model 404'd, and the emergency `ollama_first` strategy
+504'd on the CPU-only `qwen2.5:0.5b`. Reworked the client to discovery-driven routing:
+`core/routstr-discovery.mjs` finds providers via Nostr kind-38421 announcements (base URL in
+the `u` tag) plus an operator-pinned bootstrap list, fetches each provider's `GET /v1/models`
+catalog (with `sats_pricing`), and `chat()` routes to the cheapest provider for the requested
+model with failover. A stale pinned model degrades to the cheapest available model instead of
+a 404. Payment stays stateless `X-Cashu`; the best-effort reclaim path moved
+`/v1/wallet/refund` → `/v1/balance/refund`. 460 agent tests pass.
+
 ## v0.2.103-alpha — release-artifact fast path for VPS upgrades (2026-08-05)
 
 One slice, OPS-ARTIFACT-1. **Not deployed from the subagent** — the parent hands the operator the deploy command block. Ops/deployment work only; no app-facing changes.
