@@ -86,6 +86,8 @@ function routstrCfg(routstrExtra = {}) {
   return {
     routstr: {
       endpoint: 'https://routstr.test',
+      providers: ['https://routstr.test'],
+      discovery: { enabled: false },
       models: { chat: 'test-model' },
       limits: { max_sats_per_request: 10, timeout_ms: 45000 },
       ...routstrExtra,
@@ -94,10 +96,21 @@ function routstrCfg(routstrExtra = {}) {
   };
 }
 
+// Injected catalog so chat() routes without touching the recorded global fetch
+// (these tests assert the exact fetch call count / budget discipline).
+const CATALOG_DEPS = {
+  fetchCatalog: async () => [{
+    baseUrl: 'https://routstr.test',
+    name: 'routstr.test',
+    npub: null,
+    models: [{ id: 'test-model', name: 'test-model', pricing_sats: null, max_cost_sats: null }],
+  }],
+};
+
 test('routstr refuses a too-thin budget WITHOUT spending sats', async () => {
   const seen = recordingFetch(() => sseOk());
   const wallet = walletDouble();
-  const routstr = createRoutstr(routstrCfg(), wallet, log);
+  const routstr = createRoutstr(routstrCfg(), wallet, log, CATALOG_DEPS);
 
   const r = await routstr.chat({ skill: 'chat', messages: MESSAGES, budget_ms: 1000 });
   assert.equal(r.ok, false);
@@ -110,7 +123,7 @@ test('routstr refuses a too-thin budget WITHOUT spending sats', async () => {
 test('routstr proceeds when the budget is at the minimum slice', async () => {
   recordingFetch(() => sseOk('paid answer'));
   const wallet = walletDouble();
-  const routstr = createRoutstr(routstrCfg(), wallet, log);
+  const routstr = createRoutstr(routstrCfg(), wallet, log, CATALOG_DEPS);
 
   const r = await routstr.chat({ skill: 'chat', messages: MESSAGES, budget_ms: MIN_PROVIDER_SLICE_MS });
   assert.equal(r.ok, true);
@@ -121,7 +134,7 @@ test('routstr proceeds when the budget is at the minimum slice', async () => {
 test('routstr still works with no budget at all (called directly)', async () => {
   recordingFetch(() => sseOk('paid answer'));
   const wallet = walletDouble();
-  const routstr = createRoutstr(routstrCfg(), wallet, log);
+  const routstr = createRoutstr(routstrCfg(), wallet, log, CATALOG_DEPS);
 
   const r = await routstr.chat({ skill: 'chat', messages: MESSAGES });
   assert.equal(r.ok, true, 'omitting budget_ms must not break standalone use');
@@ -129,7 +142,7 @@ test('routstr still works with no budget at all (called directly)', async () => 
 
 test('routstr arms an AbortSignal on every dispatched request', async () => {
   const seen = recordingFetch(() => sseOk());
-  const routstr = createRoutstr(routstrCfg(), walletDouble(), log);
+  const routstr = createRoutstr(routstrCfg(), walletDouble(), log, CATALOG_DEPS);
   await routstr.chat({ skill: 'chat', messages: MESSAGES, budget_ms: 60000 });
   assert.equal(seen.length, 1);
   assert.ok(seen[0].signal, 'no signal means no deadline');
@@ -150,7 +163,7 @@ test('routstr stops walking its model ladder once the budget is gone', async () 
   Date.now = () => realNow.call(Date) + clockOffset;
   try {
     const cfg = routstrCfg({ fallback: { enabled: true, chat: ['m1', 'm2', 'm3', 'm4'] } });
-    const routstr = createRoutstr(cfg, walletDouble(), log);
+    const routstr = createRoutstr(cfg, walletDouble(), log, CATALOG_DEPS);
     const r = await routstr.chat({ skill: 'chat', messages: MESSAGES, budget_ms: 100000 });
     assert.equal(r.ok, false);
     assert.ok(calls < 5, `ladder must stop early, got ${calls} attempts`);
