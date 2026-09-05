@@ -18,12 +18,19 @@ Routstr proxy and a local Ollama instance. Continuum is the "brain that runs on
 your box" — mounted by torii-base at `/continuum/` alongside Plebeian and Quest
 on one domain with shared identity/wallet.
 
-- **Current version:** v0.2.105-alpha — deployed on the VPS (frontend + agent
-  both at `3b99a13`, in lockstep with the `v0.2.105-alpha` tag and `main`).
-- **Active focus:** Routstr Core v0.1.0 provider discovery + failover is LIVE and
-  verified — Nostr kind-38421 discovery resolves **3 reachable providers / 870
-  models** (verified 2026-09-05). A shared per-turn timeout budget (CONT-TIMEOUT-1)
-  closed the nginx 504. The suite installer resolves `origin/<ref>`
+- **Current version:** v0.2.106-alpha — not yet deployed on the VPS. Deployed VPS
+  agent + frontend remain on v0.2.105-alpha (`3b99a13`) pending the matching
+  suite-side PR that pulls `qwen3:0.6b` during install.
+- **Active focus:** Ollama fallback tune-up + `qwen3:0.6b` swap. `agent/core/ollama.mjs`
+  now sends `keep_alive: -1` and `options.num_ctx: 4096` on every request (both
+  config-overridable) so the fallback path stops paying a 2–8s cold-start on every
+  degraded turn and no longer silently truncates context at 4096. Default chat
+  model in `agent/config.example.yaml` swapped from `qwen2.5:0.5b` to `qwen3:0.6b`
+  (same footprint, agent-loop tool-calling score 0.880 vs 0.640). 464 agent tests
+  green. Router primary remains Routstr Core v0.1.0 discovery-driven routing
+  (Nostr kind-38421 + bootstrap list → runtime `/v1/models` catalog → cheapest
+  provider with failover) shipped in v0.2.105-alpha and LIVE-verified (3 reachable
+  providers / 870 models, 2026-09-05). Suite installer resolves `origin/<ref>`
   (torii-suite v0.9.5-alpha) so redeploys always land on the latest tag.
 - **Live:** https://continuum-torii.pplx.app (see §7)
 - **Repo:** https://github.com/ChiefmonkeyArt/torii-continuum

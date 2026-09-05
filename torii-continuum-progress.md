@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.106-alpha — Ollama fallback tune-up + qwen3:0.6b swap (2026-09-05)
+
+**What shipped.**
+
+- `agent/core/ollama.mjs` now sends `keep_alive: -1` and `options.num_ctx: 4096` on every `/v1/chat/completions` request, both overridable via `cfg.ollama.keep_alive` and `cfg.ollama.num_ctx`. Ollama's OpenAI-compat endpoint silently truncates at 4096 tokens without an explicit `options.num_ctx`, and defaults `keep_alive` to 5 minutes — so the router's fallback path was paying a 2–8s cold-start every time it degraded from Routstr. This closes both gaps in code so it survives Ollama restarts and doesn't require any systemd env changes (Ollama is not in the torii-admin-run allowlist).
+- `agent/config.example.yaml` now defaults `ollama.model` and `ollama.models.chat` to `qwen3:0.6b`, adds first-class `keep_alive: -1` / `num_ctx: 4096` config knobs, and documents the qwen3 tier in the CPU sizing table. Rationale: qwen3:0.6b has the same disk/RAM footprint as qwen2.5:0.5b but scores 0.880 vs 0.640 on Mike Veerman's agent-loop tool-calling benchmark ([mikeveerman.be, Feb 2026](https://mikeveerman.be/blog/github-2026-02-06-tool-calling-benchmark/)), which is exactly the workload the chat skill exercises. This is a template swap only — the installer preserves existing live configs; VPS `agent/config.yaml` will need a separate targeted edit.
+- New test file `agent/test/ollama-request-shape.test.js` (4 tests) locks in that `keep_alive` and `options.num_ctx` are always sent, that config overrides win, and that the endpoint path stays `/v1/chat/completions`. Prevents silent regression if a future refactor drops one of these fields. 464 agent tests green.
+
+**Not yet deployed.** Suite-side PR (adds a `qwen3:0.6b` pull step to `install-continuum.sh`) is the deploy blocker; then live VPS `agent/config.yaml` needs `ollama.models.chat: qwen3:0.6b`, `OLLAMA_MODELS="qwen3:0.6b"` appended to `/opt/torii-suite/checkout/.env`, and `run-installer install-continuum.sh` to pull the model + apply.
+
 ## v0.2.105-alpha — Routstr Core v0.1.0 provider discovery (2026-09-05)
 
 `api.routstr.com` is decommissioned (Routstr shipped Core v0.1.0), so the hard-coded
