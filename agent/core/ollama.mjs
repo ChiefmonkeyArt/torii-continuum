@@ -118,6 +118,22 @@ export function createOllama(cfg, log) {
           // Deterministic-ish. Chat is not creative writing.
           temperature: cfg.ollama?.temperature ?? 0.4,
           stream: false,
+          // Keep the model resident in RAM between requests. On a CPU-only VPS
+          // the model load is the slow part (2-8s cold-start); with Routstr
+          // as the primary and Ollama as the fallback path, we don't want to
+          // pay that cost every time the router degrades. `-1` = keep loaded
+          // until Ollama is restarted or evicted for another model. Falls
+          // back to the default when config overrides with something else
+          // (e.g. `"5m"` on a memory-constrained host).
+          keep_alive: cfg.ollama?.keep_alive ?? -1,
+          // Cap the KV-cache context window. Ollama's `/v1/chat/completions`
+          // ignores model Modelfile context and silently truncates at 4096
+          // unless `options.num_ctx` is set. Capping small keeps RAM predictable
+          // on the fallback path — the chat skill's turns are short. Bigger
+          // skills (e.g. reflect) may override via cfg.ollama.num_ctx.
+          options: {
+            num_ctx: cfg.ollama?.num_ctx ?? 4096,
+          },
         }),
         signal: ctl.signal,
       });
