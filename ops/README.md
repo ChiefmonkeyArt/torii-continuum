@@ -1,7 +1,7 @@
 # Continuum ops
 
 Everything you need to run Torii Continuum on your own VPS instead of on
-`pplx.app`.
+an agent-less static build.
 
 Two paths are supported:
 
@@ -28,7 +28,7 @@ Contents:
 
 ## Why a VPS?
 
-The published `pplx.app` build of Continuum is static-only. It's great for
+The published agent-less static build of Continuum is exactly that — static-only. It's great for
 trying the UI, but three key pieces don't run in that sandbox:
 
 - **Routstr chat** — needs a persistent Cashu float on-server.

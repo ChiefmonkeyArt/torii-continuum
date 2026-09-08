@@ -4,11 +4,11 @@ Living document. This will change as we learn.
 
 Source-of-truth split (per the `Torii` Space instructions, one set per project): this file (`torii-continuum-strategy.md`) owns Continuum's vision, core principles, decision rules, and architecture direction. `torii-continuum-todo.md` owns the active task queue. `torii-continuum-progress.md` is the release log. `torii-continuum-handoff.md` and `README.md` are the developer entry points.
 
-Continuum is a **separate app** from Torii Quest. Quest is the game; Continuum is the sovereign dashboard, project engine, and personal AI layer. They share a Space Brain (Perplexity Space `Torii`) and a namespace (`torii-*`), but they are two repos, two versioning cadences, two live surfaces:
+Continuum is a **separate app** from Torii Quest. Quest is the game; Continuum is the sovereign dashboard, project engine, and personal AI layer. They share an operator brain (the `Torii` project workspace) and a namespace (`torii-*`), but they are two repos, two versioning cadences, two live surfaces:
 
 - Continuum production (sovereign self-hosted): `https://chiefmonkey.art` — **v0.2.63-alpha shipped live** via the one-time `ops/torii-final-cutover.sh` cutover (launcher HTTP 200; nginx + torii-base sidecar + continuum-agent active; unattended `torii-continuum-deploy.timer` enabled and active). This is the sovereign target the whole cutover series was building toward.
-- Continuum preview: `https://continuum-torii.pplx.app`
-- Quest live: `https://torii-quest.pplx.app`
+- Continuum live: on the operator's own VPS (e.g. `https://chiefmonkey.art/continuum`)
+- Quest live: on the operator's own VPS (e.g. `https://chiefmonkey.art`)
 
 ## What We Are Building
 
@@ -186,7 +186,7 @@ Adds a **sealed, local-first character stack** so the agent has a stable identit
 **Routstr QR top-up shipped v0.2.84-alpha** — the Routstr page funds the Cashu balance via a scannable Lightning-invoice QR (Cashu mint-quote or NWC-issued), with the paste-a-token flow kept as a fallback and an idempotent double-mint guard on the agent. Zero new deps (vendored MIT QR encoder).
 
 **Live today (mockup / read-only):**
-- Continuum Console page at `https://continuum-torii.pplx.app` — read-only dashboard mockup demonstrating the MVP loop (NAP zone status, gateway state, leaderboard preview, Plebeian product panel, GitHub update check).
+- Continuum Console page on the operator's VPS — read-only dashboard mockup demonstrating the MVP loop (NAP zone status, gateway state, leaderboard preview, Plebeian product panel, GitHub update check).
 - `mdPatch-2` pipeline shared with Quest — `torii-continuum-todo.md` in the whitelist, safe assistant-editable notes / appends / replaces.
 
 **Building next (CONT-AGENT-1):**

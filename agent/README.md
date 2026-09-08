@@ -77,7 +77,7 @@ Then edit `config.yaml`:
 - `auth.admin_npub` — **your own npub1…** (decoded to hex at boot; fail-fast if invalid)
 - `auth.session_secret` — 64 hex chars, generate with
   `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
-- `server.cors_origins` — add `https://continuum-torii.pplx.app` and any
+- `server.cors_origins` — add the origin(s) your Continuum Console is served from, plus any
   self-hosted origin you use
 - `cashu.mints` — the mints you trust. Anything not in this list is
   **rejected** by `POST /api/wallet/receive`.
@@ -164,7 +164,7 @@ served alongside the site):
 <script>window.__CONTINUUM_AGENT_URL__ = 'https://agent.yourdomain.tld';</script>
 ```
 
-The demo build at `continuum-torii.pplx.app` intentionally omits
+An agent-less static demo build intentionally omits
 `VITE_AGENT_URL` so it stays in offline/mock mode.
 
 ## 7. Top up the wallet

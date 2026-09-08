@@ -86,4 +86,4 @@ npm run preview   # serve dist/
 
 ## Related
 
-- [Torii Quest](https://torii-quest.pplx.app) — the open-world arena shooter and Continuum's first surface.
+- [Torii Quest](https://chiefmonkey.art) — the open-world arena shooter and Continuum's first surface, deployed alongside Continuum on the operator's VPS.

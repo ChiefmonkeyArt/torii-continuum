@@ -1,6 +1,6 @@
 /* Continuum — theme tokens
  *
- * Mirrors the palette + typography of continuum.pplx.app:
+ * Bronze/amber oversight palette + typography (Continuum design system):
  *   deep warm brown-black background, amber/orange primary (~38° 92%),
  *   cream foreground, subtle card borders. Typography uses a deliberate
  *   local system font stack (no third-party font CDNs): the native UI sans
@@ -69,7 +69,7 @@
   --glow-amber:  0 0 0 1px hsl(var(--primary) / .35), 0 8px 30px hsl(var(--primary) / .12);
 }
 
-/* Light variant — mirrors continuum.pplx.app light mode: warm paper background,
+/* Light variant — warm paper background,
  * deeper amber, dark warm-brown ink. */
 :root[data-theme='light'] {
   color-scheme: light;

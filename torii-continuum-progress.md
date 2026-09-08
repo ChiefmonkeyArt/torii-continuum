@@ -9,6 +9,36 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.107-alpha — remove third-party AI-agent hosting refs; keep Continuum sovereign (2026-09-08)
+
+**What shipped.** DOCS-PPLX-PURGE-1: audit and remove every reference to a third-party AI-agent hosting environment from Continuum source and docs. The operator's directive: Continuum runs sovereign on the operator's own VPS — nothing referenced to that third party in any doc, and no runtime dependency on it. 82 hits across 40 files fixed.
+
+**Source changes.** `.env.production.example`, `agent/config.example.yaml`, `agent/core/model-router.mjs`, `agent/scripts/seed-drafts.mjs`, `ops/nginx/continuum.conf.template`, `README.md`, `agent/README.md`, `ops/README.md`, `src/data/agent.js`, `src/styles/{chat,layout,pages,theme}.css`, `src/views/{dashboard,landing}.js`, `vite.config.js`. The stale `*.pplx.app` CORS allowlist in the agent is removed; example configs, docs, and dashboard/landing copy replace hosted-preview URLs with the sovereign VPS pattern (`https://chiefmonkey.art` for this repo's operator; generic "operator's own VPS" in reusable templates). GitHub remote references switched to `github.com/ChiefmonkeyArt/torii-continuum` (agent access via the `github` credential).
+
+**Doc changes.** `docs/handoff.md` and `torii-continuum-handoff.md` deploy chapters rewritten: the sequence is now PR to main → tag the merge → deploy that tag → verify `VPS == tag == main HEAD`. Hard-constraint #6 rewritten around generic strict-proxy cookie stripping (Continuum's own nginx or a downstream operator's) rather than a specific third-party proxy. Hard-constraint #7 rewritten around operator-controlled providers only (Routstr / Ollama), removing every reference to a hosted credential proxy. "Perplexity-style composer" UI-vocabulary refs in `src/styles/chat.css`, `torii-continuum-progress.md`, and `torii-continuum-todo.md` neutralised to "floating composer".
+
+**Preserved (intentionally).** `preview-assets/onboarding-v0.1.*` (frozen historical onboarding pages) left as-is — rewriting them would either be dishonest to the historical record or break their integrity. This is Option B from the pre-work review.
+
+**Tests.** Frontend `vitest run` **1813/1813** green (64 files). Agent `node --test` **464/464** green. `npm run build` clean (44 modules, `dist/assets/index-*.js` 191.77 kB / gzip 59.93 kB).
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json` files: 0.2.106-alpha → 0.2.107-alpha.
+
+**Update-All checklist.**
+
+- Code + tests: [done] source cleanup + full suite green.
+- Version markers: [done] `package.json`, `agent/package.json`, both `package-lock.json`.
+- `src/config.js VERSION`: [n/a] this repo has no such file (dashboard reads the version from `package.json` at build time).
+- `public/sw.js CACHE_VERSION`: [n/a] not present.
+- `tools/regression-check.mjs EXPECTED_VERSION`: [n/a] not present.
+- `MVP_APPROVAL_STATE.json` / `NEXT_ACTION_STATE.json`: [n/a] not present.
+- Continuity docs: [done] `torii-continuum-todo.md`, `torii-continuum-progress.md`, `torii-continuum-handoff.md`. `torii-continuum-strategy.md` skipped — no strategy change.
+- ADR: [skipped] no architecture change.
+- GitHub: PR to main + tag → handled below.
+
+**Not deployed at authoring time.** The parent hands the operator the deploy block; the enabled `torii-continuum-deploy.timer` and the live production pin are **not** altered here.
+
+---
+
 ## v0.2.106-alpha — Ollama fallback tune-up + qwen3:0.6b swap (2026-09-05)
 
 **What shipped.**
@@ -445,9 +475,9 @@ Two connected UX changes, plus the secure server-side update path they require.
 
 **Tests.** New agent suites: `semver`, `release-check` (incl. SSRF pinning, oversized-body, backoff, draft/off-channel skip), `updater` (authz matrix, 0600 spool, concurrency), `update-routes` (public version; admin/confirm/authz/concurrency). New ops suite `apply-update-request.test.sh` (49 tests: grammar mirror, atomic pin rewrite, fail-safe state machine, service/bootstrap wiring). New frontend suites: `release.test.js`, `auth.test.js`, `version-update-ui.test.js`. Frontend-only + agent/ops; **NOT deployed** (production timer/pin untouched).
 
-## v0.2.68-alpha — ui: floating Perplexity-style chat composer (UI-COMPOSER-1)
+## v0.2.68-alpha — ui: floating chat composer (UI-COMPOSER-1)
 
-The bottom chat bar becomes a **floating rounded composer** instead of an edge-to-edge docked row, echoing Perplexity's composer while keeping Continuum's amber/bronze treatment. `.chat-dock` is now `position: fixed`, centered near the bottom of the content column (bounded by the sidebar on the left, capped at `max-width: 820px` and `margin-inline: auto`), with a 16px radius, restrained layered `box-shadow`, a `backdrop-filter` blur, and a translucent `hsl(var(--sidebar)/.92)` background — visually separated from the content it hovers over. It no longer occupies a grid row (`#app` is a single `"sidebar main"` area).
+The bottom chat bar becomes a **floating rounded composer** instead of an edge-to-edge docked row, echoing a modern floating composer pattern while keeping Continuum's amber/bronze treatment. `.chat-dock` is now `position: fixed`, centered near the bottom of the content column (bounded by the sidebar on the left, capped at `max-width: 820px` and `margin-inline: auto`), with a 16px radius, restrained layered `box-shadow`, a `backdrop-filter` blur, and a translucent `hsl(var(--sidebar)/.92)` background — visually separated from the content it hovers over. It no longer occupies a grid row (`#app` is a single `"sidebar main"` area).
 
 **No content obscured.** Because the composer floats, the content scroller reserves matching bottom space: `chat.js` publishes the dock's live height (+ a 16px gap) as `--chat-reserve`, and `.main` pads its bottom by `calc(24px + var(--chat-reserve, 104px))`. The reserve is kept in lockstep with the dock via a `ResizeObserver` (guarded — absent in the jsdom-free test env) plus `resize`, auto-grow, expand/collapse and send hooks, so it stays correct as the conversation grows, the composer auto-grows, or the panel expands — with a static CSS fallback for first paint / no-JS so there is no layout jump.
 
@@ -1867,7 +1897,7 @@ Codified the four standing rules (separate repos, bump every change, PR to main,
 
 ## v0.2.6-alpha — CONT-INSTALLER-1 + CONT-AGENT-1b
 
-- Base-path awareness in `vite.config.js` (`base: "./"`) so Continuum works both standalone at `continuum-torii.pplx.app` and mounted at `/continuum` by torii-base.
+- Base-path awareness in `vite.config.js` (`base: "./"`) so Continuum works both standalone at the site root and mounted at `/continuum` by torii-base.
 - Ollama fallback ladder in `agent/core/model-router.mjs` — strategies `routstr-first` (default), `ollama-first`, `ollama-only`, `routstr-only`. `provider` field on every return.
 
 ## v0.2.5-alpha — panic key: make kind 30097 explicitly optional
@@ -1900,7 +1930,7 @@ See `torii-continuum-v0.2.0-cont-agent-1-report.md` for the full slice narration
 
 - Split planning: Continuum owns its own strategy and todo files (separate from Quest).
 - Amber/gold torii favicon on warm bronze tile.
-- Bronze/amber aesthetic to match continuum.pplx.app.
+- Bronze/amber oversight aesthetic (Continuum design system).
 - Continuum app builder MVP.
 
 ---

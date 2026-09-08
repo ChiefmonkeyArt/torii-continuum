@@ -130,7 +130,7 @@ async function main() {
     },
     {
       slug: 'publish-target-continuum-torii',
-      fact: 'The canonical live site is https://continuum-torii.pplx.app. Always publish there. Bump the version after every iteration.',
+      fact: 'Continuum is deployed to the operator\'s own VPS (no hosted default). Bump the patch version after every iteration and land through GitHub main.',
       why: 'Standing operator rule for this project.',
       source: 'operator utterance (multiple sessions)',
       confidence: 'high',

@@ -10,7 +10,7 @@
 #
 # The trailing slashes on both /continuum/api/ AND proxy_pass are load-bearing:
 # they strip the /continuum prefix so the agent still sees `/api/*` internally.
-# This lets the same agent code run at / on pplx.app and at /continuum on a VPS.
+# This lets the same agent code run at / for a standalone deploy and at /continuum when mounted by torii-base.
 #
 # @CONTINUUM_DIST@ MUST be a PUBLIC webroot (e.g. /var/www/torii/continuum) that
 # nginx (www-data) can traverse — NOT a path under a user home. Serving the SPA

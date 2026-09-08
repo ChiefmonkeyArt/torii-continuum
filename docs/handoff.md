@@ -1,7 +1,7 @@
 # Torii Continuum — Contributor / Agent Handoff
 
-> Single-page onboarding for the next contributor — human or AI agent (Perplexity,
-> DeepSeek, perplexica, routstr, or a FOSS human). It captures repo state, the
+> Single-page onboarding for the next contributor — human or any AI agent. It
+> captures repo state, the
 > hard constraints, where the source of truth lives, and how to build/test/ship.
 > It is a working template: keep it current as the codebase moves. It describes
 > the project as it is today; it does not promise API/behaviour compatibility
@@ -32,22 +32,22 @@ on one domain with shared identity/wallet.
   provider with failover) shipped in v0.2.105-alpha and LIVE-verified (3 reachable
   providers / 870 models, 2026-09-05). Suite installer resolves `origin/<ref>`
   (torii-suite v0.9.5-alpha) so redeploys always land on the latest tag.
-- **Live:** https://continuum-torii.pplx.app (see §7)
+- **Live:** the operator's own VPS (for this repo's operator, `https://chiefmonkey.art/continuum` — see §7). Continuum is sovereign, self-hosted-only; there is no hosted default.
 - **Repo:** https://github.com/ChiefmonkeyArt/torii-continuum
 - **License:** GPL-3.0
 
 ## 2. Hard constraints (do NOT break these)
 
 1. **Version bump on every deploy.** Every source change that ships bumps the
-   version in ALL markers in §3. Publish to `continuum-torii.pplx.app` after
-   each iteration — the user's standing rule.
+   version in ALL markers in §3. Ship each iteration as a PR to main, tag the
+   merged commit, and deploy to the operator's VPS from that tag — the user's
+   standing "UPDATE ALL THE THINGS" rule.
 2. **Dark is canonical.** The dark theme is the default; a light theme is
    optional. Do not ship a build where light is default.
 3. **Base-path awareness stays intact.** `vite.config.js` MUST keep
-   `base: './'` so the SPA works both at `/` (standalone at
-   `continuum-torii.pplx.app`) and at `/continuum/` (mounted by torii-base).
-   Agent URLs come from `VITE_AGENT_URL` — never hardcode `http://localhost:...`
-   into the shipped bundle.
+   `base: './'` so the SPA works both at `/` (standalone at the site root) and
+   at `/continuum/` (mounted by torii-base). Agent URLs come from `VITE_AGENT_URL`
+   — never hardcode `http://localhost:...` into the shipped bundle.
 4. **Model router provider field is authoritative.** Every model-router return
    MUST carry `provider ∈ {routstr, ollama, both}` alongside `ok`, `content`,
    `model`, `tokens_in`, `tokens_out`, `sats_spent`, `duration_ms`. Consumers
@@ -57,16 +57,17 @@ on one domain with shared identity/wallet.
    `routstr_first`; `ollama_first`, `ollama_only`, `routstr_only` are opt-in via
    `config.yaml`. Never flip the default without a version bump + doc change —
    users are paying real sats via Routstr and expect that path first.
-6. **Session cookies must use the `__Host-` prefix.** The pplx.app proxy strips
-   any request cookie whose name does not start with `__Host-`. Default
-   framework names (`connect.sid`, `sessionid`) silently stop working after
-   publish. If session state is ever added, configure the name explicitly, e.g.
-   `express-session({ name: '__Host-sid', cookie: { secure: true, path: '/' } })`.
-7. **Published sandbox has NO LLM API access and NO connector bridge.** The
-   `api_credentials=['llm-api:website']` preset and `call_external_tool` are
-   development-only. Any real LLM traffic in the shipped agent must go through
-   the operator's OWN Routstr / Ollama endpoints — never through the pplx.app
-   credential proxy.
+6. **Session cookies must use the `__Host-` prefix.** Any strict CDN or
+   reverse-proxy in front of the site (Continuum's own VPS nginx or a
+   downstream operator's) may strip request cookies whose names don't start with
+   `__Host-`. Default framework names (`connect.sid`, `sessionid`) can silently
+   stop working after deploy. If session state is ever added, configure the name
+   explicitly, e.g. `express-session({ name: '__Host-sid', cookie: { secure: true, path: '/' } })`.
+7. **Shipped agent uses ONLY operator-controlled providers.** All real LLM
+   traffic in production goes through the operator's OWN Routstr / Ollama
+   endpoints (Cashu-paid per request or local Ollama). There is no hosted
+   credential proxy — the sovereign architecture requires the operator hold
+   their own keys and their own float.
 8. **Privacy first: pseudonym only.** Author/committer name is
    **`ChiefmonkeyArt`** (`chiefmonkey@hodlr.rocks`). Never commit under a real
    name. `git -c user.name="ChiefmonkeyArt" -c user.email="chiefmonkey@hodlr.rocks"
@@ -184,39 +185,35 @@ before publishing — the mounted case is the failure mode most likely to regres
 
 ## 7. Deploy / publish
 
-The user's standing rule: **"Publish to `continuum-torii.pplx.app` and bump the
-version after every iteration."**
+The user's standing "UPDATE ALL THE THINGS" rule: **land each change as a PR
+to main, tag the merged commit with the new version, and deploy to the
+operator's VPS from that tag. End state after every deploy is
+`VPS running == git tag == main HEAD`.**
 
-Preview + publish sequence (main agent only — subagents cannot call
-`publish_website`):
+Deploy sequence:
 
-```
-pplx-tool deploy_website
-  project_path=/home/user/workspace/torii-continuum/dist
-  site_name="Torii Continuum"
-  entry_point="index.html"
+1. Bump the version in ALL §3 markers on the working branch.
+2. `npm run build` clean, `dist/` regenerated. Agent tests green.
+3. Open PR to main (never push to main directly). Land the review.
+4. Tag the merged commit with the new version.
+5. Deploy to the operator's VPS from that tag (the operator triggers the
+   `torii-continuum-deploy` unit or the equivalent one-shot workflow).
+6. Verify: `curl -sI https://<operator-domain>/continuum` returns 200, and
+   `/api/health/models` reports the new version.
 
-pplx-tool publish_website
-  site_id="00acfee3-6cd6-477f-8d0f-36f84a6f6963"
-  project_path=/home/user/workspace/torii-continuum
-  dist_path=/home/user/workspace/torii-continuum/dist
-```
+- **URL:** the operator's own VPS (for this repo's operator, `https://chiefmonkey.art/continuum`).
+- **Visibility:** the operator's choice; the code makes no assumption.
 
-- **Site ID (published):** `00acfee3-6cd6-477f-8d0f-36f84a6f6963`
-- **Asset ID:** `92361a20-e20f-4647-b44b-9fbab826b52c`
-- **URL:** https://continuum-torii.pplx.app
-- **Visibility:** public
-
-**Pre-publish checklist:**
+**Pre-deploy checklist:**
 1. Version bumped in ALL §3 markers.
 2. `npm run build` clean, `dist/` regenerated.
 3. Agent tests green.
 4. Security review subagent (`security_subagent_prompt.md`) run — no BLOCK
-   findings. Note: the pplx.app published sandbox has no LLM API / connector
-   bridge, so any AI features must be routed through the operator's OWN
-   provider endpoints (not the pplx credential proxy).
-5. Commit + push to `main` with the `ChiefmonkeyArt` author.
-6. `deploy_website` → `publish_website` (with the `site_id` above for updates).
+   findings. All AI features must be routed through the operator's OWN Routstr
+   / Ollama endpoints; there is no hosted credential proxy.
+5. Commit + push to a branch with the `ChiefmonkeyArt` author, open a PR to
+   main, land it, tag the merge commit.
+6. Deploy the new tag to the operator's VPS.
 
 **Self-hosting the whole stack** (Continuum + Plebeian + Quest under one
 domain): use the `ops/ansible/` playbook or the torii-base installer
@@ -256,8 +253,8 @@ CONSTRAINTS: (default = all of §2; note any the task explicitly relaxes)
 SCOPE:       files expected to change; split by concern
 DONE WHEN:   build + agent tests green; /api/health/models OK; docs (§4) updated;
              version markers (§3) bumped
-DEPLOY:      Publish to continuum-torii.pplx.app after landing green
-             (user's standing rule — every iteration)
+DEPLOY:      PR to main, tag the merge, deploy the tag to the operator's VPS
+             (user's standing "UPDATE ALL THE THINGS" rule — every iteration)
 ```
 
 Keep changes incremental and reversible. Test the base-path build at BOTH `/`
@@ -268,7 +265,7 @@ and `/continuum/` before publishing.
 Torii Continuum is one leaf of the Torii ecosystem:
 
 - **Torii Quest** — browser arena shooter (Three.js + Rapier). See
-  `HANDOFF.md`. Live: https://torii-quest.pplx.app
+  `HANDOFF.md`. Live on the operator's VPS (for this repo's operator, `https://chiefmonkey.art`).
 - **Torii Continuum** — sovereign agent + operator console. *This document.*
 - **torii-base** — host layer that mounts Continuum + Plebeian + Quest on
   one domain via nginx. See `TORII_BASE_HANDOFF.md`.
