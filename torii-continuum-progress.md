@@ -35,7 +35,7 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - ADR: [skipped] no architecture change.
 - GitHub: PR to main + tag → handled below.
 
-**Not deployed at authoring time.** The parent hands the operator the deploy block; the enabled `torii-continuum-deploy.timer` and the live production pin are **not** altered here.
+**Deployed 2026-09-08** via the suite installer (`install-continuum.sh`, `TORII_CONTINUUM_REF=v0.2.107-alpha`): VPS now runs 0.2.107-alpha end-to-end (agent `current: 0.2.107-alpha`, frontend serving `index-BD2wGCS1.js` from `/apps/continuum/current`), matching tag `v0.2.107-alpha` → `8683ec1` → main. `OLLAMA_MODELS` was unset, so the installer pulled `qwen3:0.6b` (the current default). **Lesson recorded** (see handoff deploy-trap note): the frontend is served from the `current` release symlink, not the checkout, so a manual in-checkout build yields a mixed-version state; the installer is the correct deploy path.
 
 ---
 
