@@ -230,6 +230,13 @@ export function loadConfig(path) {
   // GitHub issues under strict allowlists (see core/project-sources.mjs). All
   // bounds have safe defaults; an operator only needs local_root / allow_github
   // / sources to turn it on.
+  // openai_adapter (HERMES-OWNER-1) — loopback-only OpenAI-compatible /v1
+  // surface over the model-router, so a vanilla Nous Hermes install can point
+  // at the agent as `provider: custom`. Fail-closed: disabled unless
+  // `local_token` is set explicitly. See docs/hermes-two-voice.md.
+  cfg.openai_adapter ??= {};
+  cfg.openai_adapter.local_token ??= '';
+
   cfg.project_sources ??= {};
   cfg.project_sources.enabled ??= false;
   cfg.project_sources.local_root ??= null;

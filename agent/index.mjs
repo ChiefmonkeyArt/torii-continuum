@@ -27,6 +27,7 @@ import { createWallet } from './core/wallet.mjs';
 import { createRoutstr } from './core/routstr.mjs';
 import { createOllama } from './core/ollama.mjs';
 import { createModelRouter } from './core/model-router.mjs';
+import { registerOpenAIAdapter } from './core/openai-adapter.mjs';
 import { createChatSkill } from './skills/chat.mjs';
 import { createMemoryCache, validateCiphertext, ciphertextFilename, fingerprintCiphertext } from './lib/crypto.mjs';
 import { scrub } from './lib/scrub.mjs';
@@ -186,6 +187,13 @@ const reflector = createReflector({ agentRoot: AGENT_ROOT, cache: memoryCache, l
 await memory.loadCharacter();
 
 const chatSkill = createChatSkill(router, app.log, { memory, reflector });
+
+// HERMES-OWNER-1 — OpenAI-compatible /v1 surface over the model-router so a
+// vanilla Nous Hermes install (hermes-owner, provider: custom) can reuse the
+// healthy Routstr-first → Ollama-fallback chain. Loopback + bearer token only;
+// disabled unless cfg.openai_adapter.local_token is set (fail-closed). See
+// docs/hermes-two-voice.md.
+registerOpenAIAdapter({ app, cfg, router, log: app.log });
 
 // Genesis stack (GENESIS-1) — sovereign bot birth certificate bound to the
 // verified Nostr owner, under the humanitarian starter constitution. The audit

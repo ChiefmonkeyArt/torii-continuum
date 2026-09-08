@@ -1,24 +1,36 @@
 # Torii Continuum — hermes-owner profile (HERMES-OWNER-1)
 #
 # Committed, secret-free template. `ops/install-hermes-owner.sh` renders the
-# real config at ~/.hermes/profiles/owner/config.yaml from this same shape,
-# filling the placeholders from ROUTSTR_BASE_URL / ROUTSTR_MODEL. Never put a
-# key in this file.
+# real config from this same shape, filling the placeholders from
+# CONTINUUM_ROUTER_URL and rendering CONTINUUM_ROUTER_MODEL as `default`.
+# The Continuum-router bearer token is written to the profile .env (0600) by
+# the installer, never here.
 #
-# Primary inference = Routstr (custom OpenAI-compatible endpoint).
-# When the primary fails (429/5xx after retries, 401/403/404 immediately, or
-# repeated malformed responses), Hermes's native `fallback_providers` chain
-# swaps to the shared local Ollama below — so the owner brain keeps answering
-# (chat + tools) while Routstr is down. See:
+# Primary inference = the Continuum agent's OpenAI-compatible /v1 surface. That
+# surface delegates to the model-router (Routstr-first, healthy today), so the
+# owner brain reuses the same paid path the console already trusts. See
+# docs/hermes-two-voice.md for the isolation boundary + why Hermes points at
+# the router instead of Routstr directly.
+#
+# When the router path fails (any structured provider error, 5xx, or the
+# adapter itself is 503/401), Hermes's native `fallback_providers` chain swaps
+# to local Ollama below — so the owner brain keeps answering (chat + tools)
+# while the paid path is down. Docs:
 #   https://hermes-agent.nousresearch.com/docs/user-guide/features/fallback-providers
+#
+# NOTE: `fallback_providers` (plural, list) is the current canonical shape.
+# The legacy singular `fallback_model` still works for back-compat but is not
+# used here.
 
 model:
   provider: custom
-  default: "REPLACE_WITH_ROUTSTR_MODEL"
-  base_url: "https://REPLACE_WITH_ROUTSTR_NODE/v1"
-  # api_key_env: "ROUTSTR_API_KEY"   # key written to the profile .env (0600) by the installer
+  default: "chat"
+  # The Continuum agent binds to 127.0.0.1:8787 by default; the router adapter
+  # lives at /v1. Change ONLY if you rebound the agent's server.host/port.
+  base_url: "http://127.0.0.1:8787/v1"
+  api_key_env: "CONTINUUM_ROUTER_TOKEN"
 
 fallback_providers:
   - provider: custom
     model: "qwen3:4b"
-    base_url: "http://localhost:11434/v1"
+    base_url: "http://127.0.0.1:11434/v1"
