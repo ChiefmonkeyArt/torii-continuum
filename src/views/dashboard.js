@@ -312,6 +312,6 @@ export function renderDashboard(mount, opts = {}) {
   mount.appendChild(h('div', { class: 'card' }, [
     h('h3', { text: 'Torii Quest (sibling app)' }),
     h('p', { class: 'muted', text: 'Torii Quest is a separate repo and app — the arena shooter. Its own build-time oversight dashboard lives on its own site.' }),
-    h('a', { href: 'https://torii-quest.pplx.app', target: '_blank', rel: 'noopener noreferrer' }, ['Open torii-quest.pplx.app ↗']),
+    h('a', { href: 'https://chiefmonkey.art', target: '_blank', rel: 'noopener noreferrer' }, ['Open Torii Quest ↗']),
   ]));
 }

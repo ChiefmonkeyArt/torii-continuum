@@ -8,7 +8,7 @@
  *   • session token injection from localStorage
  *   • graceful degradation when the agent is unreachable
  *
- * When AGENT_URL is empty (default for the pplx.app demo build), every
+ * When AGENT_URL is empty (default for an agent-less static demo build), every
  * `agent.*` call short-circuits with { ok:false, reason:'offline' } so the
  * mockup UX keeps working without the daemon behind it.
  */

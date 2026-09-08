@@ -58,7 +58,7 @@ New Fastify service that owns the sovereignty invariants for a single admin npub
 
 ## What's still theatre
 
-- **Demo build on `continuum-torii.pplx.app`** intentionally has no `VITE_AGENT_URL`, so login says "requires self-hosted agent" and chat returns mock replies. This is by design — a live agent per user does not belong in an anonymous demo build.
+- **Agent-less static demo build** intentionally has no `VITE_AGENT_URL`, so login says "requires self-hosted agent" and chat returns mock replies. This is by design — a live agent per user does not belong in an anonymous demo build.
 - **Routstr chat** currently over-allocates `max_sats_per_request` per call and does not track refunds. Fine for a small float; needs refinement before the float grows.
 - **`nostr_draft` skill** is toggled off in the config; the skills registry only has `chat.mjs` today.
 

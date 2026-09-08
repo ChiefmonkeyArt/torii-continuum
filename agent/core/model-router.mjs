@@ -21,7 +21,7 @@
  *      they're offline.
  *
  *   "routstr_only"
- *      Original behavior. Never call Ollama. Kept so pplx.app builds that
+ *      Original behavior. Never call Ollama. Kept so agent-less static builds that
  *      omit the Ollama module still work with the same code path.
  *
  * The router preserves the { ok, content, model, sats_spent, duration_ms }

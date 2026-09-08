@@ -1,6 +1,6 @@
 /* Continuum — floating AI composer (bronze/amber palette, UI-COMPOSER-1).
    A rounded box that hovers near the bottom of the content column rather than
-   docking edge-to-edge, echoing Perplexity's floating composer while keeping
+   docking edge-to-edge, echoing a modern floating composer pattern while keeping
    Continuum's amber/bronze treatment. It is position:fixed so it no longer
    occupies a grid row; chat.js reserves matching bottom space in the content
    scroller via --chat-reserve so nothing is obscured. */

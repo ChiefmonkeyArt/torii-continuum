@@ -336,7 +336,7 @@ export function renderAbout(mount) {
       'Continuum is open source · ',
       h('a', { href: 'https://github.com/ChiefmonkeyArt/torii-continuum', target: '_blank', rel: 'noopener' }, ['github/ChiefmonkeyArt/torii-continuum']),
       ' · ',
-      h('a', { href: 'https://torii-quest.pplx.app', target: '_blank', rel: 'noopener' }, ['Torii Quest (the game)']),
+      h('a', { href: 'https://chiefmonkey.art', target: '_blank', rel: 'noopener' }, ['Torii Quest (the game)']),
     ]),
     h('div', { style: 'margin-top: 6px;' }, [
       'Built for one operator, right now. Multi-tenant is not a promise.',

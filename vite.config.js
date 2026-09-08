@@ -10,7 +10,7 @@ export default defineConfig({
   root: '.',
   publicDir: 'public',
   // Relative base so assets resolve regardless of where the site is mounted
-  // (pplx.app proxy prefix, subdirectory hosting, or root).
+  // (VPS root, subdirectory hosting under torii-base, or a bundled static demo).
   base: './',
   // Bake the package version into the bundle so the landing page (and any
   // other UI that surfaces the app version) never drifts from the shipped

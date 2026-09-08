@@ -61,7 +61,8 @@ server:
 
   # CORS allowlist. Continuum Console lives here in prod.
   cors_origins:
-    - "https://continuum-torii.pplx.app"
+    # Add the origin(s) your Continuum Console is served from, e.g.:
+    # - "https://continuum.your-torii-domain.example"
     - "http://localhost:5180"       # `npm run dev`
     - "http://127.0.0.1:5180"
 
