@@ -470,6 +470,35 @@ rate_limit:
   # for a human clicking through onboarding.
   onboarding_per_min: 12
 
+# ─────────────────────────────────────────────────────────────
+# OpenAI-compatible /v1 adapter (HERMES-OWNER-1)
+# ─────────────────────────────────────────────────────────────
+#
+# Exposes /v1/models + /v1/chat/completions on the SAME loopback socket as the
+# rest of the agent, so a vanilla Nous Research Hermes install
+# (`hermes-owner`, `model.provider: custom`, `base_url: http://127.0.0.1:8787/v1`)
+# can reuse the model-router's Routstr-first → Ollama-fallback chain.
+#
+# Fail-closed: this surface is DISABLED unless `local_token` is set to a non-
+# empty string. The token is a LOCAL bearer (separate from the console's
+# NIP-07 admin session) that any process holding it can use to spend the
+# Cashu float. Store it in `hermes-owner`'s profile .env (0600), never in
+# this file if you can help it — this .yaml lives at chmod 600 already, but
+# the .env has a tighter blast radius.
+#
+# Generate:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+#
+# Boundary:
+#   • loopback-only (server.host stays 127.0.0.1)
+#   • bearer required on every /v1/* call
+#   • never grants /api/* admin routes
+#   • no persona applied — Hermes brings its own `owner` profile
+#
+openai_adapter:
+  local_token: ""
+
+
 # ── project_sources (v0.2.47-alpha, CONT-KANBAN-SYNC) ───────────────────────
 #
 # READ-ONLY import of task-like records into each project's Kanban board from:

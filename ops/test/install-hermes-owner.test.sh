@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 #
-# Hermetic tests for the hermes-owner installer (HERMES-OWNER-1, v0.2.104-alpha).
+# Hermetic tests for the hermes-owner installer (HERMES-OWNER-1, v0.2.108-alpha).
 #
 # Covers only the pure, side-effect-free surface of ops/install-hermes-owner.sh
 # via its CLI flags (no root, no users/systemd/curl are touched here):
-#   1. --render-config with ROUTSTR_* set emits Routstr as primary and the
-#      local Ollama qwen3:4b fallback.
-#   2. --render-config without ROUTSTR_* emits local Ollama primary + fallback
-#      and never leaks a Routstr URL.
-#   3. --help exits 0 and prints an Environment: section.
-#   4. --dry-run exits 0, prints DRY RUN, and does NOT create /home/hermes-owner.
-#   5. Unknown flag exits non-zero.
-#   6. OLLAMA_MODEL default is qwen3:4b, and is honoured when overridden.
+#
+#   1. --render-config emits the Continuum router as primary
+#      (http://127.0.0.1:8787/v1 by default, `default: chat`,
+#      api_key_env: CONTINUUM_ROUTER_TOKEN) with local qwen3:4b as fallback.
+#   2. CONTINUUM_ROUTER_URL / CONTINUUM_ROUTER_MODEL overrides are honoured.
+#   3. The rendered config never leaks the router bearer token itself.
+#   4. --help exits 0 and prints an Environment: section.
+#   5. --dry-run exits 0, prints DRY RUN, prints both the profile config AND
+#      the main-config fallback plan, and does NOT create /home/hermes-owner.
+#   6. Unknown flag exits non-zero.
+#   7. OLLAMA_MODEL default is qwen3:4b, and is honoured when overridden.
 #
 # Run:  bash ops/test/install-hermes-owner.test.sh   (from repo root)
 
@@ -27,59 +30,73 @@ bad() { printf '  FAIL %s\n' "$1" >&2; fail=$((fail+1)); }
 
 contains() { [[ "$1" == *"$2"* ]]; }
 
-# --- 1. Routstr-first rendering -------------------------------------------
-out="$(ROUTSTR_BASE_URL="https://node.example/v1" ROUTSTR_MODEL="some-model" \
-       bash "${INSTALLER}" --render-config)"
+# --- 1. Default rendering (Continuum router primary) ---------------------
+out="$(bash "${INSTALLER}" --render-config)"
 
-contains "${out}" 'default: "some-model"' \
-  && ok "Routstr-first: primary model set"           || bad "Routstr-first: primary model missing"
-contains "${out}" 'base_url: "https://node.example/v1"' \
-  && ok "Routstr-first: primary base_url set"        || bad "Routstr-first: primary base_url missing"
+contains "${out}" 'default: "chat"' \
+  && ok "default: primary model is 'chat'"                       || bad "default: primary model wrong"
+contains "${out}" 'base_url: "http://127.0.0.1:8787/v1"' \
+  && ok "default: primary base_url is loopback:8787/v1"          || bad "default: primary base_url wrong"
+contains "${out}" 'api_key_env: "CONTINUUM_ROUTER_TOKEN"' \
+  && ok "default: api_key_env references CONTINUUM_ROUTER_TOKEN" || bad "default: api_key_env missing"
 contains "${out}" 'model: "qwen3:4b"' \
-  && ok "Routstr-first: Ollama fallback model set (default)" || bad "Routstr-first: fallback model missing"
-contains "${out}" 'base_url: "http://localhost:11434/v1"' \
-  && ok "Routstr-first: Ollama fallback base_url set" || bad "Routstr-first: fallback base_url missing"
+  && ok "default: Ollama fallback model set (qwen3:4b)"          || bad "default: fallback model missing"
+contains "${out}" 'base_url: "http://127.0.0.1:11434/v1"' \
+  && ok "default: Ollama fallback base_url is loopback:11434/v1" || bad "default: fallback base_url wrong"
 contains "${out}" 'fallback_providers:' \
-  && ok "Routstr-first: fallback_providers block present" || bad "Routstr-first: fallback_providers missing"
+  && ok "default: fallback_providers block present"              || bad "default: fallback_providers missing"
 
-# --- 2. Local-first rendering (no Routstr) --------------------------------
-out_local="$(env -u ROUTSTR_BASE_URL -u ROUTSTR_MODEL bash "${INSTALLER}" --render-config)"
+# --- 2. CONTINUUM_ROUTER_URL + CONTINUUM_ROUTER_MODEL overrides -----------
+out_override="$(CONTINUUM_ROUTER_URL="http://127.0.0.1:9000/v1" \
+                CONTINUUM_ROUTER_MODEL="chat-local" \
+                bash "${INSTALLER}" --render-config)"
 
-contains "${out_local}" 'default: "qwen3:4b"' \
-  && ok "Local-first: default model is qwen3:4b"     || bad "Local-first: default model wrong"
-if contains "${out_local}" 'https://node.example'; then
-  bad "Local-first: leaked Routstr URL"
+contains "${out_override}" 'default: "chat-local"' \
+  && ok "override: CONTINUUM_ROUTER_MODEL honoured"              || bad "override: CONTINUUM_ROUTER_MODEL ignored"
+contains "${out_override}" 'base_url: "http://127.0.0.1:9000/v1"' \
+  && ok "override: CONTINUUM_ROUTER_URL honoured"                || bad "override: CONTINUUM_ROUTER_URL ignored"
+
+# --- 3. Bearer never leaked into the rendered config ----------------------
+sensitive_token="s3cret-router-token-do-not-leak"
+out_with_token="$(CONTINUUM_ROUTER_TOKEN="${sensitive_token}" \
+                  bash "${INSTALLER}" --render-config)"
+if contains "${out_with_token}" "${sensitive_token}"; then
+  bad "bearer leaked into rendered config.yaml"
 else
-  ok "Local-first: no Routstr URL leaked"
+  ok "bearer never leaked into rendered config.yaml"
 fi
 
-# --- 3. --help ------------------------------------------------------------
+# --- 4. --help ------------------------------------------------------------
 help_out="$(bash "${INSTALLER}" --help 2>&1)"
 contains "${help_out}" 'Environment:' \
-  && ok "--help: prints Environment section"         || bad "--help: missing Environment section"
+  && ok "--help: prints Environment section"                     || bad "--help: missing Environment section"
+contains "${help_out}" 'CONTINUUM_ROUTER_TOKEN' \
+  && ok "--help: documents CONTINUUM_ROUTER_TOKEN"                || bad "--help: missing CONTINUUM_ROUTER_TOKEN doc"
 
-# --- 4. --dry-run (no side effects) ----------------------------------------
+# --- 5. --dry-run (no side effects) ---------------------------------------
 rm -rf /home/hermes-owner
 dry="$(OLLAMA_MODEL="qwen3:4b" bash "${INSTALLER}" --dry-run 2>&1)"
 contains "${dry}" 'DRY RUN' \
-  && ok "--dry-run: prints DRY RUN"                  || bad "--dry-run: no DRY RUN banner"
+  && ok "--dry-run: prints DRY RUN"                              || bad "--dry-run: no DRY RUN banner"
+contains "${dry}" '.hermes/config.yaml' \
+  && ok "--dry-run: mentions main-config fallback plan"          || bad "--dry-run: missing main-config plan"
 if [[ -e /home/hermes-owner ]]; then
   bad "--dry-run: created /home/hermes-owner"
 else
   ok "--dry-run: did not create /home/hermes-owner"
 fi
 
-# --- 5. unknown flag --------------------------------------------------------
+# --- 6. unknown flag --------------------------------------------------------
 if bash "${INSTALLER}" --nope >/dev/null 2>&1; then
   bad "unknown flag: exited 0"
 else
   ok "unknown flag: exited non-zero"
 fi
 
-# --- 6. OLLAMA_MODEL override ----------------------------------------------
-out_override="$(OLLAMA_MODEL="qwen3:8b" bash "${INSTALLER}" --render-config)"
-contains "${out_override}" 'model: "qwen3:8b"' \
-  && ok "OLLAMA_MODEL override honoured"             || bad "OLLAMA_MODEL override ignored"
+# --- 7. OLLAMA_MODEL override ----------------------------------------------
+out_ollama="$(OLLAMA_MODEL="qwen3:8b" bash "${INSTALLER}" --render-config)"
+contains "${out_ollama}" 'model: "qwen3:8b"' \
+  && ok "OLLAMA_MODEL override honoured"                         || bad "OLLAMA_MODEL override ignored"
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

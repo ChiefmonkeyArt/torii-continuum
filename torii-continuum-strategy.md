@@ -97,6 +97,15 @@ Unattended upgrades on the sovereign VPS now default to a **CI-built, checksum-v
 
 CONT-AGENT-1 is the current active slice. Later slices are named and reserved to keep scope honest.
 
+### Two-voice Hermes architecture (HERMES-OWNER-1 wired v0.2.108-alpha; HERMES-NPC-1 reserved)
+
+Continuum splits its agentic surface into **two isolated Hermes voices**:
+
+- **`hermes-owner`** — private project engine, full tool access, Continuum-router primary with local `qwen3:4b` fallback. Runs as an unprivileged Unix user (`hermes-owner`, HOME `0700`, `umask 077`, profile `.env` `0600`).
+- **`hermes-npc`** — public in-world NPC greeter for Kami mode / Torii Quest, chat + sats only, no tools, local-only inference. Reserved for HERMES-NPC-1; must be structurally unable to reach owner secrets.
+
+Unix users are the primary trust boundary; Docker is optional hardening only, never the identity boundary. The Fastify router in `agent/index.mjs` is not either voice — it is the shared inference spine both voices sit behind, via the OpenAI-compatible `/v1` surface (`agent/core/openai-adapter.mjs`): loopback-only, fail-closed local bearer, no persona, delegates to `model-router.chat()` unchanged. See `docs/hermes-two-voice.md` for the full ADR and boundary rules.
+
 ### CONT-AGENT-1 — v1 skeleton (active)
 
 Turn Continuum from a read-only mockup dashboard into a sovereign personal AI + project engine.

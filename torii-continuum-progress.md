@@ -1950,3 +1950,36 @@ deploy to your gateway host under `/var/www/torii/continuum/onboarding-preview/`
 
 Design review only - not built into the production app. Real
 integration lands in v0.9.0-alpha.
+
+---
+
+## v0.2.108-alpha — HERMES-OWNER-1 wired to Continuum router
+
+**HERMES-OWNER-1 — wire `hermes-owner` primary to the Continuum agent's OpenAI-compatible /v1 surface, keep `qwen3:4b` as the local fallback.** Code + tests + docs shipped; VPS install is the operator's step (Continuum has no unattended-deploy secrets, by design).
+
+**Problem.** The healthy Fastify Routstr/Ollama router in the Continuum agent is not either Hermes voice — it is the shared inference spine both voices need to sit behind. A vanilla Nous Research Hermes install expects an OpenAI-compatible endpoint via `model.provider: custom`; the agent consumed `/v1` from Routstr and Ollama but never exposed one, so an owner brain could not reuse the console's paid path. The installer we already had (v0.2.104-alpha) provisioned users + Ollama + the Hermes CLI but had to fall back to local-only inference or point Hermes directly at Routstr, bypassing the router's Routstr-first→Ollama-fallback contract.
+
+**Fix.** New `agent/core/openai-adapter.mjs` registers `GET /v1/models` + `POST /v1/chat/completions` (non-streaming and SSE-streaming) on the agent. The adapter delegates to the existing `model-router.chat()` unchanged, so the paid path and its structured error codes (`insufficient_funds` → HTTP 402; other structured failures → 502) carry through untouched. It is fail-closed: `openai_adapter.local_token` must be set to a non-empty string in `agent/config.yaml` or the surface returns 503. Auth is a length-safe bearer compare on a local token (separate from the console's NIP-07 admin session — the console's `/api/*` admin routes remain untouched). The adapter never applies the "you are Continuum" persona; Hermes brings its own `owner` profile. Continuum-specific provenance (`provider`, `sats_spent`, `duration_ms`, `fell_back_from`) is exposed under an `x_continuum` namespaced field so OpenAI clients that ignore it stay compatible and clients that use it can surface fallback + spend to the operator.
+
+`ops/install-hermes-owner.sh` rewired: primary is now `http://127.0.0.1:8787/v1` with `default: chat` and `api_key_env: CONTINUUM_ROUTER_TOKEN`. The bearer lives in the profile `.env` (0600), never in the repo. Fallback `qwen3:4b` is written into both the profile config AND (idempotently) the MAIN `~/.hermes/config.yaml` — because as of current Nous Hermes, profile-scoped `fallback_providers` is silently ignored by the CLI worker; the main-config path is the one Hermes actually reads. Operator edits to the main config are preserved (the block is only appended when no `fallback_providers:` line exists). `ops/hermes-owner/config.yaml.example` and `ops/hermes-owner/rebuild-manifest.md` updated to match.
+
+**Boundary decisions** (recorded in `docs/hermes-two-voice.md`, new ADR):
+- Unix users are the primary trust boundary; Docker is optional hardening only.
+- Loopback + bearer only for `/v1/*`; no public exposure of the surface.
+- No credential custody — the bearer is a capability, not a user secret; never logged.
+- Model catalog is deliberately small (`chat`, `chat-local`); unknown ids → 404.
+
+**Tests.** +19 new (`agent/test/openai-adapter.test.js`): fail-closed 503, missing/wrong bearer 401 (never touches router), `/v1/models` catalog shape, non-stream delegation, SSE stream framing (content chunk → stop → `[DONE]`), `insufficient_funds`→402, generic failure→502, router-throw→502 with `router_exception` code, malformed 400 (never touches router), unknown model 404 (never touches router), length-safe token compare. Full agent suite: 483/483 (was 464/464). Frontend `vitest`: 1813/1813 (unchanged, no frontend surface). `npm run build` clean.
+
+**Update-All checklist.**
+- Code: `agent/core/openai-adapter.mjs` (new), `agent/index.mjs` (register), `agent/core/config.mjs` (new `openai_adapter.local_token` default), `agent/config.example.yaml` (documented block), `ops/install-hermes-owner.sh` (rewired primary + main-config fallback), `ops/hermes-owner/config.yaml.example`, `ops/hermes-owner/rebuild-manifest.md`. [done]
+- Docs: `docs/hermes-two-voice.md` new ADR. Strategy + todo + progress + handoff touched only where actually affected. [done — progress + todo + strategy this commit; handoff skipped, no operator-facing deploy path change]
+- Version markers: `package.json`, `agent/package.json`, both lockfiles (0.2.107→0.2.108). Frontend version stamp reads `__APP_VERSION__` from package.json — no separate marker to bump. [done]
+- Tests: `agent/test/openai-adapter.test.js` new; full agent + frontend suites re-run green. [done]
+- GitHub: PR to main, tag the merge, then the operator runs the rewired installer against their VPS with `CONTINUUM_ROUTER_TOKEN` from `openai_adapter.local_token`. [pending on the merge/tag/operator step]
+
+**Operator install (after merge + tag).** Set `openai_adapter.local_token` in the live agent config to a 32-byte hex secret; restart the agent; run:
+```
+sudo env CONTINUUM_ROUTER_TOKEN="<that same secret>" ./ops/install-hermes-owner.sh
+```
+Verify: `curl -H "Authorization: Bearer $CONTINUUM_ROUTER_TOKEN" http://127.0.0.1:8787/v1/models` returns `chat, chat-local`; a Hermes chat as `hermes-owner` answers via the router; stopping the agent forces the main-config fallback and the brain still answers on `qwen3:4b`.
