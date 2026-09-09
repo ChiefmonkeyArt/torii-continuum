@@ -116,22 +116,26 @@ jobs:
         env:
           SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
         run: |
-          set -euo pipefail
+          # No `set -e` in this block — transient 502s during agent restart
+          # must not abort the retry loop before it retries.
+          set -uo pipefail
           host_only="${SSH_HOST#*@}"
           # /api/health returns bare semver (no 'v' prefix); tag carries the v.
           expected="${tag#v}"
-          # Retry briefly — nginx reload + agent restart can take a moment.
-          for attempt in 1 2 3 4 5 6; do
-            live=$(curl -fsS --max-time 10 "https://${host_only}/api/health" \
-                   | python3 -c 'import json,sys;print(json.load(sys.stdin).get("version",""))')
+          live=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            body=$(curl -sS --max-time 10 "https://${host_only}/api/health" 2>/dev/null || true)
+            live=$(printf '%s' "$body" | python3 -c 'import json,sys
+try: print(json.loads(sys.stdin.read()).get("version",""))
+except Exception: print("")' 2>/dev/null || true)
             if [[ "$live" == "$expected" ]]; then
               echo "✓ live version $live matches deployed tag $tag"
               exit 0
             fi
-            echo "attempt $attempt: live=$live expected=$expected — retrying..."
+            echo "attempt $attempt: live='$live' expected='$expected' — retrying in 5s..."
             sleep 5
           done
-          echo "::error::live version '$live' does not match deployed tag '$tag'"
+          echo "::error::live version '$live' does not match deployed tag '$tag' after 10 attempts"
           exit 1
 
       - name: Clean up SSH key
