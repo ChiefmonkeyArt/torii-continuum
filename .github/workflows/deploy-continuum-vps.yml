@@ -124,15 +124,14 @@ jobs:
           expected="${tag#v}"
           live=""
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            body=$(curl -sS --max-time 10 "https://${host_only}/api/health" 2>/dev/null || true)
-            live=$(printf '%s' "$body" | python3 -c 'import json,sys
-try: print(json.loads(sys.stdin.read()).get("version",""))
-except Exception: print("")' 2>/dev/null || true)
+            # Extract .version from health JSON with jq. Empty on any error so
+            # the retry loop keeps going through transient 502s during restart.
+            live=$(curl -sS --max-time 10 "https://${host_only}/api/health" 2>/dev/null | jq -r '.version // empty' 2>/dev/null || true)
             if [[ "$live" == "$expected" ]]; then
-              echo "✓ live version $live matches deployed tag $tag"
+              echo "live version $live matches deployed tag $tag"
               exit 0
             fi
-            echo "attempt $attempt: live='$live' expected='$expected' — retrying in 5s..."
+            echo "attempt $attempt: live=[$live] expected=[$expected] - retrying in 5s..."
             sleep 5
           done
           echo "::error::live version '$live' does not match deployed tag '$tag' after 10 attempts"
