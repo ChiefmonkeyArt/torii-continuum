@@ -1,12 +1,12 @@
 /**
- * NAP-BRIDGE-1 — npc-bridge unit tests (NIP-17 kind-1059 + NIP-44).
+ * NAP-BRIDGE-3 — npc-bridge unit tests (NIP-17 kind-1059 + NIP-44).
  *
  * Covers the pure helpers (allowlist / prompt / rumor / seal / wrap / parse /
- * gift-wrap) and the end-to-end handleEvent() loop with a stubbed bunker
- * signer, a stubbed inference, and a stubbed pool — no live relay, no real
- * greeter nsec, no network. Inbound gift wraps are built with a real sender
- * key so the seal's signature verifies; the bunker decrypt is stubbed to return
- * the known plaintexts.
+ * gift-wrap) and the end-to-end handleEvent() loop with a stubbed signer,
+ * a stubbed inference, and a stubbed pool — no live relay, no real greeter
+ * nsec, no network. Inbound gift wraps are built with a real sender key so the
+ * seal's signature verifies; the signer decrypt is stubbed to return the known
+ * plaintexts.
  *
  * Run:  node --test test/npc-bridge.test.js   (from agent/)
  */
@@ -293,7 +293,7 @@ test('a throwing signer does not crash handleEvent', async () => {
     log: silentLog,
     pool: { subscribeMany: () => ({ close() {} }), publish: async () => 'ok' },
     signer: {
-      nip44Decrypt: async () => { throw new Error('bunker down'); },
+      nip44Decrypt: async () => { throw new Error('signer down'); },
       nip44Encrypt: async () => 'C',
       signEvent: async (tpl) => ({ ...tpl, id: 'i'.repeat(64), sig: 's'.repeat(128) }),
     },

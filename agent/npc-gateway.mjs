@@ -1,18 +1,18 @@
 /**
- * NAP-BRIDGE-1 — nap-bridge gateway entrypoint (isolated from the Continuum agent).
+ * NAP-BRIDGE-3 — nap-bridge gateway entrypoint (isolated from the Continuum agent).
  *
  * A standalone, long-running process that drives the hermes-npc greeter over
- * Nostr. It is a NIP-46 *client*: it holds NO nsec. The greeter nsec lives in a
- * bunker; every decrypt / encrypt / sign is a bunker RPC.
+ * Nostr. It signs as the greeter with a LOCAL per-install ephemeral nsec — no
+ * NIP-46 bunker, no nostrconnect:// approval, no client key. Every decrypt /
+ * encrypt / sign is done in-process with the throwaway key from NPC_NSEC.
  *
  * Config comes from the environment (a 0600 EnvironmentFile, installed by
  * ops/install-nap-bridge.sh) so this process never opens the Continuum agent's
  * config.yaml and cannot read the owner's Routstr key / Cashu float / admin npub.
  *
  *   NPC_ENABLED=1                 (off by default)
- *   NPC_CLIENT_SECRET=<hex>       NIP-46 client secret key (NOT the greeter nsec)
- *   NPC_BUNKER_PUBKEY=<hex>       the bunker's pubkey
- *   NPC_RELAYS="wss://a,wss://b"  relay URLs (DM + NIP-46 channel)
+ *   NPC_NSEC=<64-hex>            greeter nsec (minted at install; disposable)
+ *   NPC_RELAYS="wss://a,wss://b"  relay URLs (DM delivery)
  *   NPC_ALLOWLIST="npub1…,hex…"   allowed sender npubs (fail-closed)
  *   NPC_OLLAMA_URL=http://127.0.0.1:11434/v1
  *   NPC_MODEL=qwen3:4b
@@ -21,7 +21,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { SimplePool } from 'nostr-tools/pool';
-import { BunkerSigner } from 'nostr-tools/nip46';
+import { createLocalSigner } from './core/npc-signer.mjs';
 import { normalizeAllowlist, createNpcBridge } from './core/npc-bridge.mjs';
 
 function splitList(v) {
@@ -41,20 +41,15 @@ if (!enabled) {
   process.exit(0);
 }
 
-const clientSecret = process.env.NPC_CLIENT_SECRET || '';
-const bunkerPubkey = (process.env.NPC_BUNKER_PUBKEY || '').toLowerCase();
+const nsecHex = (process.env.NPC_NSEC || '').trim().toLowerCase();
 const relays = splitList(process.env.NPC_RELAYS);
 const allowlist = normalizeAllowlist(splitList(process.env.NPC_ALLOWLIST));
 const ollamaUrl = (process.env.NPC_OLLAMA_URL || 'http://127.0.0.1:11434/v1').replace(/\/$/, '');
 const model = process.env.NPC_MODEL || 'qwen3:4b';
 const soulFile = process.env.NPC_SOUL_FILE || '/home/hermes-npc/.hermes/profiles/npc/SOUL.md';
 
-if (!/^[0-9a-f]{64}$/i.test(clientSecret)) {
-  log.error('[npc-gateway] NPC_CLIENT_SECRET missing or not 64-hex. Refusing to start.');
-  process.exit(1);
-}
-if (!/^[0-9a-f]{64}$/i.test(bunkerPubkey)) {
-  log.error('[npc-gateway] NPC_BUNKER_PUBKEY missing or not 64-hex. Refusing to start.');
+if (!/^[0-9a-f]{64}$/i.test(nsecHex)) {
+  log.error('[npc-gateway] NPC_NSEC missing or not 64-hex. Refusing to start.');
   process.exit(1);
 }
 if (relays.length === 0) {
@@ -90,13 +85,10 @@ async function chat({ messages }) {
   }
 }
 
-// NIP-46 client — connects to the bunker; greeter nsec never leaves it.
-// nostr-tools' BunkerSigner expects the client secret as bytes internally, so
-// we decode the 64-hex env value before handing it over.
-const signer = BunkerSigner.fromBunker(Buffer.from(clientSecret, 'hex'), { pubkey: bunkerPubkey, relays });
-await signer.connect();
+// Local signer — the greeter nsec signs/encrypts/decrypts entirely in-process.
+const signer = createLocalSigner(nsecHex);
 const greeterHex = (await signer.getPublicKey()).toLowerCase();
-log.info(`[npc-gateway] greeter pubkey ${greeterHex.slice(0, 8)}… (via NIP-46 bunker)`);
+log.info(`[npc-gateway] greeter pubkey ${greeterHex.slice(0, 8)}… (local ephemeral nsec)`);
 
 const pool = new SimplePool();
 const bridge = createNpcBridge({

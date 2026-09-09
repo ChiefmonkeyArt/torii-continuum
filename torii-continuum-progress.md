@@ -2095,3 +2095,55 @@ signer). `agent/test/npc-connect.test.js` perms assertion updated.
 `./ops/install-nap-bridge.sh --generate` and re-approve the `nostrconnect://`
 URI in the bunker to grant the NIP-44 perms, then verify a wrap from an
 allowlisted npub yields a reply and a non-allowlisted one is ignored.
+---
+## v0.2.112-alpha — NAP-BRIDGE-3 drop the NIP-46 bunker (local per-install ephemeral nsec)
+
+**Goal.** Remove the NIP-46 bunker from the nap-bridge signer path. NAP-BRIDGE-1/2
+held the greeter nsec off-VPS in a bunker with a one-time `nostrconnect://`
+approval — correct for a signer the operator already runs, but too much ceremony
+for the average operator installing Torii on a VPS. The gateway now signs with a
+**local per-install ephemeral nsec**, minted at install.
+
+**Custody (re-decided).** The greeter nsec lives on the VPS as a single `0600`
+`.env` entry, minted by `ops/install-nap-bridge.sh` (or reused from `NPC_NSEC`).
+It is a **throwaway identity** — no funds, no delegation, unlinkable to the
+owner; worst case on leak is impersonation-as-greeter. Persistent-but-disposable
+(no self-rotation); owner override is a one-line `NPC_NSEC` edit or `rm` the
+`.env`. No bunker, no URI, no approval step.
+
+**Delivered.**
+- `agent/core/npc-signer.mjs` (new) — `createLocalSigner(nsecHex)` matching the
+  bridge's `{getPublicKey, nip44Encrypt, nip44Decrypt, signEvent}` contract,
+  NIP-44 via local conversation keys.
+- `agent/scripts/npc-nsec.mjs` (new) — mint/reuse helper; replaces
+  `npc-connect.mjs` (deleted).
+- `agent/npc-gateway.mjs` — `BunkerSigner` → `LocalSigner`; `NPC_NSEC` replaces
+  `NPC_CLIENT_SECRET` + `NPC_BUNKER_PUBKEY`.
+- `agent/core/npc-bridge.mjs` — bunker doc comments → local signer.
+- `ops/install-nap-bridge.sh` — drops bunker vars; `--generate` now mints
+  nsec/npub; auto-mints on first install.
+- `ops/systemd/torii-nap-bridge.service`, `ops/nap-bridge/{.env.example,
+  rebuild-manifest.md}`, `ops/README.md` updated.
+- ADR `docs/nap-bridge-1.md` (custody re-decided) + `docs/hermes-two-voice.md`.
+
+**Tests.** Agent suite 504→**510**: +5 `npc-signer.test.js`, +5 `npc-nsec.test.js`,
+−4 deleted `npc-connect.test.js`; `npc-bridge.test.js` header updated (11 cases
+unchanged, stubbed signer). Installer test rewritten to **28 assertions**
+(`ops/test/install-nap-bridge.test.sh`: `NPC_NSEC=__NSEC__` placeholder, no
+bunker remnant, `--generate` emits npub+nsec_hex+nsec_bech32 with no
+`nostrconnect://`). `bash -n` + `shellcheck -S error` clean.
+
+**Update-All checklist.**
+- Code + tests. [done]
+- ADR `nap-bridge-1.md` + `hermes-two-voice.md`. [done]
+- Continuity docs: strategy (sovereignty carve-out) + todo + progress +
+  `ops/README.md` + `ops/nap-bridge/{.env.example,rebuild-manifest.md}`. [done;
+  handoff skipped — no operator-facing deploy-path change]
+- Version markers: `package.json` + `agent/package.json` + both lockfiles
+  0.2.111→0.2.112. [this slice]
+- GitHub: PR to main → tag `v0.2.112-alpha`. [this slice]
+
+**Operator step (after merge + tag).** Run
+`sudo NPC_RELAYS="…" NPC_ALLOWLIST="npub1…" ./ops/install-nap-bridge.sh` on the
+VPS — no bunker approval needed — then verify a DM from an allowlisted npub gets
+a signed reply and a non-allowlisted one is ignored.

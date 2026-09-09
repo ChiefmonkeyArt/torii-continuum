@@ -1,13 +1,14 @@
 /**
- * NAP-BRIDGE-1 — the isolated Nostr gateway for the hermes-npc greeter.
+ * NAP-BRIDGE-3 — the isolated Nostr gateway for the hermes-npc greeter.
  *
  * Wire format: NIP-17 gift-wrapped DMs (kind 1059) + NIP-44 encryption.
  *   rumor (kind 14) ──▶ seal (kind 13) ──▶ gift wrap (kind 1059)
  *
- * The greeter's nsec lives in a NIP-46 bunker; this process holds no nsec. The
- * bunker does the inner NIP-44 encrypt/decrypt (rumor ↔ seal) and signs the
- * seal. The OUTER gift wrap uses a fresh ephemeral key generated locally — that
- * is what hides the greeter from relay observers (the wrap's pubkey is random).
+ * The greeter signs with a LOCAL per-install ephemeral nsec (see
+ * core/npc-signer.mjs): no NIP-46 bunker. The signer does the inner NIP-44
+ * encrypt/decrypt (rumor ↔ seal) and signs the seal. The OUTER gift wrap uses a
+ * fresh ephemeral key generated locally — that is what hides the greeter from
+ * relay observers (the wrap's pubkey is random).
  *
  * Trust boundary (see docs/nap-bridge-1.md): it never reads the Continuum
  * agent, the owner's Routstr key, the Cashu float, or owner memory. Fail-closed:
@@ -18,7 +19,7 @@
  *
  * The pure helpers are exported for unit tests; the loop is a factory with
  * injected deps (pool, signer, chat, giftWrap) so tests never touch a live
- * relay/bunker.
+ * relay.
  */
 
 import {
@@ -114,9 +115,9 @@ export function buildRumor({ greeterHex, senderHex, plaintext, createdAt }) {
 
 /**
  * Build the seal (kind 13) template: the rumor NIP-44-encrypted to the sender.
- * `ciphertext` is already produced by the bunker (`signer.nip44Encrypt`).
+ * `ciphertext` is already produced by the signer (`signer.nip44Encrypt`).
  * @param {{ciphertext:string, greeterHex:string, createdAt:number}} p
- * @returns {object} unsigned seal template (kind 13), pubkey filled by the bunker
+ * @returns {object} unsigned seal template (kind 13), pubkey filled by the signer
  */
 export function buildSealTemplate({ ciphertext, greeterHex, createdAt }) {
   return {
@@ -189,10 +190,10 @@ export function giftWrapSeal(seal, senderHex, createdAt = Math.floor(Date.now() 
 /**
  * @param {object} deps
  * @param {object} deps.cfg      { relayUrls:string[], allowlist:Set<string>, soul:string, model:string }
- * @param {string} deps.greeterHex  greeter pubkey (hex) — learned from the bunker at connect
+ * @param {string} deps.greeterHex  greeter pubkey (hex) — derived from the local nsec
  * @param {object} deps.log      { info, warn, error } (or console-shaped)
  * @param {object} deps.pool     nostr-tools SimplePool (or compatible stub)
- * @param {object} deps.signer   BunkerSigner-like: { nip44Encrypt, nip44Decrypt, nip44Encrypt/Decrypt, signEvent }
+ * @param {object} deps.signer   signer-like: { nip44Encrypt, nip44Decrypt, signEvent, getPublicKey }
  * @param {function} deps.chat   async ({messages}) => {ok:true, content}|{ok:false, code, reason}
  * @param {function} [deps.giftWrap] async (seal, senderHex) => wrap; default giftWrapSeal
  * @returns {{ start:function():Promise<void>, stop:function():void, handleEvent:function(object):Promise<void> }}
@@ -217,7 +218,7 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
         return;
       }
 
-      // 2. Unwrap the seal via the bunker (greeter nsec never leaves it).
+      // 2. Unwrap the seal with the local signer.
       const sealStr = await signer.nip44Decrypt(event.pubkey, event.content);
       const parsed0 = safeParse(sealStr);
       if (!parsed0) {
@@ -226,7 +227,7 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
       }
       const seal = parsed0;
 
-      // 3. Unwrap the rumor via the bunker.
+      // 3. Unwrap the rumor with the local signer.
       const rumorStr = await signer.nip44Decrypt(seal.pubkey, seal.content);
       const parsed1 = safeParse(rumorStr);
       if (!parsed1) {
@@ -266,7 +267,7 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
         return;
       }
 
-      // 7. Rumor → seal (bunker encrypt + sign) → gift wrap (local ephemeral).
+      // 7. Rumor → seal (local encrypt + sign) → gift wrap (local ephemeral).
       const rumorOut = buildRumor({ greeterHex, senderHex, plaintext: reply.content, createdAt: now() });
       const sealCipher = await signer.nip44Encrypt(senderHex, JSON.stringify(rumorOut));
       const sealTpl = buildSealTemplate({ ciphertext: sealCipher, greeterHex, createdAt: now() });
