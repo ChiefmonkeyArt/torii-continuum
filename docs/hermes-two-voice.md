@@ -1,6 +1,6 @@
 # Hermes two-voice architecture (HERMES-OWNER-1 + HERMES-NPC-1)
 
-Status: **decided** (owner wiring confirmed; NPC is a later slice).
+Status: **decided** (owner wired v0.2.108-alpha; NPC wired v0.2.109-alpha).
 
 ## Intent
 
@@ -65,7 +65,27 @@ normal route, so the 4b model is resilience, not the interactive path.
 The installer must write fallback into the path Hermes actually reads (profile
 vs main config) — verified against the installed Hermes build, not assumed.
 
+## `hermes-npc` — the isolated public greeter (HERMES-NPC-1)
+
+The second voice is provisioned by `ops/install-hermes-npc.sh` as its own
+`hermes-npc` user + an `npc` profile. It differs from the owner brain in three
+load-bearing ways:
+
+- **Local Ollama only.** `model.provider: custom` → `127.0.0.1:11434/v1`, no
+  `api_key_env`, no `fallback_providers`, and no reference to the router's
+  `127.0.0.1:8787/v1` surface. The greeter therefore has *no paid path* and
+  cannot spend the owner's Cashu float.
+- **No secrets on disk.** Local Ollama needs no API key, so the npc profile has
+  no `.env` and no bearer — there is nothing to exfiltrate.
+- **Greeter persona via `SOUL.md`.** The profile writes a warm, concise greeter
+  identity whose hard limits are explicit: no tools, local-only, never read or
+  infer secrets/owner data, loopback-only, honest about what it cannot do.
+
+The shared Ollama backend is the one deliberately-shared surface (stateless
+inference). Memory, keys, tools, and project access remain fully separate.
+
 ## Non-goals (later slices)
 
-`hermes-npc` build (HERMES-NPC-1); Nostr/NIP-07 gateway + npub allowlist
-(NAP-BRIDGE-1); encrypted-at-rest MEMORY-1 bridge; any public network exposure.
+Nostr/NIP-07 gateway + npub allowlist
+(NAP-BRIDGE-1); sats receipt; encrypted-at-rest MEMORY-1 bridge; any public
+network exposure.

@@ -1983,3 +1983,32 @@ integration lands in v0.9.0-alpha.
 sudo env CONTINUUM_ROUTER_TOKEN="<that same secret>" ./ops/install-hermes-owner.sh
 ```
 Verify: `curl -H "Authorization: Bearer $CONTINUUM_ROUTER_TOKEN" http://127.0.0.1:8787/v1/models` returns `chat, chat-local`; a Hermes chat as `hermes-owner` answers via the router; stopping the agent forces the main-config fallback and the brain still answers on `qwen3:4b`.
+
+## v0.2.109-alpha — HERMES-NPC-1 isolated public greeter voice
+
+**Goal.** Complete the second half of the two-voice architecture: a public greeter (`hermes-npc`) that is structurally unable to reach owner secrets and cannot spend the owner's Cashu float. This is the "public in-world NPC greeter for Kami mode / Torii Quest" role from `docs/hermes-two-voice.md`, which was reserved but unbuilt after HERMES-OWNER-1.
+
+**Isolation shape.** A separate unprivileged `hermes-npc` user (HOME `0700`, `umask 077`, no sudo) + its own `npc` profile. The greeter's inference is **local Ollama only** (`127.0.0.1:11434/v1`): `provider: custom`, `default: qwen3:4b`, no `api_key_env`, no `fallback_providers`, and no reference to the router's `127.0.0.1:8787/v1` surface — so there is no paid path and nothing to fall through to. Because local Ollama needs no API key, the npc voice has **zero secrets on disk** (no `.env`, no bearer). A greeter `SOUL.md` sets the identity and hard limits: no tools, local-only, never read/infer secrets or owner data, loopback-only, honest about limits. The shared Ollama backend is the single deliberately-shared surface (stateless inference only).
+
+**Delivered.**
+- `ops/install-hermes-npc.sh` (new) — idempotent; `--dry-run` / `--render-config` / `--render-soul` / `--help`; reuses the shared Ollama backend; provisions `hermes-npc` + Hermes `npc` profile; writes profile `config.yaml` + `SOUL.md`; records a secret-free rebuild manifest.
+- `ops/hermes-npc/config.yaml.example`, `ops/hermes-npc/SOUL.md.example`, `ops/hermes-npc/rebuild-manifest.md` (new) — committed, secret-free templates + acceptance docs.
+- `ops/test/install-hermes-npc.test.sh` (new) — +18 hermetic assertions.
+- ADR `docs/hermes-two-voice.md` gained the `hermes-npc` section; strategy/todo/progress/`ops/README.md` updated.
+
+**Tests.** +18 (`ops/test/install-hermes-npc.test.sh`): local-Ollama-only config, no router/`api_key_env`/`fallback_providers`/`CONTINUUM_ROUTER` leak, model+base-url overrides, greeter SOUL identity + all four hard limits, `--help`, `--dry-run` (no `/home/hermes-npc` side effect), whole-surface isolation. `bash -n` + `shellcheck -S error` clean; owner installer test still 16/16 (no regression). No agent/frontend code changed, so agent + frontend suites are unchanged.
+
+**Update-All checklist.**
+- Ops: installer + templates + manifest + test. [done]
+- ADR `docs/hermes-two-voice.md`. [done]
+- Continuity docs: strategy + todo + progress (`ops/README.md` NPC section). [done; handoff skipped — no operator-facing deploy path change]
+- Version markers: `package.json` + `agent/package.json` + both lockfiles 0.2.108→0.2.109 (version-alignment gate requires root==agent==tag). [done]
+- GitHub: PR to main → tag `v0.2.109-alpha`. [this slice]
+
+**Operator install (after merge + tag).**
+```
+sudo ./ops/install-hermes-npc.sh
+sudo -u hermes-npc hermes -p npc           # answers via local Ollama
+sudo -u hermes-npc cat /home/hermes-owner/.hermes/...   # must fail (isolation)
+```
+The Nostr/sats gateway that would let players actually reach the greeter is NAP-BRIDGE-1 (later slice); until then `hermes-npc` is loopback-only like the owner brain.
