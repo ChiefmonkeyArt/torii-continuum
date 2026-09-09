@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
 #
-# Hermetic tests for the nap-bridge installer (NAP-BRIDGE-1, v0.2.110-alpha).
+# Hermetic tests for the nap-bridge installer (NAP-BRIDGE-3, v0.2.112-alpha).
 #
 # Covers only the pure, side-effect-free surface of ops/install-nap-bridge.sh
 # via its CLI flags (no root, no users/systemd/dbus are touched here):
 #
-#   1. --render-env emits the gateway environment with a CLIENT-SECRET
-#      placeholder (NOT a greeter nsec), the public npub allowlist, local
-#      Ollama, and the greeter SOUL path — and NEVER a router reference,
-#      api_key_env, ROUTSTR, cashu, or 127.0.0.1:8787.
+#   1. --render-env emits the gateway environment with an NPC_NSEC placeholder
+#      (the per-install greeter nsec — NOT a bunker client secret), the public
+#      npub allowlist, local Ollama, and the greeter SOUL path — and NEVER a
+#      router reference, api_key_env, ROUTSTR, cashu, 127.0.0.1:8787, or any
+#      bunker remnant (NPC_CLIENT_SECRET / NPC_BUNKER_PUBKEY).
 #   2. NPC_MODEL / NPC_OLLAMA_URL / NPC_SOUL_FILE overrides are honoured.
 #   3. --render-unit runs as hermes-npc, read-only filesystem (ProtectSystem=
-#      strict, ProtectHome=read-only), outbound AF_INET only, and no NPC_NSEC.
-#   4. --generate prints a nostrconnect:// URI and a 64-hex client secret.
-#   5. Missing NPC_BUNKER_PUBKEY/NPC_RELAYS/NPC_ALLOWLIST -> non-zero + FATAL.
+#      strict, ProtectHome=read-only), outbound AF_INET/6 + unix only, and
+#      carries NO inline nsec (the nsec lives in the 0600 EnvironmentFile).
+#   4. --generate prints npub + 64-hex nsec + nsec1 bech32 (no nostrconnect://).
+#   5. Missing NPC_RELAYS/NPC_ALLOWLIST -> non-zero + FATAL.
 #   6. --help exits 0 and documents the required Environment: vars.
 #   7. Unknown flag exits non-zero.
-#   8. Belt-and-suspenders: the rendered surface never leaks the greeter nsec
-#      or any owner/paid-path reference.
+#   8. Belt-and-suspenders: the rendered surface never leaks a router/paid-path
+#      reference or a bunker remnant.
 #
 # Run:  bash ops/test/install-nap-bridge.test.sh   (from repo root)
 
@@ -37,8 +39,7 @@ contains() { [[ "$1" == *"$2"* ]]; }
 
 # Prefix the public (non-secret) required inputs onto any installer invocation.
 run_installer() {
-  env NPC_BUNKER_PUBKEY="npub1bunker" \
-      NPC_RELAYS="wss://relay.damus.io,wss://relay.nostr.band" \
+  env NPC_RELAYS="wss://relay.damus.io,wss://relay.nostr.band" \
       NPC_ALLOWLIST="npub1alice,abc123" \
       "$@"
 }
@@ -48,10 +49,8 @@ out="$(run_installer bash "${INSTALLER}" --render-env)"
 
 contains "${out}" 'NPC_ENABLED=1' \
   && ok "env: NPC_ENABLED=1"                                      || bad "env: NPC_ENABLED missing"
-contains "${out}" 'NPC_CLIENT_SECRET=__CLIENT_SECRET__' \
-  && ok "env: client secret is a placeholder, not a real nsec"    || bad "env: client secret wrong"
-contains "${out}" 'NPC_BUNKER_PUBKEY=npub1bunker' \
-  && ok "env: bunker pubkey present"                              || bad "env: bunker pubkey missing"
+contains "${out}" 'NPC_NSEC=__NSEC__' \
+  && ok "env: nsec is a placeholder, not a real nsec"             || bad "env: nsec placeholder wrong"
 contains "${out}" 'NPC_ALLOWLIST=npub1alice,abc123' \
   && ok "env: allowlist present"                                  || bad "env: allowlist missing"
 contains "${out}" 'NPC_OLLAMA_URL=http://127.0.0.1:11434/v1' \
@@ -59,10 +58,12 @@ contains "${out}" 'NPC_OLLAMA_URL=http://127.0.0.1:11434/v1' \
 contains "${out}" 'NPC_MODEL=qwen3:4b' \
   && ok "env: model qwen3:4b"                                     || bad "env: model wrong"
 
-if contains "${out}" 'NPC_NSEC' || contains "${out}" '127.0.0.1:8787' || contains "${out}" 'api_key_env' || contains "${out}" 'ROUTSTR' || contains "${out}" 'cashu'; then
-  bad "env: leaked a nsec/router/paid-path reference"
+if contains "${out}" 'NPC_CLIENT_SECRET' || contains "${out}" 'NPC_BUNKER_PUBKEY' \
+   || contains "${out}" 'nostrconnect://' || contains "${out}" '127.0.0.1:8787' \
+   || contains "${out}" 'api_key_env' || contains "${out}" 'ROUTSTR' || contains "${out}" 'cashu'; then
+  bad "env: leaked a bunker/router/paid-path reference"
 else
-  ok "env: no nsec, no router, no api_key_env, no paid path"
+  ok "env: no bunker remnant, no router, no api_key_env, no paid path"
 fi
 
 # --- 2. Overrides ----------------------------------------------------------
@@ -96,30 +97,33 @@ contains "${unit}" 'NoNewPrivileges=true' \
 contains "${unit}" 'RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX' \
   && ok "unit: outbound AF_INET/6 + unix only (no listener)"      || bad "unit: address families wrong"
 
-if contains "${unit}" 'ReadWritePaths=' || contains "${unit}" 'NPC_NSEC'; then
-  bad "unit: leaked a writable path or NPC_NSEC reference"
+if contains "${unit}" 'ReadWritePaths=' || contains "${unit}" 'NPC_NSEC='; then
+  bad "unit: leaked a writable path or an inline nsec"
 else
-  ok "unit: stateless (no ReadWritePaths) and no NPC_NSEC"
+  ok "unit: stateless (no ReadWritePaths) and no inline nsec (nsec is in the env file)"
 fi
 
-# --- 4. --generate (pure key/URI mint; no network, no root) ---------------
-# The key/URI mint runs via `node scripts/npc-connect.mjs`, which needs the
-# agent package's node_modules (nostr-tools). In CI the ops job does not
-# install those, so this block degrades to skips there; the same contract is
-# pinned with deps present in agent/test/npc-connect.test.js (agent job).
+# --- 4. --generate (pure nsec mint; no network, no root) -------------------
+# The nsec mint runs via `node scripts/npc-nsec.mjs`, which needs the agent
+# package's node_modules (nostr-tools). In CI the ops job does not install
+# those, so this block degrades to skips there; the same contract is pinned
+# with deps present in agent/test/npc-nsec.test.js (agent job).
 if command -v node >/dev/null 2>&1 && [ -d "$AGENT_DIR/node_modules/nostr-tools" ]; then
-  gen="$(AGENT_DIR="$AGENT_DIR" NPC_RELAYS="wss://relay.damus.io" bash "${INSTALLER}" --generate)"
+  gen="$(AGENT_DIR="$AGENT_DIR" bash "${INSTALLER}" --generate)"
 
-  contains "${gen}" 'nostrconnect://' \
-    && ok "generate: emits a nostrconnect:// URI"                   || bad "generate: no connect URI"
-  if contains "${gen}" 'client_secret='; then
-    sec="$(printf '%s' "$gen" | sed -n 's/^client_secret=\([0-9a-fA-F]\{64\}\)$/\1/p')"
-    [ -n "$sec" ] && ok "generate: 64-hex client secret"            || bad "generate: client secret not 64-hex"
+  contains "${gen}" 'npub=' \
+    && ok "generate: emits the greeter npub"                      || bad "generate: no npub"
+  contains "${gen}" 'nsec_hex=' \
+    && ok "generate: emits the 64-hex nsec"                       || bad "generate: no nsec_hex"
+  contains "${gen}" 'nsec_bech32=nsec1' \
+    && ok "generate: emits the nsec1 bech32"                      || bad "generate: no nsec_bech32"
+  if contains "${gen}" 'nostrconnect://'; then
+    bad "generate: leaked a nostrconnect:// URI (bunker is gone)"
   else
-    bad "generate: no client_secret line"
+    ok "generate: no nostrconnect:// URI"
   fi
 else
-  sk "generate: node + agent node_modules unavailable (covered by agent/test/npc-connect.test.js)"
+  sk "generate: node + agent node_modules unavailable (covered by agent/test/npc-nsec.test.js)"
 fi
 
 # --- 5. Missing required inputs fail-closed --------------------------------
@@ -129,16 +133,19 @@ rc=$?
 contains "${err}" 'FATAL' \
   && ok "missing inputs: FATAL message"                           || bad "missing inputs: no FATAL message"
 
-# --- 6. --help -------------------------------------------------------------
+# --- 6. --help ---------------------------------------------------------------
 help_out="$(bash "${INSTALLER}" --help)"
-contains "${help_out}" 'NPC_BUNKER_PUBKEY' \
-  && ok "help: documents NPC_BUNKER_PUBKEY"                       || bad "help: missing NPC_BUNKER_PUBKEY"
 contains "${help_out}" 'NPC_RELAYS' \
   && ok "help: documents NPC_RELAYS"                              || bad "help: missing NPC_RELAYS"
 contains "${help_out}" 'NPC_ALLOWLIST' \
   && ok "help: documents NPC_ALLOWLIST"                           || bad "help: missing NPC_ALLOWLIST"
+if contains "${help_out}" 'NPC_BUNKER_PUBKEY'; then
+  bad "help: still documents NPC_BUNKER_PUBKEY (bunker is gone)"
+else
+  ok "help: no bunker var"
+fi
 
-# --- 7. Unknown flag -------------------------------------------------------
+# --- 7. Unknown flag ---------------------------------------------------------
 bash "${INSTALLER}" --bogus >/dev/null 2>&1
 [ $? -ne 0 ] && ok "unknown flag exits non-zero"                  || bad "unknown flag did not fail"
 

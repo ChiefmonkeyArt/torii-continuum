@@ -749,27 +749,27 @@ sudo -u hermes-npc hermes -p npc              # chat via local Ollama
 Templates and acceptance docs live in `ops/hermes-npc/` (`config.yaml.example`,
 `SOUL.md.example`, `rebuild-manifest.md`).
 
-## Nostr DM gateway install (NAP-BRIDGE-1, `install-nap-bridge.sh`)
+## Nostr DM gateway install (NAP-BRIDGE-3, `install-nap-bridge.sh`)
 
 `ops/install-nap-bridge.sh` wires the greeter's public transport: the isolated
-`nap-bridge` gateway that receives a player's signed kind-4 DM, checks the npub
-**allowlist** (fail-closed), asks the greeter for a reply, and signs it as the
-greeter via a **NIP-46 bunker** — so no nsec ever lives on the VPS.
+`nap-bridge` gateway that receives a player's NIP-17 gift-wrapped DM, checks the
+npub **allowlist** (fail-closed), asks the greeter for a reply, and signs it as
+the greeter with a **local per-install ephemeral nsec** — no NIP-46 bunker, no
+approval step.
 
 ```bash
-sudo NPC_BUNKER_PUBKEY=<bunker npub> NPC_RELAYS="wss://…" NPC_ALLOWLIST="npub1…" \
-     ./ops/install-nap-bridge.sh               # provision (idempotent) + print URI
-sudo ./ops/install-nap-bridge.sh --generate    # mint client key + nostrconnect:// URI
+sudo NPC_RELAYS="wss://…" NPC_ALLOWLIST="npub1…" \
+     ./ops/install-nap-bridge.sh               # provision (idempotent), mints nsec
+sudo ./ops/install-nap-bridge.sh --generate    # mint (or reuse) + print nsec/npub
 ./ops/install-nap-bridge.sh --render-env       # print the 0600 .env template
 ./ops/install-nap-bridge.sh --render-unit      # print the systemd unit
 sudo ./ops/install-nap-bridge.sh --dry-run     # plan, no changes
 ```
 
-Approve the printed `nostrconnect://` URI **once** in the bunker; after that the
-gateway reconnects autonomously. The only secret on disk is the gateway's NIP-46
-*client* key (a burnable delegation, not the greeter nsec). Templates and
-decisions live in `ops/nap-bridge/` (`.env.example`, `rebuild-manifest.md`) and
-`docs/nap-bridge-1.md`.
+The nsec is minted on first install and reused on reinstall (identity-stable).
+It is disposable: no funds, no delegation, and the operator can overwrite or
+remint it at any time. Templates and decisions live in `ops/nap-bridge/`
+(`.env.example`, `rebuild-manifest.md`) and `docs/nap-bridge-1.md`.
 
 ---
 

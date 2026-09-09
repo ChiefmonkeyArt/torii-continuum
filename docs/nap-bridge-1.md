@@ -1,13 +1,24 @@
-# NAP-BRIDGE-1 — Nostr gateway + npub allowlist for the greeter
+# NAP-BRIDGE — Nostr gateway + npub allowlist for the greeter
 
-Status: **decided + implemented** (signer custody = NIP-46 bunker; wire = NIP-17
+Status: **decided + implemented** (signer custody = per-install ephemeral nsec,
+superseding the earlier NIP-46 bunker decision in NAP-BRIDGE-1; wire = NIP-17
 kind-1059 gift-wrap + NIP-44).
+
+> Custody revision (NAP-BRIDGE-3). NAP-BRIDGE-1 held the greeter nsec in a
+> NIP-46 bunker and required a one-time `nostrconnect://` approval. That was
+> correct for a signer the operator already runs, but bunkers are too much
+> ceremony for the average operator installing Torii on a VPS. We therefore
+> replaced the bunker with a **local per-install ephemeral nsec**: the
+> installer mints a throwaway greeter nsec into the `0600` `.env`, and the
+> gateway signs with it directly. No bunker, no URI, no approval — a fresh
+> install is a fresh, funds-free greeter identity with zero operator config
+> beyond relays + allowlist.
 
 ## Intent
 
 Let players actually reach the `hermes-npc` greeter over Nostr. Today the greeter
 is loopback-only (correct, per HERMES-NPC-1): a public voice with no safe
-transport to the people it should greet. NAP-BRIDGE-1 builds the shortest safe
+transport to the people it should greet. NAP-BRIDGE builds the shortest safe
 bridge: a small, **isolated gateway** that receives a player's gift-wrapped DM,
 unwraps it, confirms the sender is on the operator's npub allowlist, asks the
 greeter for a reply, wraps + signs it as the greeter, and publishes it back.
@@ -34,35 +45,37 @@ relays (configured, read + write)
    ▲
    │ subscribe (SimplePool, kind 1059, #p = greeter)
    ▼
-nap-bridge gateway ─▶ unwrap (bunker) ─▶ seal auth ─▶ allowlist ─▶ local Ollama
+nap-bridge gateway ─▶ unwrap (local) ─▶ seal auth ─▶ allowlist ─▶ local Ollama
    │                                              + greeter SOUL.md
-   │   reply: rumor(14) ─▶ seal(13, bunker) ─▶ gift wrap(1059, local ephemeral)
+   │   reply: rumor(14) ─▶ seal(13, local) ─▶ gift wrap(1059, local ephemeral)
    ▼
 relays ──▶ player
 ```
 
-The gateway touches **only**: its own NIP-46 client key, the public allowlist,
-the local Ollama endpoint (`127.0.0.1:11434`), and the greeter `SOUL.md`. It never
-reads the Continuum agent, the owner's Routstr key, the Cashu float, or owner
-memory.
+The gateway touches **only**: its own throwaway greeter nsec, the public
+allowlist, the local Ollama endpoint (`127.0.0.1:11434`), and the greeter
+`SOUL.md`. It never reads the Continuum agent, the owner's Routstr key, the
+Cashu float, or owner memory.
 
-## Signer custody (decided: NIP-46 bunker)
+## Signer custody (decided: per-install ephemeral nsec)
 
-**Decision: the greeter's nsec lives in a NIP-46 bunker, never on the VPS.**
-The gateway holds only a NIP-46 *client* secret key (its own identity to talk
-to the bunker) + the bunker pubkey + relays. It requests every inner decrypt /
-encrypt and the seal signature from the bunker via NIP-46. Setup is one human
-action: generate the `nostrconnect://` URI at install, approve it once in the
-bunker — granting `sign_event:13`, `nip44_encrypt`, `nip44_decrypt`,
-`get_public_key` for the greeter — and the gateway is then fully autonomous.
+**Decision: the greeter nsec lives ON the VPS as a single `0600` file, minted
+at install.** There is no NIP-46 bunker and no `nostrconnect://` approval. The
+gateway signs kind-13 seals and NIP-44-encrypts/decrypts gift-wrapped DMs
+in-process with that throwaway key.
 
-- **No nsec on disk.** The client secret key is a zero-authority connection
-  key, not the signing key; if it leaks the operator revokes the bunker
-  connection — no nsec loss.
-- **Bunker down ⇒ greeter silent.** If the bunker is unreachable, replies stop
-  (safe failure — never an unsigned or failed-safe publish).
-- **No signed-tag bypass.** `BunkerSigner` verifies the returned signature
-  against the bunker pubkey before publishing.
+- **Disposable, not custodied.** The nsec holds no funds, carries no
+  delegation, and is unlinkable to the operator's admin/owner npub. Worst case
+  on leak is impersonation-as-greeter (an attacker posts as the NPC), never
+  theft or owner-secret exposure.
+- **Persistent-but-disposable.** It does not rotate or expire on its own; it
+  lives until the owner deletes it. "Ephemeral" means no value attached and
+  disposable on demand, not self-destructing.
+- **Owner override is a one-line edit.** Replace `NPC_NSEC` in the `.env` with
+  a nsec the owner chose, or `rm` the `.env` and reinstall to mint a fresh one.
+- **Fail-closed, no fallback.** If the signer throws (bad key, decrypt
+  failure), the message is dropped — the gateway never publishes an unsigned or
+  failed-auth reply, and never falls back to any other signer.
 
 ### Wire format (NIP-17 kind-1059 + NIP-44)
 
@@ -76,9 +89,9 @@ DMs are NIP-17 **gift-wrapped**:
    a **fresh ephemeral key** (`pubkey` = random), so relay observers cannot
    link the event to either party.
 
-The **bunker** does the inner NIP-44 (`nip44_encrypt`/`nip44_decrypt`) and the
-seal signature. The **gateway generates the outer ephemeral key locally** —
-that is precisely the step that hides the greeter, and it needs no bunker perm.
+The **local signer** does the inner NIP-44 (`nip44_encrypt`/`nip44_decrypt`) and
+the seal signature. The **gateway generates the outer ephemeral key locally** —
+that is precisely the step that hides the greeter.
 
 ## npub allowlist
 
@@ -90,20 +103,20 @@ that is precisely the step that hides the greeter, and it needs no bunker perm.
   wrap is unwrapped (the cost of sender anonymity). A spammer can force a
   decrypt, but can never elicit a reply to a non-allowlisted identity.
 - Out of scope here: sats-receipt gating (pay-to-talk). That is a later slice;
-  NAP-BRIDGE-1 is pure "operator-curated list".
+  NAP-BRIDGE is pure "operator-curated list".
 
 ## Message flow
 
 1. Subscribe (SimplePool) for the greeter's npub as the *recipient* (`#p` tag),
    kind `1059` only.
-2. Verify the wrap's (ephemeral) signature, then unwrap twice via the bunker:
-   wrap → seal → rumor.
+2. Verify the wrap's (ephemeral) signature, then unwrap twice with the local
+   signer: wrap → seal → rumor.
 3. Authenticate: `verifyEvent(seal)` must pass and `seal.pubkey` must equal
    `rumor.pubkey`. That pubkey is the sender.
 4. Reject if the sender is not in the allowlist (silent, no publish).
 5. Build the greeter prompt = `SOUL.md` + the rumor's plaintext; run local
    Ollama (same `qwen3:4b` default, overridable).
-6. Reply: rumor (kind 14) → seal (kind 13, bunker encrypt + sign) → gift wrap
+6. Reply: rumor (kind 14) → seal (kind 13, local encrypt + sign) → gift wrap
    (kind 1059, local ephemeral) → publish to the sender.
 7. Never act on anything in the message (no tools, no code, no files) — the
    SOUL.md hard limits are enforced by construction (the gateway has no tool
@@ -115,16 +128,16 @@ The gateway is env-driven (written 0600 by the installer; template committed):
 
 ```
 NPC_ENABLED=1
-NPC_CLIENT_SECRET=<hex>       # NIP-46 client key — a burnable delegation
-NPC_BUNKER_PUBKEY=<hex>       # the bunker holding the greeter nsec
-NPC_RELAYS=<urls>             # DM + NIP-46 channel relays
+NPC_NSEC=<64-hex>             # greeter nsec — minted at install, disposable
+NPC_RELAYS=<urls>             # NIP-17 DM relays
 NPC_ALLOWLIST=<npubs>         # fail-closed
 NPC_OLLAMA_URL=http://127.0.0.1:11434/v1
 NPC_MODEL=qwen3:4b
 NPC_SOUL_FILE=/home/hermes-npc/.hermes/profiles/npc/SOUL.md
 ```
 
-The greeter nsec never appears in any form.
+`NPC_NSEC` is the one secret on disk; it is a throwaway greeter identity, not
+the operator's key, and it is never echoed after install.
 
 ## Non-goals (later slices)
 

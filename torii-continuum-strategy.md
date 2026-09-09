@@ -63,7 +63,7 @@ The layers + normative hierarchy are exposed via `GET /api/constitution` and sur
 ## Core Principles
 
 - **Privacy first.** Nostr-native does not mean publish-everything. Anything that ever gets posted to Nostr must be gift-wrapped in cryptography (NIP-17 by default). Local-first, encrypted-first.
-- **Sovereignty first.** No nsec on the VPS, ever. Signing lives in the browser through a NIP-07 signer (Plebeian Signer). No custodial fallback.
+- **Sovereignty first.** No *operator* nsec on the VPS, ever — the funded owner identity signs in the browser through a NIP-07 signer (Plebeian Signer), never custody-first. The one deliberate exception is the greeter's **per-install ephemeral nsec** (NAP-BRIDGE-3): a throwaway, funds-free, delegation-free identity minted at install and disposable on demand, so it carries no sovereignty risk and needs no bunker/'browser approval'.
 - **Human in the loop by construction.** The agent drafts. The human approves. The browser signs. No autonomous publish path in v1.
 - **Read-only until proven.** Every Continuum feature starts read-only or mockup-only. Live actions require an explicit slice, explicit gates, and explicit approval.
 - **Local-first, encrypted-first.** Filesystem posture is `chmod 700`, dedicated OS user, no plaintext prompts in production logs.
@@ -102,7 +102,7 @@ CONT-AGENT-1 is the current active slice. Later slices are named and reserved to
 Continuum splits its agentic surface into **two isolated Hermes voices**:
 
 - **`hermes-owner`** — private project engine, full tool access, Continuum-router primary with local `qwen3:4b` fallback. Runs as an unprivileged Unix user (`hermes-owner`, HOME `0700`, `umask 077`, profile `.env` `0600`).
-- **`hermes-npc`** — public in-world NPC greeter for Kami mode / Torii Quest, chat only, no tools, local-only inference, no secrets on disk, structurally unable to reach owner secrets. Provisioned by `ops/install-hermes-npc.sh` (separate `hermes-npc` user, `npc` profile, greeter `SOUL.md`). It is reachable over Nostr via the isolated **nap-bridge** gateway (NAP-BRIDGE-1): `agent/npc-gateway.mjs` + `ops/install-nap-bridge.sh` sign as the greeter through a **NIP-46 bunker** (no nsec on the VPS — one-time human approval of a `nostrconnect://` URI, then autonomous), gate DMs on a **fail-closed npub allowlist**, and infer locally. DMs are **NIP-17 kind-1059 gift-wrap + NIP-44** (NAP-BRIDGE-2): rumor (14) → seal (13, bunker-signed) → wrap (1059, local ephemeral key). See `docs/nap-bridge-1.md`.
+- **`hermes-npc`** — public in-world NPC greeter for Kami mode / Torii Quest, chat only, no tools, local-only inference, no secrets on disk, structurally unable to reach owner secrets. Provisioned by `ops/install-hermes-npc.sh` (separate `hermes-npc` user, `npc` profile, greeter `SOUL.md`). It is reachable over Nostr via the isolated **nap-bridge** gateway (NAP-BRIDGE-1): `agent/npc-gateway.mjs` + `ops/install-nap-bridge.sh` sign as the greeter with a **local per-install ephemeral nsec** (NAP-BRIDGE-3 — no NIP-46 bunker, no `nostrconnect://` approval; a throwaway funds-free identity minted at install), gate DMs on a **fail-closed npub allowlist**, and infer locally. DMs are **NIP-17 kind-1059 gift-wrap + NIP-44** (NAP-BRIDGE-2): rumor (14) → seal (13, greeter-signed) → wrap (1059, local ephemeral key). See `docs/nap-bridge-1.md`.
 
 Unix users are the primary trust boundary; Docker is optional hardening only, never the identity boundary. The Fastify router in `agent/index.mjs` is not either voice — it is the shared inference spine the owner voice sits behind, via the OpenAI-compatible `/v1` surface (`agent/core/openai-adapter.mjs`): loopback-only, fail-closed local bearer, no persona, delegates to `model-router.chat()` unchanged. Shared Ollama (127.0.0.1:11434) is the one deliberately-shared surface for stateless inference. See `docs/hermes-two-voice.md` for the full ADR and boundary rules.
 
@@ -213,7 +213,7 @@ Adds a **sealed, local-first character stack** so the agent has a stable identit
 
 ## Decision Rules
 
-- If a slice needs an nsec on the VPS, it is not v1. Redesign until it does not.
+- If a slice needs an *operator* nsec on the VPS, it is not v1. Redesign until it does not. (The greeter's throwaway per-install nsec is the carved-out exception — see the sovereignty principle above — because it custodies nothing and signs only the greeter's own DMs.)
 - If a slice adds a plaintext Nostr write path, it is not v1. Redesign or delete the code path.
 - If a slice adds an autonomous publish path (no browser click), it is not v1 and it is not v2. It waits until NIP-46 support lands and gets its own slice.
 - If a skill wants to write outside its whitelist, refuse. Whitelist over allow-list-plus-exceptions.
