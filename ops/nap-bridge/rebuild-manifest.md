@@ -5,8 +5,8 @@ What `ops/install-nap-bridge.sh` does, what it writes, and how to verify it.
 ## What it provisions
 
 1. **NIP-46 client key** — `agent/scripts/npc-connect.mjs` mints the gateway's
-   client keypair and a `nostrconnect://` URI (perms scoped to `sign_event:4`,
-   `nip04_encrypt`, `nip04_decrypt`, `get_public_key` — nothing else). This is
+   client keypair and a `nostrconnect://` URI (perms scoped to `sign_event:13`,
+   `nip44_encrypt`, `nip44_decrypt`, `get_public_key` — nothing else). This is
    NOT the greeter nsec.
 2. **One-time human approval** — the operator approves the `nostrconnect://`
    URI in their bunker once. After that the URI's `secret` is no longer
@@ -25,8 +25,8 @@ The only secret is the NIP-46 **client** key in the `0600` `.env`. It is a
 delegation, not the greeter nsec:
 
 - It cannot spend, export, or reveal the greeter key.
-- Its reach is bounded by the perms in the connect URI (kind-4 sign + NIP-04
-  encrypt/decrypt + `get_public_key`).
+- Its reach is bounded by the perms in the connect URI (kind-13 seal sign +
+  NIP-44 encrypt/decrypt + `get_public_key`).
 - If it leaks, revoke the connection in the bunker and re-run
   `--generate`; the greeter identity itself is unaffected.
 
@@ -57,13 +57,13 @@ not in memory, not in any file.
 - **Idempotent reconnect** — after a restart, `journalctl -u torii-nap-bridge`
   shows `greeter pubkey … (via NIP-46 bunker)` with the same prefix.
 - **Fail-closed allowlist** — with `NPC_ALLOWLIST` unset the gateway refuses
-  to start (`FATAL`); with a non-matching sender, no decrypt/compute happens.
+  to start (`FATAL`); with a non-matching sender, the unwrap still happens (the
+  cost of sender anonymity) but no inference/reply is ever produced.
 - **Bunker down => silent** — stop the bunker; the greeter stops replying
   (it never falls back to any other signer). It recovers when the bunker is
   back, with no key change.
 
 ## Non-goals (later slices)
 
-NIP-17 kind-1059 DMs + NIP-44 (fast follow-up to the NIP-04 kind-4 MVP); sats
-receipt / gating; multi-sender routing beyond the static allowlist; an
+Sats receipt / gating; multi-sender routing beyond the static allowlist; an
 in-band admin surface to edit the allowlist without a redeploy.

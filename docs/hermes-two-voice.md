@@ -89,10 +89,10 @@ inference). Memory, keys, tools, and project access remain fully separate.
 `hermes-npc` is reachable over Nostr via the isolated `nap-bridge` gateway
 (`agent/npc-gateway.mjs` + `ops/install-nap-bridge.sh`). It signs as the
 greeter using a NIP-46 bunker (no nsec on the VPS), enforces a fail-closed npub
-allowlist before any decrypt/compute, and infers locally. See
-`docs/nap-bridge-1.md` for the signer-custody ADR and the kind-4 DM wire format.
+allowlist, and infers locally. Wire format is NIP-17 kind-1059 gift-wrap +
+NIP-44. See `docs/nap-bridge-1.md` for the signer-custody ADR and the wrap flow.
 
 ## Non-goals (later slices)
 
-NIP-17 kind-1059 + NIP-44 DM upgrade; sats receipt / gating; encrypted-at-rest
-MEMORY-1 bridge; any public network exposure beyond the allowlisted DM path.
+Sats receipt / gating; encrypted-at-rest MEMORY-1 bridge; any public network
+exposure beyond the allowlisted DM path.

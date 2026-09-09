@@ -37,8 +37,9 @@
 # Security posture (see docs/nap-bridge-1.md):
 #   - The only secret on disk is the NIP-46 client key (0600) — a burnable
 #     delegation, not the greeter nsec. It cannot spend, export, or impersonate
-#     beyond the greeter's approved kind-4/NIP-04 scope.
-#   - Fail-closed allowlist: empty => nobody. Checked BEFORE any decrypt.
+#     beyond the greeter's approved kind-13/NIP-44 scope.
+#   - Fail-closed allowlist: empty => nobody. Checked after unwrap, BEFORE any
+#     inference.
 #   - Bunker down => greeter silent (safe failure), never falls back to any
 #     other signer.
 #   - Runs as hermes-npc, read-only filesystem, outbound network only.

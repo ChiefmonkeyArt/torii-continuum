@@ -2045,3 +2045,53 @@ sudo NPC_BUNKER_PUBKEY=<bunker npub> NPC_RELAYS="wss://…" NPC_ALLOWLIST="npub1
 journalctl -u torii-nap-bridge -f         # "greeter pubkey … (via NIP-46 bunker)"
 ```
 Fast follow-up: NIP-17 kind-1059 + NIP-44 DM upgrade.
+
+## v0.2.111-alpha — NAP-BRIDGE-2 NIP-17 kind-1059 + NIP-44 upgrade
+
+**Goal.** Replace the NAP-BRIDGE-1 NIP-04 kind-4 MVP with NIP-17 gift-wrapped DMs
++ NIP-44, the privacy-preserving wire format (NIP-04 leaks metadata and is
+deprecated). This was the ADR's stated fast follow-up.
+
+**Wire format.** rumor (kind 14) → seal (kind 13, NIP-44, bunker-signed) → gift
+wrap (kind 1059, NIP-44, ephemeral key). The greeter nsec still never leaves the
+bunker: the bunker does the inner NIP-44 and signs the seal; the **outer wrap
+uses a fresh ephemeral key generated locally**, which is what hides the greeter
+from relay observers (wrap pubkey is random).
+
+**Sender auth.** A gift wrap's pubkey is intentionally random, so the allowlist
+is checked *after* unwrap: the seal signature proves `seal.pubkey`, which must
+equal `rumor.pubkey` — that pubkey is the sender. A spammer can force a decrypt
+(the cost of sender anonymity) but can never elicit a reply to a non-allowlisted
+identity.
+
+**Perms re-scoped.** The connect URI now grants `sign_event:13`,
+`nip44_encrypt`, `nip44_decrypt`, `get_public_key` (drops `nip04_*`/
+`sign_event:4`), so an operator who already approved the NAP-BRIDGE-1 URI must
+re-approve once to pick up the NIP-44 grants.
+
+**Delivered.**
+- `agent/core/npc-bridge.mjs` rewritten — new pure helpers (`buildRumor`,
+  `buildSealTemplate`, `buildWrapTemplate`, `giftWrapSeal`, `safeParse`) + the
+  NIP-17 `handleEvent` loop (unwrap → seal auth → allowlist → infer → rumor/seal/wrap).
+- `agent/scripts/npc-connect.mjs` perms updated.
+- ADR `docs/nap-bridge-1.md` + `docs/hermes-two-voice.md` +
+  `ops/nap-bridge/{.env.example,rebuild-manifest.md}` + installer comments updated.
+
+**Tests.** `agent/test/npc-bridge.test.js` rewritten to 17 cases (real signed
+seals + stubbed bunker decrypt; drop paths: non-wrap, forged wrap, garbage seal,
+unverified seal, seal/rumor mismatch, non-allowlisted, infer-fail, throwing
+signer). `agent/test/npc-connect.test.js` perms assertion updated.
+
+**Update-All checklist.**
+- Code + tests. [done]
+- ADR `nap-bridge-1.md` + `hermes-two-voice.md`. [done]
+- Continuity docs: strategy + todo + progress (`ops/README.md` unchanged — no
+  command surface change). [done; handoff skipped]
+- Version markers: `package.json` + `agent/package.json` + both lockfiles
+  0.2.110→0.2.111. [this slice]
+- GitHub: PR to main → tag `v0.2.111-alpha`. [this slice]
+
+**Operator step (after merge + tag).** Re-run
+`./ops/install-nap-bridge.sh --generate` and re-approve the `nostrconnect://`
+URI in the bunker to grant the NIP-44 perms, then verify a wrap from an
+allowlisted npub yields a reply and a non-allowlisted one is ignored.
