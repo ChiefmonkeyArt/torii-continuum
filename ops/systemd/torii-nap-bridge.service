@@ -1,0 +1,78 @@
+# Torii Continuum — nap-bridge gateway (NAP-BRIDGE-1)
+#
+# Installed to /etc/systemd/system/torii-nap-bridge.service by
+# ops/install-nap-bridge.sh. Runs the NIP-46 Nostr DM gateway as the locked
+# hermes-npc user, holding NO nsec: the greeter key lives in a bunker, and this
+# process only decrypts/encrypts/signs by calling the bunker over NIP-46.
+#
+# Security model (see docs/nap-bridge-1.md):
+#   - Runs as hermes-npc (created by install-hermes-npc.sh): no sudo, no login,
+#     HOME 0700. Shares nothing with hermes-owner or the continuum agent.
+#   - Environment from /home/hermes-npc/.nap-bridge/.env (0600) read by systemd
+#     before exec; the only "secret" in it is the NIP-46 CLIENT key — a burnable
+#     delegation, not the greeter nsec.
+#   - Stateless: the gateway writes nothing to disk. ProtectSystem=strict +
+#     ProtectHome=read-only leave only the greeter SOUL.md readable from home.
+#   - Outbound network only: Nostr relays (wss) + local Ollama (loopback).
+#     No listener, nothing to port-scan.
+
+[Unit]
+Description=Torii nap-bridge (NIP-46 Nostr DM gateway)
+Documentation=https://github.com/ChiefmonkeyArt/torii-continuum
+After=network-online.target ollama.service
+Wants=network-online.target
+
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=hermes-npc
+Group=hermes-npc
+WorkingDirectory=__AGENT_DIR__
+EnvironmentFile=/home/hermes-npc/.nap-bridge/.env
+# The absolute node path is filled in by ops/install-nap-bridge.sh from the
+# operator's own `command -v node`. Replace __NODE_BIN__ by hand if needed.
+ExecStart=__NODE_BIN__ npc-gateway.mjs
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=torii-nap-bridge
+
+# ── Sandboxing ────────────────────────────────────────────────────────────
+NoNewPrivileges=true
+ProtectSystem=strict
+# Read-only home so the gateway can read the greeter SOUL.md but never write
+# persona or state back to disk. The 0600 .env is read by systemd, not here.
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# MemoryDenyWriteExecute is deliberately not set (V8 JIT; see the agent unit).
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete
+RemoveIPC=true
+UMask=0077
+
+# Networking: Nostr relays (AF_INET/AF_INET6) + local Ollama (loopback).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

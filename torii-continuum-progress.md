@@ -2012,3 +2012,36 @@ sudo -u hermes-npc hermes -p npc           # answers via local Ollama
 sudo -u hermes-npc cat /home/hermes-owner/.hermes/...   # must fail (isolation)
 ```
 The Nostr/sats gateway that would let players actually reach the greeter is NAP-BRIDGE-1 (later slice); until then `hermes-npc` is loopback-only like the owner brain.
+
+## v0.2.110-alpha — NAP-BRIDGE-1 isolated Nostr DM gateway (NIP-46 bunker)
+
+**Goal.** Give the `hermes-npc` greeter a safe transport so players can actually reach it over Nostr, without ever putting an nsec on the VPS. This is the first autonomous-signing component in Continuum and is deliberately separate from the agent (which never signs, holds no nsec).
+
+**Custody (decided).** The greeter nsec lives in a **NIP-46 bunker**. The gateway holds only its own NIP-46 *client* secret (a burnable delegation) + the bunker pubkey + relays, and requests every decrypt/encrypt/sign from the bunker. Setup is one human action — approve a `nostrconnect://` URI once (`sign_event:4`, `nip04_encrypt/decrypt`, `get_public_key`) — after which the gateway reconnects autonomously on every restart. Bunker down ⇒ greeter silent. Fail-closed allowlist: empty ⇒ nobody, checked before any decrypt/compute.
+
+**Delivered.**
+- `agent/core/npc-bridge.mjs` — pure helpers (`normalizeAllowlist`, `isSenderAllowed`, `buildGreeterPrompt`, `buildReplyTemplate`) + `createNpcBridge({cfg, greeterHex, log, pool, signer, chat})` factory with injected deps (subscribe → verify → allowlist → decrypt → infer → encrypt → sign → publish).
+- `agent/npc-gateway.mjs` — env-driven entrypoint, separate process, never reads agent config.
+- `agent/scripts/npc-connect.mjs` — mints the client key + `nostrconnect://` URI.
+- `ops/install-nap-bridge.sh` — idempotent; `--dry-run`/`--render-env`/`--render-unit`/`--generate`; 0600 `.env` (client secret only); one-time approval URI.
+- `ops/systemd/torii-nap-bridge.service` — hermes-npc, read-only fs, read-only home (SOUL.md only), outbound AF_INET/6/UNIX, no nsec.
+- `ops/nap-bridge/{.env.example,rebuild-manifest.md}`; ADR `docs/nap-bridge-1.md` (decided).
+
+**Tests.** +16 agent (`npc-bridge.test.js` 12 + `npc-connect.test.js` 4; suite 483→**499**, stubbed signer/pool/chat — no live relay/bunker) + 27 hermetic installer assertions (`install-nap-bridge.test.sh`; the `--generate` mint guards to skip when node + agent `node_modules` are absent and is covered by the agent test). `shellcheck -S error` clean.
+
+**Update-All checklist.**
+- Ops: installer + unit + templates + manifest + test. [done]
+- ADR `docs/nap-bridge-1.md`. [done]
+- `docs/hermes-two-voice.md` now points at the shipped gateway. [done]
+- Continuity docs: strategy + todo + progress (`ops/README.md` nap-bridge section). [done; handoff skipped — no operator deploy-path change]
+- Version markers: `package.json` + `agent/package.json` + both lockfiles 0.2.109→0.2.110 (alignment gate root==agent==tag). [this slice]
+- GitHub: PR to main → tag `v0.2.110-alpha`. [this slice]
+
+**Operator install (after merge + tag).**
+```
+sudo NPC_BUNKER_PUBKEY=<bunker npub> NPC_RELAYS="wss://…" NPC_ALLOWLIST="npub1…" \
+     ./ops/install-nap-bridge.sh          # prints the nostrconnect:// URI
+# approve the URI ONCE in the bunker, then:
+journalctl -u torii-nap-bridge -f         # "greeter pubkey … (via NIP-46 bunker)"
+```
+Fast follow-up: NIP-17 kind-1059 + NIP-44 DM upgrade.
