@@ -97,18 +97,19 @@ jobs:
               -o ConnectTimeout=15 "$SSH_HOST" bash -s -- "$tag" <<'REMOTE'
           set -euo pipefail
           TAG="$1"
-          cd /opt/torii-suite/checkout
-          # Load operator env (domain, admin npub, ollama) exactly as bootstrap.sh does.
-          set -a
-          sudo -n bash -c '. /opt/torii-suite/checkout/.env && env' > /tmp/torii-env.$$
-          # shellcheck disable=SC1090
-          . /tmp/torii-env.$$
-          rm -f /tmp/torii-env.$$
-          set +a
+          # Read operator env under sudo (file is root:root 600) and re-emit
+          # each `export KEY="value"` for this shell. Only the exact keys the
+          # installer expects are forwarded; nothing else leaks in.
+          eval "$(sudo -n awk -F= '
+            /^(TORII_DOMAIN|LETSENCRYPT_EMAIL|CONTINUUM_ADMIN_NPUB|CONTINUUM_AGENT_PORT|OLLAMA_MODE|OLLAMA_URL|OLLAMA_AUTH_HEADER|OLLAMA_MODELS|INSTALL_OLLAMA|OLLAMA_BIND|CONTINUUM_SESSION_TTL_SEC|CONTINUUM_RATE_LIMIT_ENABLED|CONTINUUM_RATE_LIMIT_CHALLENGE_PER_MIN|CONTINUUM_RATE_LIMIT_VERIFY_PER_MIN|CONTINUUM_RATE_LIMIT_MAX_CHALLENGES)=/ {print "export " $0}
+          ' /opt/torii-suite/checkout/.env)"
           export SUITE_WORK_DIR="${SUITE_WORK_DIR:-/opt/torii-suite/work}"
           export APPS_ROOT="/apps"
           export TORII_CONTINUUM_REF="$TAG"
-          sudo -n -E /opt/torii-suite/checkout/installers/install-continuum.sh
+          # Preserve only the installer-relevant env vars into the sudo call.
+          # -E is silently dropped by policy on this box, so use --preserve-env=<list>.
+          sudo -n --preserve-env=TORII_DOMAIN,LETSENCRYPT_EMAIL,CONTINUUM_ADMIN_NPUB,CONTINUUM_AGENT_PORT,OLLAMA_MODE,OLLAMA_URL,OLLAMA_AUTH_HEADER,OLLAMA_MODELS,INSTALL_OLLAMA,OLLAMA_BIND,CONTINUUM_SESSION_TTL_SEC,CONTINUUM_RATE_LIMIT_ENABLED,CONTINUUM_RATE_LIMIT_CHALLENGE_PER_MIN,CONTINUUM_RATE_LIMIT_VERIFY_PER_MIN,CONTINUUM_RATE_LIMIT_MAX_CHALLENGES,SUITE_WORK_DIR,APPS_ROOT,TORII_CONTINUUM_REF \
+            /opt/torii-suite/checkout/installers/install-continuum.sh
           REMOTE
 
       - name: Verify live version matches
