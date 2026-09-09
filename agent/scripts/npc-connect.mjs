@@ -30,9 +30,11 @@ if (relays.length === 0) {
   process.exit(1);
 }
 
-// The perms the greeter needs: sign kind-4 replies + NIP-04 encrypt/decrypt of
-// DMs + learn its own pubkey. No funds, no other kinds, no key export.
-const perms = ['sign_event:4', 'nip04_encrypt', 'nip04_decrypt', 'get_public_key'];
+// The perms the greeter needs: sign the kind-13 seal + NIP-44 encrypt/decrypt of
+// gift-wrapped DMs + learn its own pubkey. No funds, no other kinds, no key
+// export. (The outer kind-1059 wrap is signed by a local ephemeral key, not the
+// bunker, so it needs no bunker perm.)
+const perms = ['sign_event:13', 'nip44_encrypt', 'nip44_decrypt', 'get_public_key'];
 
 let clientSecretHex;
 const existing = process.env.NPC_CLIENT_SECRET || '';

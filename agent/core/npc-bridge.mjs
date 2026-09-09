@@ -1,23 +1,38 @@
 /**
  * NAP-BRIDGE-1 — the isolated Nostr gateway for the hermes-npc greeter.
  *
- * This module is a SEPARATE runtime from the Continuum agent. It signs nothing
- * with any key it holds: the greeter's nsec lives in a NIP-46 bunker, and every
- * decrypt / encrypt / sign operation is a bunker RPC. The gateway holds only a
- * NIP-46 *client* secret key (identity to talk to the bunker), the public
- * npub allowlist, the local Ollama endpoint, and the greeter SOUL.md.
+ * Wire format: NIP-17 gift-wrapped DMs (kind 1059) + NIP-44 encryption.
+ *   rumor (kind 14) ──▶ seal (kind 13) ──▶ gift wrap (kind 1059)
+ *
+ * The greeter's nsec lives in a NIP-46 bunker; this process holds no nsec. The
+ * bunker does the inner NIP-44 encrypt/decrypt (rumor ↔ seal) and signs the
+ * seal. The OUTER gift wrap uses a fresh ephemeral key generated locally — that
+ * is what hides the greeter from relay observers (the wrap's pubkey is random).
  *
  * Trust boundary (see docs/nap-bridge-1.md): it never reads the Continuum
- * agent, the owner's Routstr key, the Cashu float, or owner memory. It is
- * fail-closed: an empty allowlist admits nobody, and any signature that does
- * not verify against the bunker is never published.
+ * agent, the owner's Routstr key, the Cashu float, or owner memory. Fail-closed:
+ * an empty allowlist admits nobody; a seal that does not verify against its own
+ * (signed) pubkey is never answered; the sender is only trusted after the inner
+ * rumor is unwrapped and authenticated — an attacker's gift wrap costs a decrypt
+ * but can never elicit a reply to a non-allowlisted identity.
  *
  * The pure helpers are exported for unit tests; the loop is a factory with
- * injected deps (pool, signer, chat) so tests never touch a live relay/bunker.
+ * injected deps (pool, signer, chat, giftWrap) so tests never touch a live
+ * relay/bunker.
  */
 
-import { verifyEvent } from 'nostr-tools/pure';
+import {
+  verifyEvent,
+  generateSecretKey,
+  getPublicKey,
+  finalizeEvent,
+} from 'nostr-tools/pure';
+import { getConversationKey, encrypt as nip44Encrypt } from 'nostr-tools/nip44';
 import { nip19 } from 'nostr-tools';
+
+const KIND_RUMOR = 14;    // inner private direct message
+const KIND_SEAL = 13;     // NIP-44-encrypted rumor, signed by the sender
+const KIND_WRAP = 1059;   // NIP-44-encrypted seal, signed by an ephemeral key
 
 // ─── Pure helpers ────────────────────────────────────────────────────────────
 
@@ -82,20 +97,91 @@ export function buildGreeterPrompt(soul, incoming) {
 }
 
 /**
- * Build the unsigned kind-4 reply template. `ciphertext` is already
- * NIP-04-encrypted to the recipient. The signer fills id/sig (and the bunker
- * enforces pubkey). Never contains the plaintext.
- * @param {{senderHex:string, ciphertext:string, createdAt:number, greeterHex:string}} p
- * @returns {object} unsigned event template
+ * Build the inner rumor (kind 14) for a reply. Signed indirectly by the seal
+ * that wraps it — the rumor itself is unsigned, matching nostr-tools' NIP-17.
+ * @param {{greeterHex:string, senderHex:string, plaintext:string, createdAt:number}} p
+ * @returns {object} unsigned rumor event (kind 14)
  */
-export function buildReplyTemplate({ senderHex, ciphertext, createdAt, greeterHex }) {
+export function buildRumor({ greeterHex, senderHex, plaintext, createdAt }) {
   return {
-    kind: 4,
+    kind: KIND_RUMOR,
     pubkey: greeterHex,
+    created_at: createdAt,
+    tags: [['p', senderHex]],
+    content: plaintext,
+  };
+}
+
+/**
+ * Build the seal (kind 13) template: the rumor NIP-44-encrypted to the sender.
+ * `ciphertext` is already produced by the bunker (`signer.nip44Encrypt`).
+ * @param {{ciphertext:string, greeterHex:string, createdAt:number}} p
+ * @returns {object} unsigned seal template (kind 13), pubkey filled by the bunker
+ */
+export function buildSealTemplate({ ciphertext, greeterHex, createdAt }) {
+  return {
+    kind: KIND_SEAL,
+    pubkey: greeterHex,
+    created_at: createdAt,
+    tags: [],
+    content: ciphertext,
+  };
+}
+
+/**
+ * Build the gift-wrap (kind 1059) template: the seal NIP-44-encrypted to the
+ * sender under a fresh ephemeral key. `ciphertext` is produced locally.
+ * @param {{senderHex:string, ciphertext:string, ephemeralPubkey:string, createdAt:number}} p
+ * @returns {object} unsigned wrap template (kind 1059)
+ */
+export function buildWrapTemplate({ senderHex, ciphertext, ephemeralPubkey, createdAt }) {
+  return {
+    kind: KIND_WRAP,
+    pubkey: ephemeralPubkey,
     created_at: createdAt,
     tags: [['p', senderHex]],
     content: ciphertext,
   };
+}
+
+/**
+ * Parse a JSON string into an object, returning null on failure. A malformed or
+ * non-object payload is a clean drop, never a crash.
+ * @param {string} s
+ * @returns {object|null}
+ */
+export function safeParse(s) {
+  if (typeof s !== 'string' || !s.length) return null;
+  try {
+    const v = JSON.parse(s);
+    return v && typeof v === 'object' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Gift-wrap an already-signed seal to a recipient under a fresh ephemeral key.
+ * Pure (no network). The wrap's pubkey is random, so observers cannot link the
+ * reply back to the greeter.
+ * @param {object} seal signed seal event (kind 13)
+ * @param {string} senderHex recipient pubkey (hex)
+ * @param {number} [createdAt]
+ * @returns {object} signed gift-wrap event (kind 1059)
+ */
+export function giftWrapSeal(seal, senderHex, createdAt = Math.floor(Date.now() / 1000)) {
+  const ephemeralSk = generateSecretKey();
+  const ciphertext = nip44Encrypt(
+    JSON.stringify(seal),
+    getConversationKey(ephemeralSk, senderHex),
+  );
+  const tpl = buildWrapTemplate({
+    senderHex,
+    ciphertext,
+    ephemeralPubkey: getPublicKey(ephemeralSk),
+    createdAt,
+  });
+  return finalizeEvent(tpl, ephemeralSk);
 }
 
 // ─── Bridge factory ──────────────────────────────────────────────────────────
@@ -106,38 +192,70 @@ export function buildReplyTemplate({ senderHex, ciphertext, createdAt, greeterHe
  * @param {string} deps.greeterHex  greeter pubkey (hex) — learned from the bunker at connect
  * @param {object} deps.log      { info, warn, error } (or console-shaped)
  * @param {object} deps.pool     nostr-tools SimplePool (or compatible stub)
- * @param {object} deps.signer   BunkerSigner-like: { signEvent, nip04Decrypt, nip04Encrypt }
+ * @param {object} deps.signer   BunkerSigner-like: { nip44Encrypt, nip44Decrypt, nip44Encrypt/Decrypt, signEvent }
  * @param {function} deps.chat   async ({messages}) => {ok:true, content}|{ok:false, code, reason}
+ * @param {function} [deps.giftWrap] async (seal, senderHex) => wrap; default giftWrapSeal
  * @returns {{ start:function():Promise<void>, stop:function():void, handleEvent:function(object):Promise<void> }}
  */
-export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat }) {
+export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, giftWrap = giftWrapSeal }) {
   let sub = null;
   let stopped = false;
+  const now = () => Math.floor(Date.now() / 1000);
 
   /**
-   * Process one inbound kind-4 event end-to-end. Silently drops anything that
-   * fails verification / allowlist / inference, so an unauthorised or malformed
-   * sender can never see a reply and never costs compute.
+   * Process one inbound gift wrap (kind 1059) end-to-end. Silently drops
+   * anything that fails verification / unwrap / allowlist / inference, so an
+   * unauthorised or malformed sender never sees a reply and never costs
+   * inference. A spammer can force a decrypt (the cost of sender anonymity) but
+   * can never elicit a reply to a non-allowlisted identity.
    */
   async function handleEvent(event) {
     try {
-      // 1. Verify the sender's own signature before trusting their pubkey.
-      if (!event || !verifyEvent(event)) {
-        log.warn('[npc-gateway] dropped unverified event');
+      // 1. Must be a gift wrap addressed to us, with a well-formed (ephemeral) sig.
+      if (!event || event.kind !== KIND_WRAP || !verifyEvent(event)) {
+        log.warn('[npc-gateway] dropped unverified / non-gift-wrap event');
         return;
       }
-      const senderHex = (event.pubkey || '').toLowerCase();
 
-      // 2. Fail-closed allowlist gate — before any decrypt or compute.
+      // 2. Unwrap the seal via the bunker (greeter nsec never leaves it).
+      const sealStr = await signer.nip44Decrypt(event.pubkey, event.content);
+      const parsed0 = safeParse(sealStr);
+      if (!parsed0) {
+        log.warn('[npc-gateway] dropped garbage seal payload');
+        return;
+      }
+      const seal = parsed0;
+
+      // 3. Unwrap the rumor via the bunker.
+      const rumorStr = await signer.nip44Decrypt(seal.pubkey, seal.content);
+      const parsed1 = safeParse(rumorStr);
+      if (!parsed1) {
+        log.warn('[npc-gateway] dropped garbage rumor payload');
+        return;
+      }
+      const rumor = parsed1;
+
+      // 4. Authenticate the sender: the seal's signature proves seal.pubkey, and
+      //    the rumor must be attributed to that same pubkey.
+      if (
+        !verifyEvent(seal) ||
+        !rumor.pubkey ||
+        seal.pubkey.toLowerCase() !== String(rumor.pubkey).toLowerCase()
+      ) {
+        log.warn('[npc-gateway] dropped seal/rumor with mismatched or unverified sender');
+        return;
+      }
+      const senderHex = seal.pubkey.toLowerCase();
+
+      // 5. Fail-closed allowlist gate — before any inference.
       if (!isSenderAllowed(senderHex, cfg.allowlist)) {
         log.warn('[npc-gateway] dropped non-allowlisted sender');
         return;
       }
 
-      // 3. Decrypt inbound via the bunker (greeter nsec never leaves it).
-      const plaintext = await signer.nip04Decrypt(senderHex, event.content);
+      const plaintext = typeof rumor.content === 'string' ? rumor.content : '';
 
-      // 4. Local inference with the greeter persona in the system turn.
+      // 6. Local inference with the greeter persona in the system turn.
       const messages = [
         { role: 'system', content: cfg.soul },
         { role: 'user', content: plaintext },
@@ -148,19 +266,16 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat }) {
         return;
       }
 
-      // 5. Encrypt the reply to the sender (bunker), then sign it (bunker).
-      const ciphertext = await signer.nip04Encrypt(senderHex, reply.content);
-      const template = buildReplyTemplate({
-        senderHex,
-        ciphertext,
-        createdAt: Math.floor(Date.now() / 1000),
-        greeterHex,
-      });
-      const signed = await signer.signEvent(template);
+      // 7. Rumor → seal (bunker encrypt + sign) → gift wrap (local ephemeral).
+      const rumorOut = buildRumor({ greeterHex, senderHex, plaintext: reply.content, createdAt: now() });
+      const sealCipher = await signer.nip44Encrypt(senderHex, JSON.stringify(rumorOut));
+      const sealTpl = buildSealTemplate({ ciphertext: sealCipher, greeterHex, createdAt: now() });
+      const signedSeal = await signer.signEvent(sealTpl);
+      const wrap = await giftWrap(signedSeal, senderHex);
 
-      // 6. Publish to the configured relays.
+      // 8. Publish the wrap to the configured relays.
       const pubs = await Promise.allSettled(
-        cfg.relayUrls.map((url) => pool.publish([url], signed)),
+        cfg.relayUrls.map((url) => pool.publish([url], wrap)),
       );
       const okCount = pubs.filter((p) => p.status === 'fulfilled').length;
       log.info(`[npc-gateway] replied to ${senderHex.slice(0, 8)}… (${okCount}/${cfg.relayUrls.length} relays)`);
@@ -170,16 +285,16 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat }) {
     }
   }
 
-  /** Open the subscription and run until stop() is called. */
+  /** Open the gift-wrap subscription and run until stop() is called. */
   async function start() {
     if (stopped) return;
     stopped = false;
     sub = pool.subscribeMany(
       cfg.relayUrls,
-      [{ kinds: [4], '#p': [greeterHex] }],
+      [{ kinds: [KIND_WRAP], '#p': [greeterHex] }],
       { onevent: (e) => { handleEvent(e); } },
     );
-    log.info(`[npc-gateway] subscribed to kind-4 for ${greeterHex.slice(0, 8)}… on ${cfg.relayUrls.length} relay(s)`);
+    log.info(`[npc-gateway] subscribed to kind-${KIND_WRAP} for ${greeterHex.slice(0, 8)}… on ${cfg.relayUrls.length} relay(s)`);
   }
 
   function stop() {

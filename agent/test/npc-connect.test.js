@@ -7,7 +7,7 @@
  *   • a fresh run mints a 64-hex client secret (NOT a greeter nsec),
  *   • the derived client pubkey matches getPublicKey(bytes(secret)),
  *   • the nostrconnect:// URI carries the relay(s), the same secret, the four
- *     scoped perms (sign_event:4, nip04_encrypt/decrypt, get_public_key) and a
+ *     scoped perms (sign_event:13, nip44_encrypt/decrypt, get_public_key) and a
  *     name — and nothing wider,
  *   • NPC_CLIENT_SECRET reuse reproduces the SAME key (restart-stable),
  *   • a missing/empty NPC_RELAYS fails closed (non-zero, error to stderr).
@@ -51,7 +51,7 @@ test('connect URI carries relays, the secret, the four scoped perms, and a name'
   assert.ok(uri.startsWith('nostrconnect://'));
   assert.ok(uri.includes('relay=wss%3A%2F%2Frelay.damus.io'));
   assert.ok(uri.includes('secret=' + r.json.client_secret));
-  assert.ok(uri.includes('perms=sign_event%3A4%2Cnip04_encrypt%2Cnip04_decrypt%2Cget_public_key'));
+  assert.ok(uri.includes('perms=sign_event%3A13%2Cnip44_encrypt%2Cnip44_decrypt%2Cget_public_key'));
   assert.ok(uri.includes('name=Test+Greeter'));
 });
 
