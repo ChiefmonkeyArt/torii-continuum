@@ -727,8 +727,28 @@ sudo ./ops/install-hermes-owner.sh --dry-run
 
 Secrets, version pinning, and run-on-VPS acceptance checks live in
 `ops/hermes-owner/rebuild-manifest.md`; the committed, secret-free template is
-`ops/hermes-owner/config.yaml.example`. The NPC brain is a separate slice
-(HERMES-NPC-1) and does not reuse this installer.
+`ops/hermes-owner/config.yaml.example`.
+
+## Hermes NPC-greeter install (HERMES-NPC-1, `install-hermes-npc.sh`)
+
+`ops/install-hermes-npc.sh` provisions the second, isolated voice — the public
+greeter (`hermes-npc`) — reusing the shared Ollama backend the owner installer
+set up. It points the greeter at **local Ollama only** (no Continuum router, no
+paid path, no fallback) so the greeter cannot spend the owner's Cashu float, and
+it has **no secrets on disk** because local Ollama needs no API key. It also
+writes a greeter `SOUL.md` (hard limits: no tools, local-only, never touch owner
+data, loopback-only).
+
+```bash
+sudo ./ops/install-hermes-npc.sh              # provision (idempotent)
+sudo -u hermes-npc hermes -p npc              # chat via local Ollama
+./ops/install-hermes-npc.sh --render-config   # print profile config, no changes
+./ops/install-hermes-npc.sh --render-soul     # print the greeter SOUL.md
+```
+
+Templates and acceptance docs live in `ops/hermes-npc/` (`config.yaml.example`,
+`SOUL.md.example`, `rebuild-manifest.md`). The Nostr/sats gateway that lets
+players actually reach the greeter is NAP-BRIDGE-1 (later slice).
 
 ---
 

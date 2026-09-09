@@ -1,0 +1,20 @@
+# Torii Continuum — hermes-npc profile (HERMES-NPC-1)
+#
+# Committed, secret-free template. `ops/install-hermes-npc.sh` renders the
+# real config from this same shape, filling `default` from OLLAMA_MODEL and
+# `base_url` from OLLAMA_BASE_URL.
+#
+# Inference is LOCAL OLLAMA ONLY. There is deliberately no Continuum router,
+# no `api_key_env`, and no `fallback_providers` ladder — so the greeter is
+# structurally unable to spend the owner's Cashu float or reach a paid path.
+# Local Ollama needs no API key, so the npc voice has zero secrets on disk.
+#
+# See docs/hermes-two-voice.md for the isolation boundary and why hermes-npc
+# and hermes-owner are separate Unix users with separate homes.
+
+model:
+  provider: custom
+  default: "qwen3:4b"
+  # Local Ollama (bound to 127.0.0.1:11434 by the shared backend). Change ONLY
+  # if you rebound Ollama.
+  base_url: "http://127.0.0.1:11434/v1"
