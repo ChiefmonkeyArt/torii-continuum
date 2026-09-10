@@ -22,7 +22,11 @@
 #   sudo ./ops/install-nap-bridge.sh --dry-run            # plan, no changes
 #
 # Environment:
-#   NPC_RELAYS          comma-separated Nostr relay URLs (required)
+#   NPC_RELAYS          comma-separated Nostr relay URLs. Optional when
+#                       TORII_DOMAIN is set -- defaults to
+#                       wss://relay.<TORII_DOMAIN> (matches torii-suite
+#                       v0.9.8-alpha+'s subdomain relay). Explicit env still
+#                       wins.
 #   NPC_ALLOWLIST       comma-separated allowed sender npubs/hex (required, fail-closed)
 #   NPC_MODEL           local inference model (default: qwen3:0.6b — small,
 #                       ~522 MB, replies in seconds on a 8 GB VPS. Override
@@ -140,7 +144,14 @@ esac
 
 # Required inputs (both public; the nsec is minted, never supplied).
 if [ "$MODE" = "install" ] || [ "$MODE" = "dry-run" ] || [ "$MODE" = "render-env" ]; then
-  [ -n "${NPC_RELAYS:-}" ]    || die "NPC_RELAYS is required (comma-separated relay URLs)"
+  # v0.2.114-alpha (NAP-BRIDGE-DEFAULT-RELAY-1): if NPC_RELAYS is unset,
+  # derive it from TORII_DOMAIN (matches torii-suite v0.9.8-alpha default).
+  if [ -z "${NPC_RELAYS:-}" ] && [ -n "${TORII_DOMAIN:-}" ]; then
+    NPC_RELAYS="wss://relay.${TORII_DOMAIN}"
+    echo "[install-nap-bridge] NPC_RELAYS defaulted to ${NPC_RELAYS} (from TORII_DOMAIN)"
+  fi
+  [ -n "${NPC_RELAYS:-}" ]    || die "NPC_RELAYS is required (comma-separated relay URLs, or set TORII_DOMAIN)"
+  export NPC_RELAYS
   [ -n "${NPC_ALLOWLIST:-}" ] || die "NPC_ALLOWLIST is required (comma-separated npubs/hex)"
 fi
 
