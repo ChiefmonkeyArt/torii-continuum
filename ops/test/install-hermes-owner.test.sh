@@ -7,14 +7,14 @@
 #
 #   1. --render-config emits the Continuum router as primary
 #      (http://127.0.0.1:8787/v1 by default, `default: chat`,
-#      api_key_env: CONTINUUM_ROUTER_TOKEN) with local qwen3:4b as fallback.
+#      api_key_env: CONTINUUM_ROUTER_TOKEN) with local llama3.2:1b as fallback.
 #   2. CONTINUUM_ROUTER_URL / CONTINUUM_ROUTER_MODEL overrides are honoured.
 #   3. The rendered config never leaks the router bearer token itself.
 #   4. --help exits 0 and prints an Environment: section.
 #   5. --dry-run exits 0, prints DRY RUN, prints both the profile config AND
 #      the main-config fallback plan, and does NOT create /home/hermes-owner.
 #   6. Unknown flag exits non-zero.
-#   7. OLLAMA_MODEL default is qwen3:4b, and is honoured when overridden.
+#   7. OLLAMA_MODEL default is llama3.2:1b, and is honoured when overridden.
 #
 # Run:  bash ops/test/install-hermes-owner.test.sh   (from repo root)
 
@@ -39,8 +39,8 @@ contains "${out}" 'base_url: "http://127.0.0.1:8787/v1"' \
   && ok "default: primary base_url is loopback:8787/v1"          || bad "default: primary base_url wrong"
 contains "${out}" 'api_key_env: "CONTINUUM_ROUTER_TOKEN"' \
   && ok "default: api_key_env references CONTINUUM_ROUTER_TOKEN" || bad "default: api_key_env missing"
-contains "${out}" 'model: "qwen3:4b"' \
-  && ok "default: Ollama fallback model set (qwen3:4b)"          || bad "default: fallback model missing"
+contains "${out}" 'model: "llama3.2:1b"' \
+  && ok "default: Ollama fallback model set (llama3.2:1b)"          || bad "default: fallback model missing"
 contains "${out}" 'base_url: "http://127.0.0.1:11434/v1"' \
   && ok "default: Ollama fallback base_url is loopback:11434/v1" || bad "default: fallback base_url wrong"
 contains "${out}" 'fallback_providers:' \
@@ -75,7 +75,7 @@ contains "${help_out}" 'CONTINUUM_ROUTER_TOKEN' \
 
 # --- 5. --dry-run (no side effects) ---------------------------------------
 rm -rf /home/hermes-owner
-dry="$(OLLAMA_MODEL="qwen3:4b" bash "${INSTALLER}" --dry-run 2>&1)"
+dry="$(OLLAMA_MODEL="llama3.2:1b" bash "${INSTALLER}" --dry-run 2>&1)"
 contains "${dry}" 'DRY RUN' \
   && ok "--dry-run: prints DRY RUN"                              || bad "--dry-run: no DRY RUN banner"
 contains "${dry}" '.hermes/config.yaml' \

@@ -51,7 +51,7 @@ const baseCfg = (overrides = {}) => ({
   ollama: {
     enabled: true,
     endpoint: 'http://127.0.0.1:11434',
-    model: 'qwen3:0.6b',
+    model: 'llama3.2:1b',
     ...overrides,
   },
   logging: { cost_log: '/tmp/ollama-request-shape-test.jsonl' },
@@ -125,5 +125,33 @@ test('ollama chat() posts to /v1/chat/completions (OpenAI-compat endpoint)', asy
     assert.equal(capture.url, 'http://127.0.0.1:11434/v1/chat/completions');
   } finally {
     restore();
+  }
+});
+
+test('ollama chat() surfaces reasoning-only (thinking-mode) responses as a loud error', async () => {
+  // NAP-BRIDGE-4: a qwen3 model over /v1/chat/completions emits its whole reply
+  // into `reasoning` and leaves `content` empty — the fallback looks dead. Lock
+  // in that this is reported as an actionable error, not a generic empty.
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return {
+        choices: [{ message: { role: 'assistant', content: '', reasoning: 'spent the whole budget thinking' } }],
+        usage: { prompt_tokens: 4, completion_tokens: 3 },
+      };
+    },
+    async text() { return ''; },
+  });
+  try {
+    const ollama = createOllama(baseCfg({ model: 'qwen3:0.6b' }), silentLog());
+    const res = await ollama.chat({ skill: 'chat', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'upstream_empty');
+    assert.match(res.reason, /reasoning-only/, 'error must name the thinking-mode cause');
+    assert.match(res.reason, /llama3.2:1b/, 'error must point at a non-thinking remedy');
+  } finally {
+    globalThis.fetch = original;
   }
 });

@@ -220,7 +220,7 @@ nwc:
 #
 # Ollama is disabled by default. To enable:
 #   1. On the VPS: curl -fsSL https://ollama.com/install.sh | sh
-#   2. Pull a model: ollama pull qwen3:0.6b
+#   2. Pull a model: ollama pull llama3.2:1b
 #   3. Bind to loopback: systemctl edit ollama.service
 #      → [Service] Environment="OLLAMA_HOST=127.0.0.1:11434"
 #   4. Set ollama.enabled: true below.
@@ -236,16 +236,21 @@ ollama:
 
   # Default model when a skill doesn't specify one.
   # Tier guide (Q4_K_M quantisation on CPU):
-  #   qwen3:0.6b      — 500 MB disk, ~1 GB RAM, ~25 tok/s on 2 vCPU (recommended low-spec starter; strong tool-calling for its size)
+  #   llama3.2:1b     — 1.3 GB disk, ~2 GB RAM, ~25 tok/s on 2 vCPU (RECOMMENDED; NON-thinking — see the qwen3 note below)
   #   llama3.2:3b     — 2 GB disk, ~3 GB RAM,  ~15 tok/s on 2 vCPU
   #   llama3.1:8b     — 5 GB disk, ~6 GB RAM,  ~5 tok/s on 4 vCPU
   #   qwen2.5:7b      — 5 GB disk, ~6 GB RAM,  ~7 tok/s on 4 vCPU
   #   qwen2.5:14b     — 9 GB disk, ~10 GB RAM, ~2 tok/s on 4 vCPU (GPU strongly advised)
-  model: "qwen3:0.6b"
+  #   NOTE: do NOT set a qwen3 (thinking) model as the default — over Ollama's
+  #   OpenAI-compat /v1/chat/completions it emits its whole reply into the
+  #   `reasoning` field and returns an empty `content`, so the fallback looks
+  #   dead (NAP-BRIDGE-4). qwen3 only works over the native /api/chat with
+  #   think:false, which this client does not use.
+  model: "llama3.2:1b"
 
   # Per-skill overrides. Fall back to `model` above when unset.
   models:
-    chat:    "qwen3:0.6b"      # v0.2.106-alpha: swapped from qwen2.5:0.5b (same footprint, better agent-loop behaviour)
+    chat:    "llama3.2:1b"     # v0.2.116-alpha: qwen3:0.6b swapped out — non-thinking, over the qwen3 thinking-mode empty-content bug
     reflect: "qwen2.5:7b"      # reflection is offline, can afford a bigger model
 
   # Ollama sampling knobs. Lower = more deterministic, better for reflection.
@@ -264,7 +269,7 @@ ollama:
 
   # Per-request timeout. Slow CPUs on big models can push this; 60s is safe
   # for 3B, bump to 180s for 8B on 2 vCPU. Low-spec VPS default: 180s so a
-  # cold qwen3:0.6b load + first token doesn't abort under load.
+  # cold llama3.2:1b load + first token doesn't abort under load.
   #
   # CEILING (v0.2.91-alpha): this is an UPPER BOUND, not a guarantee. Every call
   # is also clamped to whatever is left of `model_router.total_budget_ms`, so a

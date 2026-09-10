@@ -19,9 +19,9 @@
  *   ollama:
  *     enabled: true
  *     endpoint: http://127.0.0.1:11434   # default Ollama bind
- *     model: llama3.2:3b                 # default when skill has no override
+ *     model: llama3.2:1b                 # default when skill has no override
  *     models:
- *       chat: llama3.2:3b
+ *       chat: llama3.2:1b
  *       reflect: qwen2.5:7b              # heavier model for offline work
  *     timeout_ms: 60000
  *
@@ -40,7 +40,7 @@ import { sliceForProvider, worthAttempting } from '../lib/timeout-budget.mjs';
 function modelForSkill(cfg, skill) {
   const explicit = cfg.ollama?.models?.[skill];
   if (explicit) return explicit;
-  return cfg.ollama?.model || 'llama3.2:3b';
+  return cfg.ollama?.model || 'llama3.2:1b';
 }
 
 async function appendCostLog(cfg, entry) {
@@ -183,6 +183,18 @@ export function createOllama(cfg, log) {
 
     const content = parsed.choices?.[0]?.message?.content;
     if (!content) {
+      // Defensive: a qwen3 (thinking) model over Ollama's OpenAI-compat
+      // /v1/chat/completions emits its whole reply into `reasoning` and leaves
+      // `content` empty — it looks like the provider died. Surface that specific
+      // cause loudly so the operator knows to switch to a non-thinking model
+      // rather than chase a phantom timeout (NAP-BRIDGE-4).
+      const reasoning = parsed.choices?.[0]?.message?.reasoning;
+      if (typeof reasoning === 'string' && reasoning.length > 0) {
+        return providerFailure(
+          ERROR_CODES.UPSTREAM_EMPTY,
+          `ollama model ${model} returned reasoning-only (thinking mode) with empty content — use a non-thinking model (e.g. llama3.2:1b); see NAP-BRIDGE-4`,
+        );
+      }
       return providerFailure(ERROR_CODES.UPSTREAM_EMPTY, 'ollama returned an empty completion');
     }
 
