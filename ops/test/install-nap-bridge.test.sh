@@ -133,6 +133,21 @@ rc=$?
 contains "${err}" 'FATAL' \
   && ok "missing inputs: FATAL message"                           || bad "missing inputs: no FATAL message"
 
+# --- 5b. TORII_DOMAIN defaults NPC_RELAYS (NAP-BRIDGE-DEFAULT-RELAY-1) -----
+# When NPC_RELAYS is unset but TORII_DOMAIN and NPC_ALLOWLIST are set, the
+# installer must default NPC_RELAYS=wss://relay.<TORII_DOMAIN> and reach the
+# render step (rc=0). This matches torii-suite v0.9.8-alpha's subdomain relay.
+render_out="$(env -i PATH="$PATH" HOME=/tmp \
+  TORII_DOMAIN=example.test \
+  NPC_ALLOWLIST="npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq2vlwr7" \
+  bash "${INSTALLER}" --render-env 2>&1)"
+rc=$?
+[ "$rc" -eq 0 ] && ok "TORII_DOMAIN default: --render-env exits 0" \
+                 || bad "TORII_DOMAIN default: --render-env failed (rc=$rc) - ${render_out:0:200}"
+contains "${render_out}" 'wss://relay.example.test' \
+  && ok "TORII_DOMAIN default: NPC_RELAYS derived to wss://relay.example.test" \
+  || bad "TORII_DOMAIN default: NPC_RELAYS not derived"
+
 # --- 6. --help ---------------------------------------------------------------
 help_out="$(bash "${INSTALLER}" --help)"
 contains "${help_out}" 'NPC_RELAYS' \
