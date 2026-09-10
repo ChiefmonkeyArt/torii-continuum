@@ -15,7 +15,7 @@
  *   NPC_RELAYS="wss://a,wss://b"  relay URLs (DM delivery)
  *   NPC_ALLOWLIST="npub1…,hex…"   allowed sender npubs (fail-closed)
  *   NPC_OLLAMA_URL=http://127.0.0.1:11434/v1
- *   NPC_MODEL=qwen3:4b
+ *   NPC_MODEL=llama3.2:1b
  *   NPC_SOUL_FILE=/home/hermes-npc/.hermes/profiles/npc/SOUL.md
  */
 
@@ -45,7 +45,7 @@ const nsecHex = (process.env.NPC_NSEC || '').trim().toLowerCase();
 const relays = splitList(process.env.NPC_RELAYS);
 const allowlist = normalizeAllowlist(splitList(process.env.NPC_ALLOWLIST));
 const ollamaUrl = (process.env.NPC_OLLAMA_URL || 'http://127.0.0.1:11434/v1').replace(/\/$/, '');
-const model = process.env.NPC_MODEL || 'qwen3:4b';
+const model = process.env.NPC_MODEL || 'llama3.2:1b';
 const soulFile = process.env.NPC_SOUL_FILE || '/home/hermes-npc/.hermes/profiles/npc/SOUL.md';
 
 if (!/^[0-9a-f]{64}$/i.test(nsecHex)) {

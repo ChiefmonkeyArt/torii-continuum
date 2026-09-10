@@ -3,11 +3,11 @@
 # Torii Continuum — HERMES-OWNER-1 (Continuum-router primary)
 #
 # Idempotently provision the owner brain on a Debian/Ubuntu VPS:
-#   1. 'ollama' system user + local-only Ollama (127.0.0.1:11434) + qwen3:4b
+#   1. 'ollama' system user + local-only Ollama (127.0.0.1:11434) + llama3.2:1b
 #   2. 'hermes-owner' user + vanilla Nous Research Hermes, 'owner' profile
 #   3. Primary = the Continuum agent's OpenAI-compatible /v1 surface at
 #      http://127.0.0.1:8787/v1 (which itself routes Routstr-first → Ollama).
-#      Fallback = local Ollama qwen3:4b so the owner brain keeps answering
+#      Fallback = local Ollama llama3.2:1b so the owner brain keeps answering
 #      when the paid path is down.
 #
 # Usage (run as root):
@@ -27,11 +27,11 @@
 #   config.yaml is IGNORED by the CLI worker — only the MAIN
 #   `~/.hermes/config.yaml` fallback is read. We therefore write the fallback
 #   into the main config too (idempotently, only if the section is missing),
-#   so `qwen3:4b` really kicks in when the router path fails.
+#   so `llama3.2:1b` really kicks in when the router path fails.
 #
 set -uo pipefail
 
-OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3:4b}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2:1b}"
 OLLAMA_USER="ollama"
 HERMES_OWNER_USER="hermes-owner"
 HERMES_PROFILE="owner"
@@ -63,7 +63,7 @@ Flags:
   --dry-run         print the plan and exit without making any changes
   -h, --help        this message
 Environment:
-  OLLAMA_MODEL              local fallback model (default: qwen3:4b)
+  OLLAMA_MODEL              local fallback model (default: llama3.2:1b — non-thinking)
   CONTINUUM_ROUTER_URL      primary /v1 base URL (default: http://127.0.0.1:8787/v1)
   CONTINUUM_ROUTER_MODEL    primary model id served by /v1 (default: chat)
   CONTINUUM_ROUTER_TOKEN    bearer for the router /v1 (matches
@@ -81,7 +81,7 @@ render_profile_config_yaml() {
 # Torii Continuum — hermes-owner profile
 #
 # Primary: Continuum agent /v1 (delegates to model-router: Routstr-first → local).
-# Fallback: local Ollama qwen3:4b. See docs/hermes-two-voice.md.
+# Fallback: local Ollama llama3.2:1b. See docs/hermes-two-voice.md.
 model:
   provider: custom
   default: "${CONTINUUM_ROUTER_MODEL}"
