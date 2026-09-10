@@ -19,6 +19,10 @@
  * limiting (NAP-BRIDGE-5) bounds the FREE local inference too: a spammer cannot
  * peg the host CPU by flooding, because the check runs before every inference.
  *
+ * Public mode (NAP-BRIDGE-6): when `public: true` every authenticated sender is
+ * admitted (the rate limiter becomes the ONLY throttle) and the allowlist is
+ * ignored. Default is fail-closed — public must be an explicit opt-in.
+ *
  * The pure helpers are exported for unit tests; the loop is a factory with
  * injected deps (pool, signer, chat, giftWrap) so tests never touch a live
  * relay.
@@ -240,7 +244,7 @@ export function giftWrapSeal(seal, senderHex, createdAt = Math.floor(Date.now() 
 
 /**
  * @param {object} deps
- * @param {object} deps.cfg      { relayUrls:string[], allowlist:Set<string>, soul:string, model:string, rateLimit?:{windowMs:number, maxPerWindow:number} }
+ * @param {object} deps.cfg      { relayUrls:string[], allowlist:Set<string>, soul:string, model:string, public:boolean, rateLimit?:{windowMs:number, maxPerWindow:number} }
  * @param {string} deps.greeterHex  greeter pubkey (hex) — derived from the local nsec
  * @param {object} deps.log      { info, warn, error } (or console-shaped)
  * @param {object} deps.pool     nostr-tools SimplePool (or compatible stub)
@@ -301,8 +305,10 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
       }
       const senderHex = seal.pubkey.toLowerCase();
 
-      // 5. Fail-closed allowlist gate — before any inference.
-      if (!isSenderAllowed(senderHex, cfg.allowlist)) {
+      // 5. Access gate — before any inference. Public mode admits every
+      //    authenticated sender (rate-limited next); otherwise fail-closed
+      //    allowlist (empty admits nobody).
+      if (!cfg.public && !isSenderAllowed(senderHex, cfg.allowlist)) {
         log.warn('[npc-gateway] dropped non-allowlisted sender');
         return;
       }

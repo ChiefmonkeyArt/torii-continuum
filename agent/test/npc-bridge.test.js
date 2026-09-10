@@ -180,7 +180,7 @@ function buildInbound({ senderSk, senderHex, greeterHex, plaintext }) {
   return { wrap, seal, rumor };
 }
 
-function makeBridge({ inbound, sealOverride, rumorOverride, chat, signerCb, rateLimit }) {
+function makeBridge({ inbound, sealOverride, rumorOverride, chat, signerCb, rateLimit, public: isPublic, allowlist }) {
   const calls = { decrypt: 0, chat: 0, encrypt: 0, sign: 0, publish: 0, wrap: 0 };
   const senderHex = inbound.seal.pubkey; // the real sender
   const chatFn = chat ?? (async () => { calls.chat++; return { ok: true, content: 'reply' }; });
@@ -200,7 +200,7 @@ function makeBridge({ inbound, sealOverride, rumorOverride, chat, signerCb, rate
     },
   };
   const bridge = createNpcBridge({
-    cfg: { relayUrls: ['wss://r'], allowlist: new Set([senderHex]), soul: 'SOUL', model: 'm', rateLimit },
+    cfg: { relayUrls: ['wss://r'], allowlist: allowlist ?? new Set([senderHex]), soul: 'SOUL', model: 'm', public: isPublic, rateLimit },
     greeterHex: GREETER,
     log: silentLog,
     pool: {
@@ -245,6 +245,30 @@ test('over-limit sender is throttled: one notice reply, no extra chat (NAP-BRIDG
   await bridge.handleEvent(inbound.wrap); // 3rd — silent drop (no second notice)
   assert.equal(calls.chat, 1);
   assert.equal(calls.publish, 2);
+});
+
+test('public mode admits any authenticated sender even with an empty allowlist (NAP-BRIDGE-6)', async () => {
+  const senderSk = generateSecretKey();
+  const senderHex = getPublicKey(senderSk);
+  const inbound = buildInbound({ senderSk, senderHex, greeterHex: GREETER, plaintext: 'hi' });
+  const { bridge, calls } = makeBridge({ inbound, public: true, allowlist: new Set() });
+  await bridge.handleEvent(inbound.wrap);
+  assert.equal(calls.chat, 1);   // admitted — the allowlist gate is bypassed
+  assert.equal(calls.publish, 1);
+});
+
+test('public mode still rate-limits a flooding sender', async () => {
+  const senderSk = generateSecretKey();
+  const senderHex = getPublicKey(senderSk);
+  const inbound = buildInbound({ senderSk, senderHex, greeterHex: GREETER, plaintext: 'x' });
+  const { bridge, calls } = makeBridge({
+    inbound, public: true, allowlist: new Set(), rateLimit: { windowMs: 60_000, maxPerWindow: 1 },
+  });
+  await bridge.handleEvent(inbound.wrap); // 1st — allowed
+  assert.equal(calls.chat, 1);
+  await bridge.handleEvent(inbound.wrap); // 2nd — over limit: one notice, no chat
+  assert.equal(calls.chat, 1);
+  assert.equal(calls.publish, 2);         // throttle notice still sent
 });
 
 test('non-gift-wrap kind is dropped before any decrypt/compute', async () => {

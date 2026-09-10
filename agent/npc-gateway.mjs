@@ -14,6 +14,9 @@
  *   NPC_NSEC=<64-hex>            greeter nsec (minted at install; disposable)
  *   NPC_RELAYS="wss://a,wss://b"  relay URLs (DM delivery)
  *   NPC_ALLOWLIST="npub1…,hex…"   allowed sender npubs (fail-closed)
+ *   NPC_PUBLIC=1                  admit EVERY authenticated sender (allowlist
+ *                                 ignored; the per-sender rate limit becomes the
+ *                                 only throttle). Off by default.
  *   NPC_OLLAMA_URL=http://127.0.0.1:11434/v1
  *   NPC_MODEL=llama3.2:1b
  *   NPC_SOUL_FILE=/home/hermes-npc/.hermes/profiles/npc/SOUL.md
@@ -46,6 +49,7 @@ if (!enabled) {
 const nsecHex = (process.env.NPC_NSEC || '').trim().toLowerCase();
 const relays = splitList(process.env.NPC_RELAYS);
 const allowlist = normalizeAllowlist(splitList(process.env.NPC_ALLOWLIST));
+const isPublic = process.env.NPC_PUBLIC === '1' || process.env.NPC_PUBLIC === 'true';
 const ollamaUrl = (process.env.NPC_OLLAMA_URL || 'http://127.0.0.1:11434/v1').replace(/\/$/, '');
 const model = process.env.NPC_MODEL || 'llama3.2:1b';
 const soulFile = process.env.NPC_SOUL_FILE || '/home/hermes-npc/.hermes/profiles/npc/SOUL.md';
@@ -66,8 +70,8 @@ if (relays.length === 0) {
   log.error('[npc-gateway] NPC_RELAYS is empty. Refusing to start.');
   process.exit(1);
 }
-if (allowlist.size === 0) {
-  log.error('[npc-gateway] NPC_ALLOWLIST normalises to zero senders — fail-closed. Refusing to start.');
+if (allowlist.size === 0 && !isPublic) {
+  log.error('[npc-gateway] NPC_ALLOWLIST normalises to zero senders and NPC_PUBLIC is off — fail-closed. Refusing to start.');
   process.exit(1);
 }
 
@@ -102,7 +106,7 @@ log.info(`[npc-gateway] greeter pubkey ${greeterHex.slice(0, 8)}… (local ephem
 
 const pool = new SimplePool();
 const bridge = createNpcBridge({
-  cfg: { relayUrls: relays, allowlist, soul, model, rateLimit },
+  cfg: { relayUrls: relays, allowlist, soul, model, public: isPublic, rateLimit },
   greeterHex,
   log,
   pool,
