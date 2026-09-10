@@ -55,8 +55,8 @@ contains "${out}" 'NPC_ALLOWLIST=npub1alice,abc123' \
   && ok "env: allowlist present"                                  || bad "env: allowlist missing"
 contains "${out}" 'NPC_OLLAMA_URL=http://127.0.0.1:11434/v1' \
   && ok "env: local Ollama default"                               || bad "env: Ollama URL wrong"
-contains "${out}" 'NPC_MODEL=qwen3:4b' \
-  && ok "env: model qwen3:4b"                                     || bad "env: model wrong"
+contains "${out}" 'NPC_MODEL=qwen3:0.6b' \
+  && ok "env: model qwen3:0.6b (default)"                         || bad "env: model wrong"
 
 if contains "${out}" 'NPC_CLIENT_SECRET' || contains "${out}" 'NPC_BUNKER_PUBKEY' \
    || contains "${out}" 'nostrconnect://' || contains "${out}" '127.0.0.1:8787' \

@@ -24,7 +24,10 @@
 # Environment:
 #   NPC_RELAYS          comma-separated Nostr relay URLs (required)
 #   NPC_ALLOWLIST       comma-separated allowed sender npubs/hex (required, fail-closed)
-#   NPC_MODEL           local inference model (default: qwen3:4b)
+#   NPC_MODEL           local inference model (default: qwen3:0.6b — small,
+#                       ~522 MB, replies in seconds on a 8 GB VPS. Override
+#                       to qwen3:4b or larger only if the host has the RAM
+#                       and t/s budget; qwen3:4b on 8 GB no-swap = ~0.7 t/s.)
 #   NPC_OLLAMA_URL      local Ollama /v1 base URL (default: http://127.0.0.1:11434/v1)
 #   NPC_SOUL_FILE       greeter SOUL.md path (default: /home/hermes-npc/.hermes/profiles/npc/SOUL.md)
 #   NAP_BRIDGE_USER     unix user (default: hermes-npc)
@@ -44,7 +47,7 @@ set -uo pipefail
 
 NAP_BRIDGE_USER="${NAP_BRIDGE_USER:-hermes-npc}"
 AGENT_DIR="${AGENT_DIR:-/opt/torii/continuum-agent}"
-NPC_MODEL="${NPC_MODEL:-qwen3:4b}"
+NPC_MODEL="${NPC_MODEL:-qwen3:0.6b}"
 NPC_OLLAMA_URL="${NPC_OLLAMA_URL:-http://127.0.0.1:11434/v1}"
 NPC_SOUL_FILE="${NPC_SOUL_FILE:-/home/hermes-npc/.hermes/profiles/npc/SOUL.md}"
 

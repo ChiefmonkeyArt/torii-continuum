@@ -102,9 +102,21 @@ const bridge = createNpcBridge({
 
 await bridge.start();
 
+// Node's event loop needs at least one active handle to stay alive between
+// gift-wrap events. The WebSocket connections opened by nostr-tools SimplePool
+// are not sufficient on their own — a socket-only process can exit as soon as
+// bridge.start() resolves, before any DM is received. A recurring no-op timer
+// is the cheapest active handle and does not conflict with a subsequent
+// clearInterval on shutdown.
+//
+// (Do NOT use `await new Promise(() => {})` — Node 22 rejects an unsettled
+// top-level await with exit code 13.)
+const keepAlive = setInterval(() => {}, 60_000);
+
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
     log.info(`[npc-gateway] ${sig} — shutting down`);
+    clearInterval(keepAlive);
     bridge.stop();
     pool.close(relays);
     process.exit(0);

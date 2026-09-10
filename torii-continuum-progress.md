@@ -9,6 +9,37 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.113-alpha — NAP-BRIDGE-3 wire-shape fix + gateway keepalive + greeter model default (2026-09-09)
+
+**What shipped.** Three hot-patches that were proven live on the VPS during the NAP-BRIDGE-3 round-trip work now roll up into a proper slice, tests, and docs.
+
+**Fix 1 — subscribeMany filter shape (`agent/core/npc-bridge.mjs`).** nostr-tools `SimplePool.subscribeMany(relays, filter, params)` takes a BARE filter object as arg 2. NAP-BRIDGE-3 v0.2.112-alpha was passing `[{ kinds:[1059], '#p':[greeterHex] }]`, which serialised on the wire as `["REQ","sub:1",[{...}]]` — every relay strfry/damus/nos.lol/nostr.band/primal/wine/snort/wellorder/nostrplebs tested rejected with `bad req: provided filter is not an object`. The greeter appeared "subscribed" but received zero events. Fix drops the outer array wrap. Reproduced end-to-end on the operator's own strfry (own-relay stack landed alongside; see suite-side slice below): before-fix subscription returned 0 events; after-fix a spy WebSocket saw all 5 queued gift wraps delivered and the gateway processed them.
+
+**Fix 2 — gateway keepalive (`agent/npc-gateway.mjs`).** Node's event loop needs at least one active handle to stay alive between gift-wrap events. The websocket connections opened by `SimplePool` are not sufficient on their own — a socket-only process can exit as soon as `bridge.start()` resolves. Added `const keepAlive = setInterval(() => {}, 60_000);` — the cheapest active handle; cleared on SIGINT/SIGTERM. Deliberately NOT `await new Promise(() => {})`: Node 22 rejects an unsettled top-level await with exit code 13, which is exactly the symptom we hit on the VPS before hot-patching.
+
+**Fix 3 — greeter model default (`ops/install-nap-bridge.sh`, `docs/nap-bridge-1.md`, `ops/test/install-nap-bridge.test.sh`).** Default `NPC_MODEL` was `qwen3:4b` (2.5 GB, ~0.7 t/s on the 8 GB no-swap VPS — replies took 4+ minutes and exceeded Node's default 300s headers timeout, surfacing as `no reply from inference unreachable`). New default `qwen3:0.6b` (~522 MB, 3 t/s, replies in seconds). Documented that larger models are opt-in for hosts with the RAM + t/s budget. Owner-side Continuum config remains `qwen3:4b` in `ops/README.md` (Routstr-primary; Ollama is the degraded fallback there, not the primary).
+
+**Tests.** New `agent/test/npc-bridge-wire.test.js` (+2 tests) spies on the pool and asserts the filter argument's runtime shape is a bare object (`!Array.isArray(filter)`), and that manually stringifying `[filter]` yields a well-formed JSON array whose sole element is a plain object. A future refactor that re-introduces the array wrap turns this test red. Agent `node --test` **512/512** green (was 464 pre-slice; +2 new + 46 from the parallel v0.2.108–v0.2.112 slices already merged). Frontend `vitest run` **1813/1813** green (64 files). `ops/test/install-nap-bridge.test.sh` **28/28** green (env default updated). `npm run build` clean (44 modules, 191.77 kB / gzip 59.93 kB).
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json` files: 0.2.112-alpha → 0.2.113-alpha.
+
+**Update-All checklist.**
+
+- Code + tests: [done] three fixes + 2-test regression harness + full suites green.
+- Version markers: [done] `package.json`, `agent/package.json`, both `package-lock.json`.
+- `src/config.js VERSION`: [n/a] not present in this repo.
+- `public/sw.js CACHE_VERSION`: [n/a] not present.
+- `tools/regression-check.mjs EXPECTED_VERSION`: [n/a] not present.
+- `index.html` labels: [n/a] no version label in the shipped HTML entry.
+- `MVP_APPROVAL_STATE.json` / `NEXT_ACTION_STATE.json`: [n/a] not present.
+- Continuity docs: [done] `torii-continuum-progress.md` (this entry), `torii-continuum-todo.md` (NAP-BRIDGE-3-FIXES-1 added + marked DONE), `torii-continuum-handoff.md` (next-boot line updated). `torii-continuum-strategy.md` skipped — no strategy change.
+- ADR: [skipped] no architecture change; the fix reverts a wrong wire shape to what nostr-tools's contract already required.
+- GitHub: PR to main + tag → handled below.
+
+**Follow-on (separate torii-suite slice, not this repo).** `install-nostr-git.sh` should provision `nginx` + certbot for `relay.<domain>` on operators who want an own-relay by default; `install-nap-bridge.sh` should default `NPC_RELAYS` to the operator's own relay URL if that relay is up. Own-relay path proved this session (strfry on `127.0.0.1:7777`, nginx WebSocket-proxy at `wss://relay.chiefmonkey.art`, cert via `certbot --webroot`, kind-10050 inbox event published on the own relay only). Deferred to a torii-suite PR.
+
+---
+
 ## v0.2.107-alpha — remove third-party AI-agent hosting refs; keep Continuum sovereign (2026-09-08)
 
 **What shipped.** DOCS-PPLX-PURGE-1: audit and remove every reference to a third-party AI-agent hosting environment from Continuum source and docs. The operator's directive: Continuum runs sovereign on the operator's own VPS — nothing referenced to that third party in any doc, and no runtime dependency on it. 82 hits across 40 files fixed.

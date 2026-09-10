@@ -290,9 +290,15 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
   async function start() {
     if (stopped) return;
     stopped = false;
+    // nostr-tools SimplePool.subscribeMany takes a BARE filter object as arg 2.
+    // Wrapping it in an array produces a malformed wire REQ of the shape
+    //   ["REQ","sub:1",[{...}]]
+    // which every relay rejects with "bad req: provided filter is not an object".
+    // The bug silently broke every relay in NAP-BRIDGE-3 v0.2.112. Regression
+    // test: agent/test/npc-bridge-wire.test.js.
     sub = pool.subscribeMany(
       cfg.relayUrls,
-      [{ kinds: [KIND_WRAP], '#p': [greeterHex] }],
+      { kinds: [KIND_WRAP], '#p': [greeterHex] },
       { onevent: (e) => { handleEvent(e); } },
     );
     log.info(`[npc-gateway] subscribed to kind-${KIND_WRAP} for ${greeterHex.slice(0, 8)}… on ${cfg.relayUrls.length} relay(s)`);
