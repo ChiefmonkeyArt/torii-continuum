@@ -6,7 +6,7 @@
 # via its CLI flags (no root, no users/systemd/curl are touched here):
 #
 #   1. --render-config emits LOCAL OLLAMA as the sole provider (provider custom,
-#      default qwen3:4b, base_url 127.0.0.1:11434/v1) and NEVER references the
+#      default llama3.2:1b, base_url 127.0.0.1:11434/v1) and NEVER references the
 #      Continuum router (127.0.0.1:8787), a router token, api_key_env, or a
 #      fallback_providers ladder — the greeter has no paid path.
 #   2. OLLAMA_MODEL and OLLAMA_BASE_URL overrides are honoured.
@@ -38,8 +38,8 @@ out="$(bash "${INSTALLER}" --render-config)"
 
 contains "${out}" 'provider: custom' \
   && ok "default: provider is custom"                             || bad "default: provider wrong"
-contains "${out}" 'default: "qwen3:4b"' \
-  && ok "default: model is qwen3:4b"                              || bad "default: model wrong"
+contains "${out}" 'default: "llama3.2:1b"' \
+  && ok "default: model is llama3.2:1b"                              || bad "default: model wrong"
 contains "${out}" 'base_url: "http://127.0.0.1:11434/v1"' \
   && ok "default: base_url points at local Ollama"                || bad "default: base_url wrong"
 
@@ -64,6 +64,8 @@ soul="$(bash "${INSTALLER}" --render-soul)"
 
 contains "${soul}" 'Torii greeter' \
   && ok "soul: identifies as the Torii greeter"                   || bad "soul: greeter identity missing"
+contains "${soul}" 'Your name is Nakama' \
+  && ok "soul: names itself Nakama and never invents another name" || bad "soul: Nakama name missing"
 contains "${soul}" 'NO tools' \
   && ok "soul: declares no tools"                                 || bad "soul: no-tools limit missing"
 contains "${soul}" 'local inference only' \
@@ -82,7 +84,7 @@ contains "${help_out}" 'OLLAMA_MODEL' \
 
 # --- 5. --dry-run (no side effects) ---------------------------------------
 rm -rf /home/hermes-npc
-dry="$(OLLAMA_MODEL="qwen3:4b" bash "${INSTALLER}" --dry-run 2>&1)"
+dry="$(OLLAMA_MODEL="llama3.2:1b" bash "${INSTALLER}" --dry-run 2>&1)"
 contains "${dry}" 'DRY RUN' \
   && ok "--dry-run: prints DRY RUN"                               || bad "--dry-run: no DRY RUN banner"
 contains "${dry}" 'SOUL.md' \

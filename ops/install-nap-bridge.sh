@@ -28,10 +28,15 @@
 #                       v0.9.8-alpha+'s subdomain relay). Explicit env still
 #                       wins.
 #   NPC_ALLOWLIST       comma-separated allowed sender npubs/hex (required, fail-closed)
-#   NPC_MODEL           local inference model (default: qwen3:0.6b — small,
-#                       ~522 MB, replies in seconds on a 8 GB VPS. Override
-#                       to qwen3:4b or larger only if the host has the RAM
-#                       and t/s budget; qwen3:4b on 8 GB no-swap = ~0.7 t/s.)
+#   NPC_MODEL           local inference model (default: llama3.2:1b — non-
+#                       thinking, ~1.3 GB, replies in ~2s on a 8 GB VPS.
+#                       qwen3:0.6b is NOT a valid default here: over Ollama's
+#                       OpenAI-compat /v1/chat/completions surface it emits its
+#                       whole reply into the `reasoning` field and returns an
+#                       empty `content`, so the greeter appears to go silent
+#                       (NAP-BRIDGE-DEFAULT-RELAY / qwen3 thinking-mode bug).
+#                       Override only to another NON-thinking model, or raise
+#                       the RAM budget for a larger one on a bigger host.)
 #   NPC_OLLAMA_URL      local Ollama /v1 base URL (default: http://127.0.0.1:11434/v1)
 #   NPC_SOUL_FILE       greeter SOUL.md path (default: /home/hermes-npc/.hermes/profiles/npc/SOUL.md)
 #   NAP_BRIDGE_USER     unix user (default: hermes-npc)
@@ -51,7 +56,7 @@ set -uo pipefail
 
 NAP_BRIDGE_USER="${NAP_BRIDGE_USER:-hermes-npc}"
 AGENT_DIR="${AGENT_DIR:-/opt/torii/continuum-agent}"
-NPC_MODEL="${NPC_MODEL:-qwen3:0.6b}"
+NPC_MODEL="${NPC_MODEL:-llama3.2:1b}"
 NPC_OLLAMA_URL="${NPC_OLLAMA_URL:-http://127.0.0.1:11434/v1}"
 NPC_SOUL_FILE="${NPC_SOUL_FILE:-/home/hermes-npc/.hermes/profiles/npc/SOUL.md}"
 
