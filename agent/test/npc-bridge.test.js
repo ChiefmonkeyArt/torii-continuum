@@ -21,6 +21,7 @@ import {
   isSenderAllowed,
   createRateLimiter,
   buildGreeterPrompt,
+  buildSystemPrompt,
   buildRumor,
   buildSealTemplate,
   buildWrapTemplate,
@@ -54,6 +55,15 @@ test('buildGreeterPrompt puts SOUL first then the message', () => {
   const out = buildGreeterPrompt('You are the greeter.', 'hello');
   assert.ok(out.startsWith('You are the greeter.'));
   assert.ok(out.endsWith('hello'));
+});
+
+test('buildSystemPrompt stacks SOUL, world, metaverse lore and skips empties (NAP-BRIDGE-7)', () => {
+  assert.equal(buildSystemPrompt({ soul: 'SOUL', world: '', lore: '' }), 'SOUL');
+  assert.equal(buildSystemPrompt({ soul: '', world: '', lore: '' }), '');
+  assert.equal(buildSystemPrompt({}), '');
+  assert.equal(buildSystemPrompt({ world: 'W', lore: 'L' }), '## This world\nW\n\n## Torii metaverse\nL');
+  const full = buildSystemPrompt({ soul: 'S', world: 'W', lore: 'L' });
+  assert.equal(full, 'S\n\n## This world\nW\n\n## Torii metaverse\nL');
 });
 
 // ─── Rate limiter (NAP-BRIDGE-5) ─────────────────────────────────────────────

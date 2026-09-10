@@ -153,6 +153,25 @@ export function buildGreeterPrompt(soul, incoming) {
 }
 
 /**
+ * Assemble the greeter's full system context from its three stable layers:
+ * SOUL (identity + hard limits), WORLD (this owner's world), and LORE (the shared
+ * Torii metaverse — NAP-BRIDGE-7). The second two are optional and only appear
+ * when non-empty, so a minimal install still works with SOUL alone.
+ * @param {{soul:string, world:string, lore:string}} [p]
+ * @returns {string}
+ */
+export function buildSystemPrompt({ soul = '', world = '', lore = '' } = {}) {
+  const parts = [];
+  const s = (soul || '').trim();
+  const w = (world || '').trim();
+  const l = (lore || '').trim();
+  if (s) parts.push(s);
+  if (w) parts.push(`## This world\n${w}`);
+  if (l) parts.push(`## Torii metaverse\n${l}`);
+  return parts.join('\n\n');
+}
+
+/**
  * Build the inner rumor (kind 14) for a reply. Signed indirectly by the seal
  * that wraps it — the rumor itself is unsigned, matching nostr-tools' NIP-17.
  * @param {{greeterHex:string, senderHex:string, plaintext:string, createdAt:number}} p

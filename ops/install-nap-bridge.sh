@@ -44,6 +44,13 @@
 #                       the RAM budget for a larger one on a bigger host.)
 #   NPC_OLLAMA_URL      local Ollama /v1 base URL (default: http://127.0.0.1:11434/v1)
 #   NPC_SOUL_FILE       greeter SOUL.md path (default: /home/hermes-npc/.hermes/profiles/npc/SOUL.md)
+#   NPC_WORLD_FILE      this world's lore .md (optional; default:
+#                       /home/hermes-npc/.hermes/profiles/npc/WORLD.md — seeded from
+#                       nap-bridge/WORLD.md.example on first install; edit it)
+#   NPC_LORE_FILE       shared Torii metaverse lore .md (optional; default:
+#                       /home/hermes-npc/.hermes/profiles/npc/TORII_LORE.md — seeded from
+#                       nap-bridge/TORII_LORE.md). Together these two make Nakama an
+#                       expert in this world + the metaverse (NAP-BRIDGE-7).
 #   NPC_RATE_WINDOW_MS  per-sender rate-limit window in milliseconds (default: 60000)
 #   NPC_RATE_MAX_PER_WINDOW  max replies per sender per window (default: 6). Beyond
 #                       it the greeter sends ONE throttle notice, then silently
@@ -74,6 +81,8 @@ AGENT_DIR="${AGENT_DIR:-/opt/torii/continuum-agent}"
 NPC_MODEL="${NPC_MODEL:-llama3.2:1b}"
 NPC_OLLAMA_URL="${NPC_OLLAMA_URL:-http://127.0.0.1:11434/v1}"
 NPC_SOUL_FILE="${NPC_SOUL_FILE:-/home/hermes-npc/.hermes/profiles/npc/SOUL.md}"
+NPC_WORLD_FILE="${NPC_WORLD_FILE:-/home/hermes-npc/.hermes/profiles/npc/WORLD.md}"
+NPC_LORE_FILE="${NPC_LORE_FILE:-/home/hermes-npc/.hermes/profiles/npc/TORII_LORE.md}"
 NPC_RATE_WINDOW_MS="${NPC_RATE_WINDOW_MS:-60000}"
 NPC_RATE_MAX_PER_WINDOW="${NPC_RATE_MAX_PER_WINDOW:-6}"
 NPC_PUBLIC="${NPC_PUBLIC:-0}"
@@ -84,6 +93,9 @@ ENV_FILE="${NAP_BRIDGE_DIR}/.env"
 UNIT_NAME="torii-nap-bridge.service"
 UNIT_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/systemd/${UNIT_NAME}"
 UNIT_DEST="/etc/systemd/system/${UNIT_NAME}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LORE_SRC="${SCRIPT_DIR}/nap-bridge/TORII_LORE.md"
+WORLD_TEMPLATE="${SCRIPT_DIR}/nap-bridge/WORLD.md.example"
 
 info() { printf '==> %s\n' "$*"; }
 warn() { printf 'WARN %s\n' "$*" >&2; }
@@ -142,6 +154,8 @@ NPC_ALLOWLIST=${NPC_ALLOWLIST:-}
 NPC_OLLAMA_URL=${NPC_OLLAMA_URL}
 NPC_MODEL=${NPC_MODEL}
 NPC_SOUL_FILE=${NPC_SOUL_FILE}
+NPC_WORLD_FILE=${NPC_WORLD_FILE}
+NPC_LORE_FILE=${NPC_LORE_FILE}
 NPC_RATE_WINDOW_MS=${NPC_RATE_WINDOW_MS}
 NPC_RATE_MAX_PER_WINDOW=${NPC_RATE_MAX_PER_WINDOW}
 NPC_PUBLIC=${NPC_PUBLIC}
@@ -236,6 +250,21 @@ else
   { render_env "$(nsec_field nsec_hex)"; } > "$ENV_FILE" || die "write $ENV_FILE failed"
   chown "${NAP_BRIDGE_USER}:${NAP_BRIDGE_USER}" "$ENV_FILE"
   chmod 0600 "$ENV_FILE"
+fi
+
+# Seed Nakama's world + metaverse lore (NAP-BRIDGE-7). Copied from the repo
+# templates on FIRST install only — never overwrite an operator's edits, so an
+# operator who has shaped their world's WORLD.md keeps it across reinstalls.
+PROFILE_DIR="$(dirname "$NPC_LORE_FILE")"
+mkdir -p "$PROFILE_DIR" || warn "mkdir $PROFILE_DIR failed"
+chown "${NAP_BRIDGE_USER}:${NAP_BRIDGE_USER}" "$PROFILE_DIR"
+if [ ! -f "$NPC_LORE_FILE" ] && [ -f "$LORE_SRC" ]; then
+  cp "$LORE_SRC" "$NPC_LORE_FILE" && chown "${NAP_BRIDGE_USER}:${NAP_BRIDGE_USER}" "$NPC_LORE_FILE"
+  info "seeded $NPC_LORE_FILE (shared Torii metaverse lore)"
+fi
+if [ ! -f "$NPC_WORLD_FILE" ] && [ -f "$WORLD_TEMPLATE" ]; then
+  cp "$WORLD_TEMPLATE" "$NPC_WORLD_FILE" && chown "${NAP_BRIDGE_USER}:${NAP_BRIDGE_USER}" "$NPC_WORLD_FILE"
+  info "seeded $NPC_WORLD_FILE (edit it with this world's facts)"
 fi
 
 render_unit > "$UNIT_DEST" || die "write $UNIT_DEST failed"
