@@ -20,6 +20,8 @@
  *   NPC_OLLAMA_URL=http://127.0.0.1:11434/v1
  *   NPC_MODEL=llama3.2:1b
  *   NPC_SOUL_FILE=/home/hermes-npc/.hermes/profiles/npc/SOUL.md
+ *   NPC_WORLD_FILE=/home/hermes-npc/.hermes/profiles/npc/WORLD.md       (optional; this world)
+ *   NPC_LORE_FILE=/home/hermes-npc/.hermes/profiles/npc/TORII_LORE.md   (optional; shared metaverse)
  *   NPC_RATE_WINDOW_MS=60000      per-sender rate-limit window (ms)
  *   NPC_RATE_MAX_PER_WINDOW=6     max replies per sender per window
  */
@@ -27,7 +29,7 @@
 import { readFile } from 'node:fs/promises';
 import { SimplePool } from 'nostr-tools/pool';
 import { createLocalSigner } from './core/npc-signer.mjs';
-import { normalizeAllowlist, createNpcBridge } from './core/npc-bridge.mjs';
+import { normalizeAllowlist, createNpcBridge, buildSystemPrompt } from './core/npc-bridge.mjs';
 
 function splitList(v) {
   if (!v) return [];
@@ -53,6 +55,8 @@ const isPublic = process.env.NPC_PUBLIC === '1' || process.env.NPC_PUBLIC === 't
 const ollamaUrl = (process.env.NPC_OLLAMA_URL || 'http://127.0.0.1:11434/v1').replace(/\/$/, '');
 const model = process.env.NPC_MODEL || 'llama3.2:1b';
 const soulFile = process.env.NPC_SOUL_FILE || '/home/hermes-npc/.hermes/profiles/npc/SOUL.md';
+const worldFile = process.env.NPC_WORLD_FILE || '/home/hermes-npc/.hermes/profiles/npc/WORLD.md';
+const loreFile = process.env.NPC_LORE_FILE || '/home/hermes-npc/.hermes/profiles/npc/TORII_LORE.md';
 
 // Per-sender rate limit (NAP-BRIDGE-5). The greeter's inference is FREE but
 // still costs CPU, so a spammer must not be able to peg the host by flooding
@@ -79,6 +83,11 @@ const soul = await readFile(soulFile, 'utf8').catch(() => {
   log.warn('[npc-gateway] SOUL file missing; the greeter will run without its persona. File:', soulFile);
   return '';
 });
+// World + metaverse lore are optional layers (NAP-BRIDGE-7); missing ones are
+// simply absent, so a minimal install still works on SOUL alone.
+const world = await readFile(worldFile, 'utf8').catch(() => '');
+const lore = await readFile(loreFile, 'utf8').catch(() => '');
+const systemContext = buildSystemPrompt({ soul, world, lore });
 
 // Local Ollama — this process's one and only inference surface (no router).
 async function chat({ messages }) {
@@ -106,7 +115,7 @@ log.info(`[npc-gateway] greeter pubkey ${greeterHex.slice(0, 8)}… (local ephem
 
 const pool = new SimplePool();
 const bridge = createNpcBridge({
-  cfg: { relayUrls: relays, allowlist, soul, model, public: isPublic, rateLimit },
+  cfg: { relayUrls: relays, allowlist, soul: systemContext, model, public: isPublic, rateLimit },
   greeterHex,
   log,
   pool,
