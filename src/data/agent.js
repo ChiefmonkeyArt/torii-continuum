@@ -476,6 +476,38 @@ export async function refreshProjectSources(slug) {
   return req('POST', `/api/projects/${encodeURIComponent(slug)}/sources/refresh`, {});
 }
 
+// ─── Noticeboard (NAP-BRIDGE-8) ─────────────────────────────
+// The node only ever DRAFTS. It returns the unsigned kind-30078 event plus the
+// relay the operator must sign (NIP-07, in-browser) and publish to. The node has
+// no publish path and never holds the operator's key.
+
+/**
+ * POST /api/noticeboard/draft — compose + validate a notices list into an
+ * unsigned event and persist it as a draft. Returns { ok, file, event, relay }
+ * or a refusal with a `reason`.
+ */
+export async function noticeboardDraft(notices) {
+  return req('POST', '/api/noticeboard/draft', { notices });
+}
+
+/**
+ * GET /api/pending — list the unsigned drafts waiting for the operator. Each
+ * entry carries `file`, `kind`, `tags`, `_proposed_at`.
+ */
+export async function pendingDrafts() {
+  return req('GET', '/api/pending');
+}
+
+/** GET /api/pending/:file — the full unsigned event to sign. */
+export async function pendingDraft(file) {
+  return req('GET', `/api/pending/${encodeURIComponent(file)}`);
+}
+
+/** DELETE /api/pending/:file — discard a draft after signing or rejection. */
+export async function discardDraft(file) {
+  return req('DELETE', `/api/pending/${encodeURIComponent(file)}`);
+}
+
 // ─── Chat ───────────────────────────────────────────────────
 
 export async function chat({ message, context }) {

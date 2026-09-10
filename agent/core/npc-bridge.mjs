@@ -188,9 +188,7 @@ export function buildSystemPrompt({ soul = '', world = '', lore = '' } = {}) {
 // event; Nakama reads it (cached) and NEVER publishes it.
 
 /** NIP-78 application-data kind reused for the world noticeboard. */
-export const NOTICEBOARD_KIND = 30078;
-/** The `d` tag that identifies the operator's noticeboard event. */
-export const NOTICEBOARD_D = 'noticeboard';
+export { NOTICEBOARD_KIND, NOTICEBOARD_D, NOTICE_KINDS, MAX_NOTICES } from './noticeboard-contract.mjs';
 
 /**
  * Parse a noticeboard event's content into its notices array, or null when the

@@ -30,6 +30,7 @@ import { renderDashboard } from './views/dashboard.js';
 import { renderTeam } from './views/team.js';
 import { renderGenesis } from './views/genesis.js';
 import { renderMemory } from './views/memory.js';
+import { renderNoticeboard } from './views/noticeboard.js';
 
 function setLandingMode(on) {
   const app = document.getElementById('app');
@@ -132,6 +133,7 @@ function boot() {
   route('/team', guarded('/team', () => { setLandingMode(false); renderTeam(mainContent()); renderSidebar(); }));
   route('/genesis', guarded('/genesis', () => { setLandingMode(false); renderGenesis(mainContent()); renderSidebar(); }));
   route('/memory', guarded('/memory', () => { setLandingMode(false); renderMemory(mainContent()); renderSidebar(); }));
+  route('/noticeboard', guarded('/noticeboard', () => { setLandingMode(false); renderNoticeboard(mainContent()); renderSidebar(); }));
   route('/dashboard', guarded('/dashboard', () => { setLandingMode(false); renderDashboard(mainContent()); renderSidebar(); }));
 
   // Public demo surface (/demo/*). Read-only mockup rendered from obviously-fake
@@ -152,6 +154,7 @@ function boot() {
   // demo-only preview screens per the v0.2.86 brief.
   route('/demo/genesis',  demoRoute('/demo/genesis',  () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Genesis' }); renderSidebar(); }));
   route('/demo/memory',   demoRoute('/demo/memory',   () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Memory' }); renderSidebar(); }));
+  route('/demo/noticeboard', demoRoute('/demo/noticeboard', () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Noticeboard' }); renderSidebar(); }));
   route('/demo/settings', demoRoute('/demo/settings', () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Settings' }); renderSidebar(); }));
   route('/demo/health',   demoRoute('/demo/health',   () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Health' }); renderSidebar(); }));
 

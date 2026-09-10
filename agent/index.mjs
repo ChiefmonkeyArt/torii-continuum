@@ -46,6 +46,7 @@ import { createProjectSources } from './core/project-sources.mjs';
 import { createReleaseChecker } from './core/release-check.mjs';
 import { createUpdater } from './core/updater.mjs';
 import { createGenesis, ownerHexFromNpub } from './core/genesis.mjs';
+import { composeNoticeboard } from './core/noticeboard.mjs';
 import { createAudit } from './lib/audit.mjs';
 import { getConstitution } from './lib/constitution.mjs';
 
@@ -476,6 +477,12 @@ const updateMax =
 const genesisMax =
   Number.isFinite(cfg.rate_limit?.genesis_per_min) && cfg.rate_limit.genesis_per_min > 0
     ? cfg.rate_limit.genesis_per_min
+    : 6;
+// Admin-gated noticeboard draft. The noticeboard is a single replaceable event;
+// drafting it is rare, so keep the ceiling low.
+const noticeboardMax =
+  Number.isFinite(cfg.rate_limit?.noticeboard_draft_per_min) && cfg.rate_limit.noticeboard_draft_per_min > 0
+    ? cfg.rate_limit.noticeboard_draft_per_min
     : 6;
 
 // Continuum project slugs are lowercase kebab (see src/data/store.js slugify).
@@ -1271,6 +1278,35 @@ app.delete('/api/pending/:file', { preHandler: requireAdmin }, async (req, reply
     return reply.code(404).send({ error: e.message });
   }
 });
+
+// POST /api/noticeboard/draft — compose + validate a noticeboard and write the
+// UNSIGNED kind-30078 event to pending/ for the operator to sign (NIP-07) and
+// publish. The node never signs or publishes — it only drafts; the browser holds
+// the key and the relay is part of the draft response, not a node write path.
+const noticeboardRelay =
+  (typeof cfg.noticeboard?.relay === 'string' && cfg.noticeboard.relay.trim()) ||
+  (typeof process.env.NOTICEBOARD_RELAY === 'string' && process.env.NOTICEBOARD_RELAY.trim()) ||
+  'wss://relay.chiefmonkey.art';
+
+app.post(
+  '/api/noticeboard/draft',
+  { preHandler: requireAdmin, config: rateLimitConfig(noticeboardMax, '/api/noticeboard/draft') },
+  async (req, reply) => {
+    const composed = composeNoticeboard(req.body?.notices, { createdAt: Math.floor(Date.now() / 1000) });
+    if (!composed.ok) return reply.code(400).send({ error: composed.reason });
+
+    const dir = join(AGENT_ROOT, 'pending');
+    await mkdir(dir, { recursive: true });
+    const file = 'noticeboard.draft.json';
+    // The shelf stores the relay alongside the event so a draft re-opened days
+    // later still knows where it must land. `_relay`/`_proposed_at` are shelf
+    // metadata, stripped before signing (the signer signs only kind/content/
+    // created_at/tags).
+    const draft = { ...composed.event, _relay: noticeboardRelay, _proposed_at: Date.now() };
+    await writeFile(join(dir, file), JSON.stringify(draft), 'utf8');
+    return { file, event: composed.event, relay: noticeboardRelay };
+  },
+);
 
 // ─────────────────────────────────────────────────────────────
 // Onboarding routes (v0.2.35-alpha) — wallet (Step 2) + Routstr (Step 3)

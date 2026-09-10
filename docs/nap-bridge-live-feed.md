@@ -1,7 +1,9 @@
 # NAP-BRIDGE — read-only world noticeboard (single replaceable event)
 
-Status: **decided + read path implemented (NAP-BRIDGE-8, v0.2.122-alpha)**. The operator
-still owns publishing. Follows NAP-BRIDGE-7 (the lore layer).
+Status: **decided + read path AND publish surface implemented** (NAP-BRIDGE-8,
+v0.2.122 read path, v0.2.124 publish surface). The operator owns publishing via the
+Continuum draft → review → sign → publish flow; Nakama only reads. Follows
+NAP-BRIDGE-7 (the lore layer).
 The static `WORLD.md` + `TORII_LORE.md` layers give Nakama the *stable* context; this
 adds the *changing* context — auctions, sales, and events — without ever letting
 Nakama publish anything.
@@ -131,10 +133,13 @@ treat private audiences as a later concern.
    truth source. Locked in code as `NOTICEBOARD_KIND` / `NOTICEBOARD_D`, with a test
    pinning both values.
 2. **The operator publishes**, via the same draft → human-approve → sign discipline as
-   everything in Continuum. Until that publish surface is wired, the operator posts the
-   single event with any NIP-07 tooling. **The read path is publish-agnostic**: Nakama
-   trusts exactly the operator's npub (configured as `NPC_NOTICE_AUTHOR`) and ignores
-   every other author.
+   everything in Continuum. The publish surface is the Continuum **Noticeboard** view:
+   the node only *drafts* the unsigned event (`POST /api/noticeboard/draft` validates +
+   writes it to the pending shelf), the operator reviews it and signs it in the browser
+   (NIP-07 — no key on the node), the signed event is published over a WebSocket to the
+   operator's relay, and the draft is discarded on success. **The read path is
+   publish-agnostic**: Nakama trusts exactly the operator's npub (configured as
+   `NPC_NOTICE_AUTHOR`) and ignores every other author.
 3. **Cache = in-memory, 60s TTL.** There is only one noticeboard per operator, so the
    cache key is nothing more than the configured author. Fetched lazily on first need,
    injected into the system context on every reply when present; empty when absent or
@@ -149,7 +154,32 @@ treat private audiences as a later concern.
 - `npc-bridge.mjs` appends the noticeboard text to the system turn when non-empty
    (pure helpers `parseNoticeboard` / `formatNotices` / `createNoticeboardCache`), and
    degrades to "answer without notices" if the fetch fails — never drops the reply.
-3. Nakama still has **no publish path** — nothing to spam, ever.
+
+## Implemented publish surface (NAP-BRIDGE-8, v0.2.124)
+
+The operator's Continuum web app carries the only write path, shaped as
+**draft → review → sign → publish**. The node stays drafting-only throughout:
+
+- `noticeboard-contract.mjs` is the single source of `NOTICEBOARD_KIND` / `NOTICEBOARD_D`,
+   shared by the greeter read path and the operator write path so the kind and `d` tag
+   cannot drift.
+- `noticeboard.mjs` (pure) validates + normalises the notices (`normalizeNotices`, capped
+   note/body/url lengths, price must be a finite non-negative integer) and builds the
+   unsigned event (`composeNoticeboard`). No key, no signing, no relay — drafting only.
+- `POST /api/noticeboard/draft` (admin-gated, rate-limited) composes the event and writes
+   `noticeboard.draft.json` (event + `_relay` + `_proposed_at` metadata) onto the existing
+   `pending` shelf, returning `{file, event, relay}`. `GET/DELETE /api/pending[/:file]`
+   already served the shelf for other drafts.
+- The **Noticeboard** view reuses that shelf: compose notices, review the rendered board,
+   sign with a NIP-07 signer in the browser (no `nsec` on the VPS), publish the signed
+   event to the operator's relay over a WebSocket (`["EVENT", …]`), and discard the draft
+   on success. Shelf metadata (`_relay`, `_proposed_at`) is stripped before signing — the
+   signer sees exactly `{kind, content, created_at, tags}`.
+- The relay is `noticeboard.relay` in `config.yaml` (fallback `NOTICEBOARD_RELAY`, then
+   `wss://relay.chiefmonkey.art`) — the same relay Nakama reads, so the board lands where
+   the greeter actually looks.
+
+Nakama still has **no publish path** — nothing to spam, ever.
 
 ## What is explicitly deferred
 

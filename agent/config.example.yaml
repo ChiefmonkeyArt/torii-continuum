@@ -317,6 +317,18 @@ model_router:
 
 
 # ─────────────────────────────────────────────────────────────
+# Noticeboard (NAP-BRIDGE-8) — the operator's read-only world notice
+# ─────────────────────────────────────────────────────────────
+# Nakama (the greeter) reads this operator's kind-30078 d="noticeboard" event.
+# The Continuum publish surface drafts the event here and the operator signs it
+# in the browser; this is the relay it must land on (the same relay Nakama
+# queries). Leave unset to fall back to NOTICEBOARD_RELAY or the default
+# wss://relay.chiefmonkey.art.
+noticeboard:
+  relay: "wss://relay.chiefmonkey.art"
+
+
+# ─────────────────────────────────────────────────────────────
 # Skills (v1)
 # ─────────────────────────────────────────────────────────────
 #

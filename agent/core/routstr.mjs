@@ -175,6 +175,12 @@ async function appendCostLog(cfg, entry) {
 }
 
 export function createRoutstr(cfg, wallet, log, deps = {}) {
+  // Injectable clock so the turn-budget boundary is deterministic in tests.
+  // model-router threads its clock the same way; a direct routstr.chat() call
+  // was the one path still using the real wall clock, which made the
+  // budget-at-min-slice test racy (a few ms of real elapsed time shaved the
+  // remaining budget below MIN_PROVIDER_SLICE_MS).
+  const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const maxTokens = cfg.routstr.limits?.max_tokens_out || 2048;
   // Without a deadline a hung Routstr edge holds the chat request open forever
   // and the operator sees a spinner instead of the local-model fallback.
@@ -473,7 +479,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
 
     const wanted = modelForSkill(cfg, skill);
     const requested = wanted === 'auto' ? null : wanted;
-    const budget = budget_ms === null || budget_ms === undefined ? null : createBudget(budget_ms);
+    const budget = budget_ms === null || budget_ms === undefined ? null : createBudget(budget_ms, { now });
     const remaining = () => (budget ? budget.remainingMs() : null);
     const sliceNow = () => sliceForProvider(chatTimeoutMs, remaining());
 
