@@ -1,6 +1,7 @@
 # NAP-BRIDGE — read-only world noticeboard (single replaceable event)
 
-Status: **proposed (spec only — not built)**. Follows NAP-BRIDGE-7 (the lore layer).
+Status: **decided + read path implemented (NAP-BRIDGE-8, v0.2.122-alpha)**. The operator
+still owns publishing. Follows NAP-BRIDGE-7 (the lore layer).
 The static `WORLD.md` + `TORII_LORE.md` layers give Nakama the *stable* context; this
 adds the *changing* context — auctions, sales, and events — without ever letting
 Nakama publish anything.
@@ -123,22 +124,42 @@ world's own self-hosted relay, not the public relays. Gift-wrapping the noticebo
 possible but conflicts with "Nakama reads it freely"; keep v1 public-on-own-relay and
 treat private audiences as a later concern.
 
-## Open decisions (do not build until settled)
+## Settled decisions (NAP-BRIDGE-8)
 
-- **Exact kind and `d` convention** — `30078` + `d="noticeboard"` is the working
-  proposal; confirm it before writing a reader.
-- **Who edits it** — via Continuum (a drafted, human-approved signed event) or a
-  dedicated operator tool. The "human approves before signing" rule from Continuum
-  applies either way.
-- **Cache TTL and query key** — shared in-memory cache vs per-request fetch; the
-  per-sender rate limiter (NAP-BRIDGE-5) already bounds relay reads from a spammer.
+1. **kind `30078`, `d="noticeboard"`, author = operator npub.** One replaceable
+   noticeboard per operator — the author scopes the world, so there is exactly one
+   truth source. Locked in code as `NOTICEBOARD_KIND` / `NOTICEBOARD_D`, with a test
+   pinning both values.
+2. **The operator publishes**, via the same draft → human-approve → sign discipline as
+   everything in Continuum. Until that publish surface is wired, the operator posts the
+   single event with any NIP-07 tooling. **The read path is publish-agnostic**: Nakama
+   trusts exactly the operator's npub (configured as `NPC_NOTICE_AUTHOR`) and ignores
+   every other author.
+3. **Cache = in-memory, 60s TTL.** There is only one noticeboard per operator, so the
+   cache key is nothing more than the configured author. Fetched lazily on first need,
+   injected into the system context on every reply when present; empty when absent or
+   disabled. `NPC_NOTICE_TTL_MS` overrides the TTL.
+
+## Implemented read path (NAP-BRIDGE-8)
+
+- `npc-gateway.mjs` reads `NPC_NOTICE_AUTHOR` (unset ⇒ disabled) and
+   `NPC_NOTICE_TTL_MS` (default 60000); fetches the operator's latest `30078`
+   `d="noticeboard"` event under a 5s timeout and formats it via a cached
+   `getNoticeboard()`.
+- `npc-bridge.mjs` appends the noticeboard text to the system turn when non-empty
+   (pure helpers `parseNoticeboard` / `formatNotices` / `createNoticeboardCache`), and
+   degrades to "answer without notices" if the fetch fails — never drops the reply.
+3. Nakama still has **no publish path** — nothing to spam, ever.
 
 ## What is explicitly deferred
 
 - No Nakama→relay publish path of any kind.
-- No autonomous posting; no scheduled feed.
+- No autonomous posting; no scheduled feed — the operator publishes on purpose only.
 - No marketplace taxonomy beyond the free-string `kind` field.
 - No private/encrypted noticeboard (revisit only if the owner asks for a gated audience).
+- (optional) intent-gating — only fetch/inject the noticeboard when the message is
+   about auctions/sales rather than on every reply. The 60s cache makes the
+   always-inject approach cheap enough that this is not needed yet.
 
 ## Relationship to the rest of NAP-BRIDGE
 

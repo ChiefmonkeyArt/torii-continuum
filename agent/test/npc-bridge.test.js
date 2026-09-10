@@ -27,6 +27,11 @@ import {
   buildWrapTemplate,
   giftWrapSeal,
   safeParse,
+  parseNoticeboard,
+  formatNotices,
+  createNoticeboardCache,
+  NOTICEBOARD_KIND,
+  NOTICEBOARD_D,
   createNpcBridge,
 } from '../core/npc-bridge.mjs';
 
@@ -64,6 +69,43 @@ test('buildSystemPrompt stacks SOUL, world, metaverse lore and skips empties (NA
   assert.equal(buildSystemPrompt({ world: 'W', lore: 'L' }), '## This world\nW\n\n## Torii metaverse\nL');
   const full = buildSystemPrompt({ soul: 'S', world: 'W', lore: 'L' });
   assert.equal(full, 'S\n\n## This world\nW\n\n## Torii metaverse\nL');
+});
+
+// ─── Noticeboard pure helpers (NAP-BRIDGE-8) ──────────────────────────────
+
+test('noticeboard settled decisions are locked in', () => {
+  assert.equal(NOTICEBOARD_KIND, 30078);
+  assert.equal(NOTICEBOARD_D, 'noticeboard');
+});
+
+test('parseNoticeboard returns notices on valid content, null otherwise', () => {
+  assert.deepEqual(parseNoticeboard('{"version":1,"notices":[{"title":"a"}]}'), [{ title: 'a' }]);
+  assert.equal(parseNoticeboard('not json'), null);
+  assert.equal(parseNoticeboard('{"notices":"nope"}'), null);
+  assert.equal(parseNoticeboard(''), null);
+});
+
+test('formatNotices renders a compact block or empty, skipping junk', () => {
+  assert.equal(formatNotices(null), '');
+  assert.equal(formatNotices([]), '');
+  assert.equal(formatNotices([null, {}, { title: '  ' }]), '');
+  const out = formatNotices([
+    { kind: 'auction', title: 'Sticker pack', price_sats: 21 },
+    { kind: 'sale', title: 'Skin' },
+  ]);
+  assert.equal(out, '## World notices (current auctions, sales, and events)\n- [auction] Sticker pack — 21 sats\n- [sale] Skin');
+});
+
+test('createNoticeboardCache reuses within TTL and re-fetches after (injected clock)', async () => {
+  let t = 0;
+  let fetches = 0;
+  const cache = createNoticeboardCache({ ttlMs: 1000, now: () => t });
+  const fetchFresh = async () => { fetches++; return `v${fetches}`; };
+  assert.equal(await cache.get(fetchFresh), 'v1');
+  assert.equal(await cache.get(fetchFresh), 'v1');  // cached, no re-fetch
+  t = 1000;                                            // TTL elapsed
+  assert.equal(await cache.get(fetchFresh), 'v2');     // re-fetched
+  assert.equal(fetches, 2);
 });
 
 // ─── Rate limiter (NAP-BRIDGE-5) ─────────────────────────────────────────────
@@ -190,7 +232,7 @@ function buildInbound({ senderSk, senderHex, greeterHex, plaintext }) {
   return { wrap, seal, rumor };
 }
 
-function makeBridge({ inbound, sealOverride, rumorOverride, chat, signerCb, rateLimit, public: isPublic, allowlist }) {
+function makeBridge({ inbound, sealOverride, rumorOverride, chat, signerCb, rateLimit, public: isPublic, allowlist, getNoticeboard }) {
   const calls = { decrypt: 0, chat: 0, encrypt: 0, sign: 0, publish: 0, wrap: 0 };
   const senderHex = inbound.seal.pubkey; // the real sender
   const chatFn = chat ?? (async () => { calls.chat++; return { ok: true, content: 'reply' }; });
@@ -219,6 +261,7 @@ function makeBridge({ inbound, sealOverride, rumorOverride, chat, signerCb, rate
     },
     signer,
     chat: chatFn,
+    getNoticeboard,
     giftWrap: async (seal, pk) => { calls.wrap++; return { kind: 1059, pubkey: 'e'.repeat(64), created_at: 1, tags: [['p', pk]], content: 'W', id: 'i'.repeat(64), sig: 's'.repeat(128), _seal: seal }; },
   });
   return { bridge, calls };
@@ -236,6 +279,34 @@ test('allowed sender flows unwrap→verify→allowlist→chat→seal→wrap→pu
   assert.equal(calls.sign, 1);
   assert.equal(calls.wrap, 1);
   assert.equal(calls.publish, 1);
+});
+
+test('getNoticeboard output is appended to the system turn (NAP-BRIDGE-8)', async () => {
+  const senderSk = generateSecretKey();
+  const senderHex = getPublicKey(senderSk);
+  const inbound = buildInbound({ senderSk, senderHex, greeterHex: GREETER, plaintext: 'any sales?' });
+  let capturedSystem = '';
+  const chat = async ({ messages }) => { capturedSystem = messages[0].content; return { ok: true, content: 'reply' }; };
+  const { bridge } = makeBridge({
+    inbound,
+    chat,
+    getNoticeboard: async () => '## World notices (current auctions, sales, and events)\n- [sale] Skin',
+  });
+  await bridge.handleEvent(inbound.wrap);
+  assert.ok(capturedSystem.startsWith('SOUL'));
+  assert.ok(capturedSystem.includes('## World notices'));
+  assert.ok(capturedSystem.includes('- [sale] Skin'));
+});
+
+test('missing/empty getNoticeboard leaves the system turn as SOUL only', async () => {
+  const senderSk = generateSecretKey();
+  const senderHex = getPublicKey(senderSk);
+  const inbound = buildInbound({ senderSk, senderHex, greeterHex: GREETER, plaintext: 'hi' });
+  let capturedSystem = '';
+  const chat = async ({ messages }) => { capturedSystem = messages[0].content; return { ok: true, content: 'reply' }; };
+  const { bridge } = makeBridge({ inbound, chat, getNoticeboard: async () => '' });
+  await bridge.handleEvent(inbound.wrap);
+  assert.equal(capturedSystem, 'SOUL');
 });
 
 test('over-limit sender is throttled: one notice reply, no extra chat (NAP-BRIDGE-5)', async () => {

@@ -24,12 +24,25 @@
  *   NPC_LORE_FILE=/home/hermes-npc/.hermes/profiles/npc/TORII_LORE.md   (optional; shared metaverse)
  *   NPC_RATE_WINDOW_MS=60000      per-sender rate-limit window (ms)
  *   NPC_RATE_MAX_PER_WINDOW=6     max replies per sender per window
+ *   NPC_NOTICE_AUTHOR=<hex>       (optional) operator npub whose kind-30078
+ *                                 d="noticeboard" event is the world's read-only
+ *                                 noticeboard. Unset => noticeboard disabled.
+ *   NPC_NOTICE_TTL_MS=60000       noticeboard in-memory cache TTL (ms)
  */
 
 import { readFile } from 'node:fs/promises';
 import { SimplePool } from 'nostr-tools/pool';
 import { createLocalSigner } from './core/npc-signer.mjs';
-import { normalizeAllowlist, createNpcBridge, buildSystemPrompt } from './core/npc-bridge.mjs';
+import {
+  normalizeAllowlist,
+  createNpcBridge,
+  buildSystemPrompt,
+  parseNoticeboard,
+  formatNotices,
+  createNoticeboardCache,
+  NOTICEBOARD_KIND,
+  NOTICEBOARD_D,
+} from './core/npc-bridge.mjs';
 
 function splitList(v) {
   if (!v) return [];
@@ -57,6 +70,8 @@ const model = process.env.NPC_MODEL || 'llama3.2:1b';
 const soulFile = process.env.NPC_SOUL_FILE || '/home/hermes-npc/.hermes/profiles/npc/SOUL.md';
 const worldFile = process.env.NPC_WORLD_FILE || '/home/hermes-npc/.hermes/profiles/npc/WORLD.md';
 const loreFile = process.env.NPC_LORE_FILE || '/home/hermes-npc/.hermes/profiles/npc/TORII_LORE.md';
+const noticeAuthor = (process.env.NPC_NOTICE_AUTHOR || '').trim().toLowerCase();
+const noticeTtlMs = Number(process.env.NPC_NOTICE_TTL_MS ?? '60000');
 
 // Per-sender rate limit (NAP-BRIDGE-5). The greeter's inference is FREE but
 // still costs CPU, so a spammer must not be able to peg the host by flooding
@@ -89,6 +104,44 @@ const world = await readFile(worldFile, 'utf8').catch(() => '');
 const lore = await readFile(loreFile, 'utf8').catch(() => '');
 const systemContext = buildSystemPrompt({ soul, world, lore });
 
+// Short timeout so a hung relay query can never stall a player's reply.
+function withTimeout(promise, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// Read-only world noticeboard (NAP-BRIDGE-8). The operator signs ONE replaceable
+// kind-30078 d="noticeboard" event; Nakama reads it (cached) and never publishes
+// it. Disabled unless NPC_NOTICE_AUTHOR is set. A fetch failure returns '' so the
+// greeter still answers (just without the current notices).
+function fetchNotices(authorHex) {
+  const filter = {
+    kinds: [NOTICEBOARD_KIND],
+    authors: [authorHex],
+    '#d': [NOTICEBOARD_D],
+    limit: 5,
+  };
+  return withTimeout(pool.querySync(relays, filter), 5_000)
+    .then((events) => {
+      if (!Array.isArray(events) || events.length === 0) return '';
+      events.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+      return formatNotices(parseNoticeboard((events[0] && events[0].content) || ''));
+    })
+    .catch((err) => {
+      log.warn('[npc-gateway] noticeboard query failed', err?.message || err);
+      return '';
+    });
+}
+
+const noticeCache = createNoticeboardCache({ ttlMs: Number.isFinite(noticeTtlMs) ? noticeTtlMs : 60_000 });
+async function getNoticeboard() {
+  if (!noticeAuthor) return '';
+  return noticeCache.get(() => fetchNotices(noticeAuthor));
+}
+
 // Local Ollama — this process's one and only inference surface (no router).
 async function chat({ messages }) {
   try {
@@ -114,6 +167,7 @@ const greeterHex = (await signer.getPublicKey()).toLowerCase();
 log.info(`[npc-gateway] greeter pubkey ${greeterHex.slice(0, 8)}… (local ephemeral nsec)`);
 
 const pool = new SimplePool();
+log.info(`[npc-gateway] noticeboard ${noticeAuthor ? `enabled (author ${noticeAuthor.slice(0, 8)}…)` : 'disabled (no NPC_NOTICE_AUTHOR)'}`);
 const bridge = createNpcBridge({
   cfg: { relayUrls: relays, allowlist, soul: systemContext, model, public: isPublic, rateLimit },
   greeterHex,
@@ -121,6 +175,7 @@ const bridge = createNpcBridge({
   pool,
   signer,
   chat,
+  getNoticeboard,
 });
 
 await bridge.start();

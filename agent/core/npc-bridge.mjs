@@ -171,6 +171,68 @@ export function buildSystemPrompt({ soul = '', world = '', lore = '' } = {}) {
   return parts.join('\n\n');
 }
 
+// ─── Noticeboard (NAP-BRIDGE-8) ────────────────────────────────────────────
+// The read-only world noticeboard: the operator signs a single replaceable
+// event; Nakama reads it (cached) and NEVER publishes it.
+
+/** NIP-78 application-data kind reused for the world noticeboard. */
+export const NOTICEBOARD_KIND = 30078;
+/** The `d` tag that identifies the operator's noticeboard event. */
+export const NOTICEBOARD_D = 'noticeboard';
+
+/**
+ * Parse a noticeboard event's content into its notices array, or null when the
+ * payload is missing, malformed, or not a `{notices:[...]}` object. The raw
+ * content is owner-authored input and may be untrusted, so this never throws.
+ * @param {string} content
+ * @returns {Array|null}
+ */
+export function parseNoticeboard(content) {
+  const obj = safeParse(content);
+  if (!obj || !Array.isArray(obj.notices)) return null;
+  return obj.notices;
+}
+
+/**
+ * Render notices into a compact block for the greeter's system context.
+ * Empty/missing returns '' so nothing is injected.
+ * @param {Array|null} notices
+ * @returns {string}
+ */
+export function formatNotices(notices) {
+  if (!Array.isArray(notices) || notices.length === 0) return '';
+  const lines = [];
+  for (const n of notices) {
+    if (!n || typeof n !== 'object') continue;
+    const title = String(n.title || n.body || '').trim();
+    if (!title) continue;
+    const kind = String(n.kind || 'notice');
+    const price = (n.price_sats != null && n.price_sats !== '') ? ` — ${n.price_sats} sats` : '';
+    lines.push(`- [${kind}] ${title}${price}`);
+  }
+  if (!lines.length) return '';
+  return `## World notices (current auctions, sales, and events)\n${lines.join('\n')}`;
+}
+
+/**
+ * A minimal in-memory TTL cache around an async "fetch the noticeboard" fn,
+ * so a burst of player questions hits the relay once per TTL rather than once
+ * per message. Pure aside from the injected fetch; the clock is injectable.
+ * @param {{ttlMs?:number, now?:()=>number}} opts
+ * @returns {{ get:(fetchFresh:()=>Promise<*>)=>Promise<*> }}
+ */
+export function createNoticeboardCache({ ttlMs = 60_000, now = Date.now } = {}) {
+  let state = { value: undefined, fetchedAt: -Infinity };
+  return {
+    async get(fetchFresh) {
+      if (now() - state.fetchedAt < ttlMs) return state.value;
+      state.value = await fetchFresh();
+      state.fetchedAt = now();
+      return state.value;
+    },
+  };
+}
+
 /**
  * Build the inner rumor (kind 14) for a reply. Signed indirectly by the seal
  * that wraps it — the rumor itself is unsigned, matching nostr-tools' NIP-17.
@@ -270,9 +332,10 @@ export function giftWrapSeal(seal, senderHex, createdAt = Math.floor(Date.now() 
  * @param {object} deps.signer   signer-like: { nip44Encrypt, nip44Decrypt, signEvent, getPublicKey }
  * @param {function} deps.chat   async ({messages}) => {ok:true, content}|{ok:false, code, reason}
  * @param {function} [deps.giftWrap] async (seal, senderHex) => wrap; default giftWrapSeal
+ * @param {function} [deps.getNoticeboard] async () => string|'' ; current world notices (NAP-BRIDGE-8); appended to the system turn when non-empty
  * @returns {{ start:function():Promise<void>, stop:function():void, handleEvent:function(object):Promise<void> }}
  */
-export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, giftWrap = giftWrapSeal }) {
+export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, giftWrap = giftWrapSeal, getNoticeboard }) {
   let sub = null;
   let stopped = false;
   const now = () => Math.floor(Date.now() / 1000);
@@ -350,9 +413,21 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
 
       const plaintext = typeof rumor.content === 'string' ? rumor.content : '';
 
-      // 7. Local inference with the greeter persona in the system turn.
+      // 7. Local inference with the greeter persona in the system turn, plus
+      //    the current noticeboard (auctions/sales/events) when one is posted.
+      //    The noticeboard is fetched lazily (cached), and a fetch failure must
+      //    degrade to "answer without notices", never drop the reply.
+      let noticeboard = '';
+      if (typeof getNoticeboard === 'function') {
+        try {
+          noticeboard = String((await getNoticeboard()) || '').trim();
+        } catch (err) {
+          log.warn('[npc-gateway] noticeboard unavailable this reply', err?.message || err);
+        }
+      }
+      const systemContent = noticeboard ? `${cfg.soul}\n\n${noticeboard}` : cfg.soul;
       const messages = [
-        { role: 'system', content: cfg.soul },
+        { role: 'system', content: systemContent },
         { role: 'user', content: plaintext },
       ];
       const reply = await chat({ messages });
