@@ -17,6 +17,8 @@
  *   NPC_OLLAMA_URL=http://127.0.0.1:11434/v1
  *   NPC_MODEL=llama3.2:1b
  *   NPC_SOUL_FILE=/home/hermes-npc/.hermes/profiles/npc/SOUL.md
+ *   NPC_RATE_WINDOW_MS=60000      per-sender rate-limit window (ms)
+ *   NPC_RATE_MAX_PER_WINDOW=6     max replies per sender per window
  */
 
 import { readFile } from 'node:fs/promises';
@@ -47,6 +49,14 @@ const allowlist = normalizeAllowlist(splitList(process.env.NPC_ALLOWLIST));
 const ollamaUrl = (process.env.NPC_OLLAMA_URL || 'http://127.0.0.1:11434/v1').replace(/\/$/, '');
 const model = process.env.NPC_MODEL || 'llama3.2:1b';
 const soulFile = process.env.NPC_SOUL_FILE || '/home/hermes-npc/.hermes/profiles/npc/SOUL.md';
+
+// Per-sender rate limit (NAP-BRIDGE-5). The greeter's inference is FREE but
+// still costs CPU, so a spammer must not be able to peg the host by flooding
+// DMs. Invalid/absent values fall back to the defaults inside createRateLimiter.
+const rateLimit = {
+  windowMs: Number(process.env.NPC_RATE_WINDOW_MS ?? '60000'),
+  maxPerWindow: Number(process.env.NPC_RATE_MAX_PER_WINDOW ?? '6'),
+};
 
 if (!/^[0-9a-f]{64}$/i.test(nsecHex)) {
   log.error('[npc-gateway] NPC_NSEC missing or not 64-hex. Refusing to start.');
@@ -92,7 +102,7 @@ log.info(`[npc-gateway] greeter pubkey ${greeterHex.slice(0, 8)}… (local ephem
 
 const pool = new SimplePool();
 const bridge = createNpcBridge({
-  cfg: { relayUrls: relays, allowlist, soul, model },
+  cfg: { relayUrls: relays, allowlist, soul, model, rateLimit },
   greeterHex,
   log,
   pool,

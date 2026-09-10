@@ -19,6 +19,7 @@ import { nip19 } from 'nostr-tools';
 import {
   normalizeAllowlist,
   isSenderAllowed,
+  createRateLimiter,
   buildGreeterPrompt,
   buildRumor,
   buildSealTemplate,
@@ -53,6 +54,52 @@ test('buildGreeterPrompt puts SOUL first then the message', () => {
   const out = buildGreeterPrompt('You are the greeter.', 'hello');
   assert.ok(out.startsWith('You are the greeter.'));
   assert.ok(out.endsWith('hello'));
+});
+
+// ─── Rate limiter (NAP-BRIDGE-5) ─────────────────────────────────────────────
+
+test('createRateLimiter allows up to maxPerWindow, then throttles exactly once', () => {
+  let t = 0;
+  const rl = createRateLimiter({ windowMs: 1_000, maxPerWindow: 2, now: () => t });
+  assert.equal(rl.check('a'.repeat(64)).allowed, true);
+  assert.equal(rl.check('a'.repeat(64)).allowed, true);
+  const over = rl.check('a'.repeat(64)); // 3rd — over limit
+  assert.equal(over.allowed, false);
+  assert.equal(over.throttle, true); // one notice
+  const over2 = rl.check('a'.repeat(64)); // 4th — silent
+  assert.equal(over2.allowed, false);
+  assert.equal(over2.throttle, false);
+});
+
+test('createRateLimiter resets once the window elapses', () => {
+  let t = 0;
+  const rl = createRateLimiter({ windowMs: 1_000, maxPerWindow: 1, now: () => t });
+  assert.equal(rl.check('b'.repeat(64)).allowed, true);
+  assert.equal(rl.check('b'.repeat(64)).allowed, false); // over limit now
+  t = 1_000; // window boundary
+  assert.equal(rl.check('b'.repeat(64)).allowed, true); // fresh window
+});
+
+test('createRateLimiter is per-sender: flooding one key leaves others free', () => {
+  let t = 0;
+  const rl = createRateLimiter({ windowMs: 1_000, maxPerWindow: 2, now: () => t });
+  const spammer = 'c'.repeat(64);
+  const guest = 'd'.repeat(64);
+  assert.equal(rl.check(spammer).allowed, true);
+  assert.equal(rl.check(spammer).allowed, true);
+  const overSpam = rl.check(spammer); // 3rd — over limit
+  assert.equal(overSpam.allowed, false);
+  assert.equal(overSpam.throttle, true);
+  const guest1 = rl.check(guest); // guest's first message — unaffected
+  assert.equal(guest1.allowed, true);
+});
+
+test('createRateLimiter rejects empty/invalid sender and sanitises bad limits', () => {
+  const rl = createRateLimiter({ windowMs: -5, maxPerWindow: 0 }); // -> defaults
+  assert.equal(rl.check('').allowed, false);
+  assert.equal(rl.check(null).allowed, false);
+  assert.equal(rl.check(undefined).allowed, false);
+  assert.equal(rl.check('e'.repeat(64)).allowed, true); // defaults still allow
 });
 
 test('buildRumor is kind-14, greeter pubkey, p-tag to sender, content plaintext', () => {
@@ -133,7 +180,7 @@ function buildInbound({ senderSk, senderHex, greeterHex, plaintext }) {
   return { wrap, seal, rumor };
 }
 
-function makeBridge({ inbound, sealOverride, rumorOverride, chat, signerCb }) {
+function makeBridge({ inbound, sealOverride, rumorOverride, chat, signerCb, rateLimit }) {
   const calls = { decrypt: 0, chat: 0, encrypt: 0, sign: 0, publish: 0, wrap: 0 };
   const senderHex = inbound.seal.pubkey; // the real sender
   const chatFn = chat ?? (async () => { calls.chat++; return { ok: true, content: 'reply' }; });
@@ -153,7 +200,7 @@ function makeBridge({ inbound, sealOverride, rumorOverride, chat, signerCb }) {
     },
   };
   const bridge = createNpcBridge({
-    cfg: { relayUrls: ['wss://r'], allowlist: new Set([senderHex]), soul: 'SOUL', model: 'm' },
+    cfg: { relayUrls: ['wss://r'], allowlist: new Set([senderHex]), soul: 'SOUL', model: 'm', rateLimit },
     greeterHex: GREETER,
     log: silentLog,
     pool: {
@@ -179,6 +226,25 @@ test('allowed sender flows unwrap→verify→allowlist→chat→seal→wrap→pu
   assert.equal(calls.sign, 1);
   assert.equal(calls.wrap, 1);
   assert.equal(calls.publish, 1);
+});
+
+test('over-limit sender is throttled: one notice reply, no extra chat (NAP-BRIDGE-5)', async () => {
+  const senderSk = generateSecretKey();
+  const senderHex = getPublicKey(senderSk);
+  const inbound = buildInbound({ senderSk, senderHex, greeterHex: GREETER, plaintext: 'x' });
+  // maxPerWindow = 1: the first message is answered, then the rest throttle.
+  const { bridge, calls } = makeBridge({ inbound, rateLimit: { windowMs: 60_000, maxPerWindow: 1 } });
+  await bridge.handleEvent(inbound.wrap); // 1st — allowed
+  assert.equal(calls.chat, 1);
+  assert.equal(calls.publish, 1);
+
+  await bridge.handleEvent(inbound.wrap); // 2nd — over limit: one notice, NO chat
+  assert.equal(calls.chat, 1);            // inference did not run again
+  assert.equal(calls.publish, 2);         // the throttle notice was published
+
+  await bridge.handleEvent(inbound.wrap); // 3rd — silent drop (no second notice)
+  assert.equal(calls.chat, 1);
+  assert.equal(calls.publish, 2);
 });
 
 test('non-gift-wrap kind is dropped before any decrypt/compute', async () => {

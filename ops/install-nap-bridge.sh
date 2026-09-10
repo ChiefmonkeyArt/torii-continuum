@@ -39,6 +39,12 @@
 #                       the RAM budget for a larger one on a bigger host.)
 #   NPC_OLLAMA_URL      local Ollama /v1 base URL (default: http://127.0.0.1:11434/v1)
 #   NPC_SOUL_FILE       greeter SOUL.md path (default: /home/hermes-npc/.hermes/profiles/npc/SOUL.md)
+#   NPC_RATE_WINDOW_MS  per-sender rate-limit window in milliseconds (default: 60000)
+#   NPC_RATE_MAX_PER_WINDOW  max replies per sender per window (default: 6). Beyond
+#                       it the greeter sends ONE throttle notice, then silently
+#                       drops until that sender's window resets. Checked BEFORE
+#                       inference, so a spammer can force decrypts but never peg
+#                       the host CPU (NAP-BRIDGE-5).
 #   NAP_BRIDGE_USER     unix user (default: hermes-npc)
 #   AGENT_DIR           agent package dir holding npc-gateway.mjs + node_modules
 #                       (default: /opt/torii/continuum-agent)
@@ -50,6 +56,9 @@
 #     or impersonate anything beyond the greeter's own npub.
 #   - Fail-closed allowlist: empty => nobody. Checked after unwrap, BEFORE any
 #     inference.
+#   - Per-sender rate limit (NAP-BRIDGE-5): free inference still costs CPU, so a
+#     spammer cannot peg the host by flooding. Checked BEFORE inference; the
+#     first over-limit message earns one throttle notice, the rest drop silently.
 #   - Runs as hermes-npc, read-only filesystem, outbound network only.
 #
 set -uo pipefail
@@ -59,6 +68,8 @@ AGENT_DIR="${AGENT_DIR:-/opt/torii/continuum-agent}"
 NPC_MODEL="${NPC_MODEL:-llama3.2:1b}"
 NPC_OLLAMA_URL="${NPC_OLLAMA_URL:-http://127.0.0.1:11434/v1}"
 NPC_SOUL_FILE="${NPC_SOUL_FILE:-/home/hermes-npc/.hermes/profiles/npc/SOUL.md}"
+NPC_RATE_WINDOW_MS="${NPC_RATE_WINDOW_MS:-60000}"
+NPC_RATE_MAX_PER_WINDOW="${NPC_RATE_MAX_PER_WINDOW:-6}"
 
 NAP_BRIDGE_HOME="/home/${NAP_BRIDGE_USER}"
 NAP_BRIDGE_DIR="${NAP_BRIDGE_HOME}/.nap-bridge"
@@ -124,6 +135,8 @@ NPC_ALLOWLIST=${NPC_ALLOWLIST}
 NPC_OLLAMA_URL=${NPC_OLLAMA_URL}
 NPC_MODEL=${NPC_MODEL}
 NPC_SOUL_FILE=${NPC_SOUL_FILE}
+NPC_RATE_WINDOW_MS=${NPC_RATE_WINDOW_MS}
+NPC_RATE_MAX_PER_WINDOW=${NPC_RATE_MAX_PER_WINDOW}
 EOF
 }
 
