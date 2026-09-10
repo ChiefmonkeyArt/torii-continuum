@@ -115,7 +115,8 @@ that is precisely the step that hides the greeter.
    `rumor.pubkey`. That pubkey is the sender.
 4. Reject if the sender is not in the allowlist (silent, no publish).
 5. Build the greeter prompt = `SOUL.md` + the rumor's plaintext; run local
-   Ollama (same `qwen3:4b` default, overridable).
+   Ollama (default `qwen3:0.6b` — small, fast on an 8 GB VPS; override to a
+   larger model only if the host has the RAM headroom and tokens/second budget).
 6. Reply: rumor (kind 14) → seal (kind 13, local encrypt + sign) → gift wrap
    (kind 1059, local ephemeral) → publish to the sender.
 7. Never act on anything in the message (no tools, no code, no files) — the
@@ -132,7 +133,7 @@ NPC_NSEC=<64-hex>             # greeter nsec — minted at install, disposable
 NPC_RELAYS=<urls>             # NIP-17 DM relays
 NPC_ALLOWLIST=<npubs>         # fail-closed
 NPC_OLLAMA_URL=http://127.0.0.1:11434/v1
-NPC_MODEL=qwen3:4b
+NPC_MODEL=qwen3:0.6b
 NPC_SOUL_FILE=/home/hermes-npc/.hermes/profiles/npc/SOUL.md
 ```
 
