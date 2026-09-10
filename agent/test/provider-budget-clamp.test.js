@@ -123,7 +123,11 @@ test('routstr refuses a too-thin budget WITHOUT spending sats', async () => {
 test('routstr proceeds when the budget is at the minimum slice', async () => {
   recordingFetch(() => sseOk('paid answer'));
   const wallet = walletDouble();
-  const routstr = createRoutstr(routstrCfg(), wallet, log, CATALOG_DEPS);
+  // Freeze the budget clock so the boundary is exact: with the real wall clock,
+  // a few ms of elapsed time between createBudget() and worthAttempting() shaves
+  // the remaining budget below MIN_PROVIDER_SLICE_MS and flips the result.
+  const deps = { ...CATALOG_DEPS, now: () => 0 };
+  const routstr = createRoutstr(routstrCfg(), wallet, log, deps);
 
   const r = await routstr.chat({ skill: 'chat', messages: MESSAGES, budget_ms: MIN_PROVIDER_SLICE_MS });
   assert.equal(r.ok, true);
