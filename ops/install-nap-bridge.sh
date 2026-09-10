@@ -57,6 +57,10 @@
 #                       drops until that sender's window resets. Checked BEFORE
 #                       inference, so a spammer can force decrypts but never peg
 #                       the host CPU (NAP-BRIDGE-5).
+#   NPC_NOTICE_AUTHOR   (optional) operator hex/npub whose kind-30078
+#                       d="noticeboard" replaceable event is the world's read-only
+#                       noticeboard. Unset => noticeboard disabled (NAP-BRIDGE-8).
+#   NPC_NOTICE_TTL_MS   noticeboard in-memory cache TTL in ms (default: 60000)
 #   NAP_BRIDGE_USER     unix user (default: hermes-npc)
 #   AGENT_DIR           agent package dir holding npc-gateway.mjs + node_modules
 #                       (default: /opt/torii/continuum-agent)
@@ -86,6 +90,8 @@ NPC_LORE_FILE="${NPC_LORE_FILE:-/home/hermes-npc/.hermes/profiles/npc/TORII_LORE
 NPC_RATE_WINDOW_MS="${NPC_RATE_WINDOW_MS:-60000}"
 NPC_RATE_MAX_PER_WINDOW="${NPC_RATE_MAX_PER_WINDOW:-6}"
 NPC_PUBLIC="${NPC_PUBLIC:-0}"
+NPC_NOTICE_AUTHOR="${NPC_NOTICE_AUTHOR:-}"
+NPC_NOTICE_TTL_MS="${NPC_NOTICE_TTL_MS:-60000}"
 
 NAP_BRIDGE_HOME="/home/${NAP_BRIDGE_USER}"
 NAP_BRIDGE_DIR="${NAP_BRIDGE_HOME}/.nap-bridge"
@@ -159,6 +165,8 @@ NPC_LORE_FILE=${NPC_LORE_FILE}
 NPC_RATE_WINDOW_MS=${NPC_RATE_WINDOW_MS}
 NPC_RATE_MAX_PER_WINDOW=${NPC_RATE_MAX_PER_WINDOW}
 NPC_PUBLIC=${NPC_PUBLIC}
+NPC_NOTICE_AUTHOR=${NPC_NOTICE_AUTHOR}
+NPC_NOTICE_TTL_MS=${NPC_NOTICE_TTL_MS}
 EOF
 }
 

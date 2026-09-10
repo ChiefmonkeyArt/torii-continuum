@@ -67,6 +67,10 @@ contains "${out}" 'NPC_WORLD_FILE=/home/hermes-npc/.hermes/profiles/npc/WORLD.md
   && ok "env: world lore path default"                            || bad "env: world lore path wrong"
 contains "${out}" 'NPC_LORE_FILE=/home/hermes-npc/.hermes/profiles/npc/TORII_LORE.md' \
   && ok "env: metaverse lore path default"                        || bad "env: metaverse lore path wrong"
+contains "${out}" 'NPC_NOTICE_AUTHOR=' \
+  && ok "env: noticeboard author empty by default (disabled)"     || bad "env: NPC_NOTICE_AUTHOR default wrong"
+contains "${out}" 'NPC_NOTICE_TTL_MS=60000' \
+  && ok "env: noticeboard TTL default 60000ms"                    || bad "env: NPC_NOTICE_TTL_MS default wrong"
 
 if contains "${out}" 'NPC_CLIENT_SECRET' || contains "${out}" 'NPC_BUNKER_PUBKEY' \
    || contains "${out}" 'nostrconnect://' || contains "${out}" '127.0.0.1:8787' \
@@ -79,6 +83,7 @@ fi
 # --- 2. Overrides ----------------------------------------------------------
 out_o="$(run_installer NPC_MODEL="qwen3:8b" NPC_OLLAMA_URL="http://127.0.0.1:11435/v1" NPC_SOUL_FILE="/tmp/soul.md" \
          NPC_RATE_WINDOW_MS="30000" NPC_RATE_MAX_PER_WINDOW="2" NPC_PUBLIC="1" NPC_WORLD_FILE="/tmp/world.md" \
+         NPC_NOTICE_AUTHOR="abcdef0123456789" NPC_NOTICE_TTL_MS="30000" \
          bash "${INSTALLER}" --render-env)"
 
 contains "${out_o}" 'NPC_MODEL=qwen3:8b' \
@@ -95,6 +100,10 @@ contains "${out_o}" 'NPC_PUBLIC=1' \
   && ok "override: NPC_PUBLIC honoured"                           || bad "override: NPC_PUBLIC ignored"
 contains "${out_o}" 'NPC_WORLD_FILE=/tmp/world.md' \
   && ok "override: NPC_WORLD_FILE honoured"                       || bad "override: NPC_WORLD_FILE ignored"
+contains "${out_o}" 'NPC_NOTICE_AUTHOR=abcdef0123456789' \
+  && ok "override: NPC_NOTICE_AUTHOR honoured"                    || bad "override: NPC_NOTICE_AUTHOR ignored"
+contains "${out_o}" 'NPC_NOTICE_TTL_MS=30000' \
+  && ok "override: NPC_NOTICE_TTL_MS honoured"                    || bad "override: NPC_NOTICE_TTL_MS ignored"
 
 # --- 3. --render-unit surface ---------------------------------------------
 unit="$(AGENT_DIR="$AGENT_DIR" bash "${INSTALLER}" --render-unit)"
