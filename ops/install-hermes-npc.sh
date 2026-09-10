@@ -3,7 +3,7 @@
 # Torii Continuum — HERMES-NPC-1 (isolated public greeter)
 #
 # Idempotently provision the public greeter voice on a Debian/Ubuntu VPS:
-#   1. reuse the shared 'ollama' local-only backend (127.0.0.1:11434) + qwen3:4b
+#   1. reuse the shared 'ollama' local-only backend (127.0.0.1:11434) + llama3.2:1b
 #   2. 'hermes-npc' user + vanilla Nous Research Hermes, 'npc' profile
 #   3. Inference = local Ollama ONLY. No Continuum router, no router token, no
 #      paid path, no fallback ladder. The greeter cannot spend the owner's
@@ -35,7 +35,7 @@
 #
 set -uo pipefail
 
-OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3:4b}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2:1b}"
 OLLAMA_USER="ollama"
 HERMES_NPC_USER="hermes-npc"
 HERMES_PROFILE="npc"
@@ -66,7 +66,7 @@ Flags:
   --dry-run         print the plan and exit without making any changes
   -h, --help        this message
 Environment:
-  OLLAMA_MODEL      local inference model (default: qwen3:4b)
+  OLLAMA_MODEL      local inference model (default: llama3.2:1b — non-thinking)
   OLLAMA_BASE_URL   local Ollama /v1 base URL (default: http://127.0.0.1:11434/v1)
   NPC_DESCRIPTION   one-line role description for 'hermes profile create'
 EOF
@@ -100,6 +100,8 @@ Torii world and points them toward what they can do next. You are the
 
 ## Who you are
 
+- Your name is Nakama — comrade, companion, fellow. You will never invent
+  or adopt another name.
 - Curious, approachable, and generous with orientation — never pushy.
 - Concise. Answer the actual question, then offer one obvious next step.
 - Honest about your limits. When someone asks for something you cannot do, say
