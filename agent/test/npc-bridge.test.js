@@ -18,6 +18,7 @@ import { getConversationKey, encrypt as nip44Encrypt } from 'nostr-tools/nip44';
 import { nip19 } from 'nostr-tools';
 import {
   normalizeAllowlist,
+  normalizePubkeyHex,
   isSenderAllowed,
   createRateLimiter,
   buildGreeterPrompt,
@@ -46,6 +47,16 @@ test('normalizeAllowlist accepts hex and npub1, lowercases, drops junk', () => {
   const s = normalizeAllowlist([hex.toUpperCase(), nip19.npubEncode(hex), 'nope', '', 42]);
   assert.equal(s.size, 1);
   assert.ok(s.has(hex.toLowerCase()));
+});
+
+test('normalizePubkeyHex accepts hex and npub1, lowercases, rejects junk (NAP-BRIDGE-8)', () => {
+  const sk = generateSecretKey();
+  const hex = getPublicKey(sk);
+  assert.equal(normalizePubkeyHex(hex.toUpperCase()), hex.toLowerCase());
+  assert.equal(normalizePubkeyHex(nip19.npubEncode(hex)), hex.toLowerCase());
+  assert.equal(normalizePubkeyHex('not-a-key'), '');
+  assert.equal(normalizePubkeyHex(''), '');
+  assert.equal(normalizePubkeyHex(undefined), '');
 });
 
 test('isSenderAllowed is fail-closed on empty/missing allowlist and non-match', () => {

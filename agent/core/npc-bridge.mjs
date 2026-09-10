@@ -83,6 +83,18 @@ export function normalizeAllowlist(entries = []) {
 }
 
 /**
+ * Normalise a single pubkey (64-hex or npub1…) to a lowercase hex, or '' when
+ * invalid. Reuses the allowlist decode rules so a noticeboard author is
+ * accepted in whatever form the operator has at hand (NAP-BRIDGE-8).
+ * @param {string|undefined} raw
+ * @returns {string}
+ */
+export function normalizePubkeyHex(raw) {
+  const set = normalizeAllowlist([raw]);
+  return set.size ? set.values().next().value : '';
+}
+
+/**
  * Fail-closed allowlist gate. A missing/empty set admits nobody.
  * @param {string} senderHex lowercase hex pubkey of the sender
  * @param {Set<string>} allowlist normalised allowlist
