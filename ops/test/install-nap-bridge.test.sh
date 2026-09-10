@@ -61,6 +61,8 @@ contains "${out}" 'NPC_RATE_WINDOW_MS=60000' \
   && ok "env: rate window default 60000ms"                        || bad "env: rate window wrong"
 contains "${out}" 'NPC_RATE_MAX_PER_WINDOW=6' \
   && ok "env: rate max default 6"                                 || bad "env: rate max wrong"
+contains "${out}" 'NPC_PUBLIC=0' \
+  && ok "env: NPC_PUBLIC off by default (fail-closed)"            || bad "env: NPC_PUBLIC default wrong"
 
 if contains "${out}" 'NPC_CLIENT_SECRET' || contains "${out}" 'NPC_BUNKER_PUBKEY' \
    || contains "${out}" 'nostrconnect://' || contains "${out}" '127.0.0.1:8787' \
@@ -72,7 +74,7 @@ fi
 
 # --- 2. Overrides ----------------------------------------------------------
 out_o="$(run_installer NPC_MODEL="qwen3:8b" NPC_OLLAMA_URL="http://127.0.0.1:11435/v1" NPC_SOUL_FILE="/tmp/soul.md" \
-         NPC_RATE_WINDOW_MS="30000" NPC_RATE_MAX_PER_WINDOW="2" \
+         NPC_RATE_WINDOW_MS="30000" NPC_RATE_MAX_PER_WINDOW="2" NPC_PUBLIC="1" \
          bash "${INSTALLER}" --render-env)"
 
 contains "${out_o}" 'NPC_MODEL=qwen3:8b' \
@@ -85,6 +87,8 @@ contains "${out_o}" 'NPC_RATE_WINDOW_MS=30000' \
   && ok "override: NPC_RATE_WINDOW_MS honoured"                   || bad "override: NPC_RATE_WINDOW_MS ignored"
 contains "${out_o}" 'NPC_RATE_MAX_PER_WINDOW=2' \
   && ok "override: NPC_RATE_MAX_PER_WINDOW honoured"               || bad "override: NPC_RATE_MAX_PER_WINDOW ignored"
+contains "${out_o}" 'NPC_PUBLIC=1' \
+  && ok "override: NPC_PUBLIC honoured"                           || bad "override: NPC_PUBLIC ignored"
 
 # --- 3. --render-unit surface ---------------------------------------------
 unit="$(AGENT_DIR="$AGENT_DIR" bash "${INSTALLER}" --render-unit)"
@@ -157,12 +161,25 @@ contains "${render_out}" 'wss://relay.example.test' \
   && ok "TORII_DOMAIN default: NPC_RELAYS derived to wss://relay.example.test" \
   || bad "TORII_DOMAIN default: NPC_RELAYS not derived"
 
+# --- 5c. NPC_PUBLIC=1 admits everyone, no allowlist required (NAP-BRIDGE-6) ---
+pub_out="$(env -i PATH="$PATH" HOME=/tmp \
+  NPC_RELAYS="wss://relay.example.test" \
+  NPC_PUBLIC=1 \
+  bash "${INSTALLER}" --render-env 2>&1)"
+rc=$?
+[ "$rc" -eq 0 ] && ok "public: --render-env exits 0 without NPC_ALLOWLIST" \
+                 || bad "public: --render-env failed (rc=$rc) - ${pub_out:0:200}"
+contains "${pub_out}" 'NPC_PUBLIC=1' \
+  && ok "public: NPC_PUBLIC=1 rendered"                           || bad "public: NPC_PUBLIC not rendered"
+
 # --- 6. --help ---------------------------------------------------------------
 help_out="$(bash "${INSTALLER}" --help)"
 contains "${help_out}" 'NPC_RELAYS' \
   && ok "help: documents NPC_RELAYS"                              || bad "help: missing NPC_RELAYS"
 contains "${help_out}" 'NPC_ALLOWLIST' \
   && ok "help: documents NPC_ALLOWLIST"                           || bad "help: missing NPC_ALLOWLIST"
+contains "${help_out}" 'NPC_PUBLIC' \
+  && ok "help: documents NPC_PUBLIC"                              || bad "help: missing NPC_PUBLIC"
 if contains "${help_out}" 'NPC_BUNKER_PUBKEY'; then
   bad "help: still documents NPC_BUNKER_PUBKEY (bunker is gone)"
 else

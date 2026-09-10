@@ -27,7 +27,12 @@
 #                       wss://relay.<TORII_DOMAIN> (matches torii-suite
 #                       v0.9.8-alpha+'s subdomain relay). Explicit env still
 #                       wins.
-#   NPC_ALLOWLIST       comma-separated allowed sender npubs/hex (required, fail-closed)
+#   NPC_ALLOWLIST       comma-separated allowed sender npubs/hex (required unless
+#                       NPC_PUBLIC=1; fail-closed — empty admits nobody)
+#   NPC_PUBLIC          admit EVERY authenticated sender (default: off). When 1/
+#                       true the allowlist is ignored and the per-sender rate
+#                       limit is the ONLY throttle — public Nakama must run with
+#                       NPC_RATE_* set (NAP-BRIDGE-6).
 #   NPC_MODEL           local inference model (default: llama3.2:1b — non-
 #                       thinking, ~1.3 GB, replies in ~2s on a 8 GB VPS.
 #                       qwen3:0.6b is NOT a valid default here: over Ollama's
@@ -55,7 +60,8 @@
 #     with no funds and no delegation. It cannot spend, export owner secrets,
 #     or impersonate anything beyond the greeter's own npub.
 #   - Fail-closed allowlist: empty => nobody. Checked after unwrap, BEFORE any
-#     inference.
+#     inference. NPC_PUBLIC=1 opts OUT of the allowlist (every authenticated
+#     sender is admitted) and the per-sender rate limit becomes the only gate.
 #   - Per-sender rate limit (NAP-BRIDGE-5): free inference still costs CPU, so a
 #     spammer cannot peg the host by flooding. Checked BEFORE inference; the
 #     first over-limit message earns one throttle notice, the rest drop silently.
@@ -70,6 +76,7 @@ NPC_OLLAMA_URL="${NPC_OLLAMA_URL:-http://127.0.0.1:11434/v1}"
 NPC_SOUL_FILE="${NPC_SOUL_FILE:-/home/hermes-npc/.hermes/profiles/npc/SOUL.md}"
 NPC_RATE_WINDOW_MS="${NPC_RATE_WINDOW_MS:-60000}"
 NPC_RATE_MAX_PER_WINDOW="${NPC_RATE_MAX_PER_WINDOW:-6}"
+NPC_PUBLIC="${NPC_PUBLIC:-0}"
 
 NAP_BRIDGE_HOME="/home/${NAP_BRIDGE_USER}"
 NAP_BRIDGE_DIR="${NAP_BRIDGE_HOME}/.nap-bridge"
@@ -91,7 +98,7 @@ Flags:
   --render-unit    print the systemd unit to stdout (no changes)
   --dry-run        print the plan and exit without making changes
   -h, --help       this message
-Environment (see header); NPC_RELAYS, NPC_ALLOWLIST required.
+Environment (see header); NPC_RELAYS required; NPC_ALLOWLIST required unless NPC_PUBLIC=1.
 EOF
 }
 
@@ -131,12 +138,13 @@ render_env() {
 NPC_ENABLED=1
 NPC_NSEC=${secret}
 NPC_RELAYS=${NPC_RELAYS}
-NPC_ALLOWLIST=${NPC_ALLOWLIST}
+NPC_ALLOWLIST=${NPC_ALLOWLIST:-}
 NPC_OLLAMA_URL=${NPC_OLLAMA_URL}
 NPC_MODEL=${NPC_MODEL}
 NPC_SOUL_FILE=${NPC_SOUL_FILE}
 NPC_RATE_WINDOW_MS=${NPC_RATE_WINDOW_MS}
 NPC_RATE_MAX_PER_WINDOW=${NPC_RATE_MAX_PER_WINDOW}
+NPC_PUBLIC=${NPC_PUBLIC}
 EOF
 }
 
@@ -170,7 +178,10 @@ if [ "$MODE" = "install" ] || [ "$MODE" = "dry-run" ] || [ "$MODE" = "render-env
   fi
   [ -n "${NPC_RELAYS:-}" ]    || die "NPC_RELAYS is required (comma-separated relay URLs, or set TORII_DOMAIN)"
   export NPC_RELAYS
-  [ -n "${NPC_ALLOWLIST:-}" ] || die "NPC_ALLOWLIST is required (comma-separated npubs/hex)"
+  # Allowlist is required unless the operator opts into public mode (NAP-BRIDGE-6).
+  if [ "${NPC_PUBLIC:-0}" != "1" ] && [ "${NPC_PUBLIC:-0}" != "true" ]; then
+    [ -n "${NPC_ALLOWLIST:-}" ] || die "NPC_ALLOWLIST is required (comma-separated npubs/hex), or set NPC_PUBLIC=1 to admit everyone"
+  fi
 fi
 
 case "$MODE" in
@@ -235,5 +246,9 @@ systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || warn "enable $UNIT_NAME failed"
 systemctl restart "$UNIT_NAME" || warn "restart $UNIT_NAME failed — check 'journalctl -u $UNIT_NAME'"
 
 info "nap-bridge installed."
-info "The greeter will only respond to NPC_ALLOWLIST senders. Confirm it is live:"
+if [ "${NPC_PUBLIC}" = "1" ] || [ "${NPC_PUBLIC}" = "true" ]; then
+  info "Public mode: Nakama answers every sender, rate-limited. Confirm it is live:"
+else
+  info "The greeter will only respond to NPC_ALLOWLIST senders. Confirm it is live:"
+fi
 info "  journalctl -u $UNIT_NAME -f"
