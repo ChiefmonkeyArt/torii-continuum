@@ -35,6 +35,7 @@ import { SimplePool } from 'nostr-tools/pool';
 import { createLocalSigner } from './core/npc-signer.mjs';
 import {
   normalizeAllowlist,
+  normalizePubkeyHex,
   createNpcBridge,
   buildSystemPrompt,
   parseNoticeboard,
@@ -70,7 +71,7 @@ const model = process.env.NPC_MODEL || 'llama3.2:1b';
 const soulFile = process.env.NPC_SOUL_FILE || '/home/hermes-npc/.hermes/profiles/npc/SOUL.md';
 const worldFile = process.env.NPC_WORLD_FILE || '/home/hermes-npc/.hermes/profiles/npc/WORLD.md';
 const loreFile = process.env.NPC_LORE_FILE || '/home/hermes-npc/.hermes/profiles/npc/TORII_LORE.md';
-const noticeAuthor = (process.env.NPC_NOTICE_AUTHOR || '').trim().toLowerCase();
+const noticeAuthor = normalizePubkeyHex(process.env.NPC_NOTICE_AUTHOR);
 const noticeTtlMs = Number(process.env.NPC_NOTICE_TTL_MS ?? '60000');
 
 // Per-sender rate limit (NAP-BRIDGE-5). The greeter's inference is FREE but
