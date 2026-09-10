@@ -57,6 +57,10 @@ contains "${out}" 'NPC_OLLAMA_URL=http://127.0.0.1:11434/v1' \
   && ok "env: local Ollama default"                               || bad "env: Ollama URL wrong"
 contains "${out}" 'NPC_MODEL=llama3.2:1b' \
   && ok "env: model llama3.2:1b (default)"                         || bad "env: model wrong"
+contains "${out}" 'NPC_RATE_WINDOW_MS=60000' \
+  && ok "env: rate window default 60000ms"                        || bad "env: rate window wrong"
+contains "${out}" 'NPC_RATE_MAX_PER_WINDOW=6' \
+  && ok "env: rate max default 6"                                 || bad "env: rate max wrong"
 
 if contains "${out}" 'NPC_CLIENT_SECRET' || contains "${out}" 'NPC_BUNKER_PUBKEY' \
    || contains "${out}" 'nostrconnect://' || contains "${out}" '127.0.0.1:8787' \
@@ -68,6 +72,7 @@ fi
 
 # --- 2. Overrides ----------------------------------------------------------
 out_o="$(run_installer NPC_MODEL="qwen3:8b" NPC_OLLAMA_URL="http://127.0.0.1:11435/v1" NPC_SOUL_FILE="/tmp/soul.md" \
+         NPC_RATE_WINDOW_MS="30000" NPC_RATE_MAX_PER_WINDOW="2" \
          bash "${INSTALLER}" --render-env)"
 
 contains "${out_o}" 'NPC_MODEL=qwen3:8b' \
@@ -76,6 +81,10 @@ contains "${out_o}" 'NPC_OLLAMA_URL=http://127.0.0.1:11435/v1' \
   && ok "override: NPC_OLLAMA_URL honoured"                       || bad "override: NPC_OLLAMA_URL ignored"
 contains "${out_o}" 'NPC_SOUL_FILE=/tmp/soul.md' \
   && ok "override: NPC_SOUL_FILE honoured"                        || bad "override: NPC_SOUL_FILE ignored"
+contains "${out_o}" 'NPC_RATE_WINDOW_MS=30000' \
+  && ok "override: NPC_RATE_WINDOW_MS honoured"                   || bad "override: NPC_RATE_WINDOW_MS ignored"
+contains "${out_o}" 'NPC_RATE_MAX_PER_WINDOW=2' \
+  && ok "override: NPC_RATE_MAX_PER_WINDOW honoured"               || bad "override: NPC_RATE_MAX_PER_WINDOW ignored"
 
 # --- 3. --render-unit surface ---------------------------------------------
 unit="$(AGENT_DIR="$AGENT_DIR" bash "${INSTALLER}" --render-unit)"

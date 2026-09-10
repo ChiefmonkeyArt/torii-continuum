@@ -15,7 +15,9 @@
  * an empty allowlist admits nobody; a seal that does not verify against its own
  * (signed) pubkey is never answered; the sender is only trusted after the inner
  * rumor is unwrapped and authenticated — an attacker's gift wrap costs a decrypt
- * but can never elicit a reply to a non-allowlisted identity.
+ * but can never elicit a reply to a non-allowlisted identity. Per-sender rate
+ * limiting (NAP-BRIDGE-5) bounds the FREE local inference too: a spammer cannot
+ * peg the host CPU by flooding, because the check runs before every inference.
  *
  * The pure helpers are exported for unit tests; the loop is a factory with
  * injected deps (pool, signer, chat, giftWrap) so tests never touch a live
@@ -34,6 +36,13 @@ import { nip19 } from 'nostr-tools';
 const KIND_RUMOR = 14;    // inner private direct message
 const KIND_SEAL = 13;     // NIP-44-encrypted rumor, signed by the sender
 const KIND_WRAP = 1059;   // NIP-44-encrypted seal, signed by an ephemeral key
+
+// One fixed throttle notice per sender per window (no inference cost). The
+// greeter sends this instead of a real reply the FIRST time a sender exceeds
+// the rate limit, then silently drops until their window resets — so even the
+// notice cannot itself become a spam vector.
+const RATE_LIMIT_NOTICE =
+  'You are messaging me a little too quickly. Give me a moment and I will be right with you.';
 
 // ─── Pure helpers ────────────────────────────────────────────────────────────
 
@@ -79,6 +88,48 @@ export function isSenderAllowed(senderHex, allowlist) {
   if (!senderHex || typeof senderHex !== 'string') return false;
   if (!allowlist || !(allowlist instanceof Set) || allowlist.size === 0) return false;
   return allowlist.has(senderHex.toLowerCase());
+}
+
+/**
+ * Per-sender fixed-window rate limiter (in-memory, injectable clock). The
+ * greeter's inference is FREE (local llama3.2:1b) but it still costs CPU, so a
+ * spammer must not be able to peg the host by flooding DMs. `check(senderHex)`
+ * returns `{ allowed, throttle }`: a sender is allowed up to `maxPerWindow`
+ * replies per `windowMs`; the first message over the limit earns a single
+ * `throttle` flag (send one notice), the rest are silent. Each message is
+ * checked BEFORE inference — the expensive part.
+ *
+ * @param {{windowMs:number, maxPerWindow:number, now:function}} [opts]
+ * @returns {{check:function(string):{allowed:boolean, throttle:boolean}}}
+ */
+export function createRateLimiter({ windowMs = 60_000, maxPerWindow = 6, now = () => Date.now() } = {}) {
+  const win = Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 60_000;
+  const max = Number.isFinite(maxPerWindow) && maxPerWindow >= 1 ? maxPerWindow : 6;
+  const buckets = new Map(); // senderHex(lower) -> { windowStart, count, notified }
+
+  function keyOf(senderHex) {
+    return typeof senderHex === 'string' ? senderHex.trim().toLowerCase() : '';
+  }
+
+  function check(senderHex) {
+    const key = keyOf(senderHex);
+    if (!key) return { allowed: false, throttle: false }; // no identity -> drop
+    const t = now();
+    let b = buckets.get(key);
+    if (!b || t >= b.windowStart + win) {
+      b = { windowStart: t, count: 0, notified: false };
+      buckets.set(key, b);
+    }
+    if (b.count >= max) {
+      const throttle = !b.notified;
+      if (throttle) b.notified = true;
+      return { allowed: false, throttle };
+    }
+    b.count += 1;
+    return { allowed: true, throttle: false };
+  }
+
+  return { check };
 }
 
 /**
@@ -189,7 +240,7 @@ export function giftWrapSeal(seal, senderHex, createdAt = Math.floor(Date.now() 
 
 /**
  * @param {object} deps
- * @param {object} deps.cfg      { relayUrls:string[], allowlist:Set<string>, soul:string, model:string }
+ * @param {object} deps.cfg      { relayUrls:string[], allowlist:Set<string>, soul:string, model:string, rateLimit?:{windowMs:number, maxPerWindow:number} }
  * @param {string} deps.greeterHex  greeter pubkey (hex) — derived from the local nsec
  * @param {object} deps.log      { info, warn, error } (or console-shaped)
  * @param {object} deps.pool     nostr-tools SimplePool (or compatible stub)
@@ -202,13 +253,15 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
   let sub = null;
   let stopped = false;
   const now = () => Math.floor(Date.now() / 1000);
+  const rateLimit = createRateLimiter(cfg?.rateLimit || {});
 
   /**
    * Process one inbound gift wrap (kind 1059) end-to-end. Silently drops
-   * anything that fails verification / unwrap / allowlist / inference, so an
-   * unauthorised or malformed sender never sees a reply and never costs
-   * inference. A spammer can force a decrypt (the cost of sender anonymity) but
-   * can never elicit a reply to a non-allowlisted identity.
+   * anything that fails verification / unwrap / allowlist / rate-limit /
+   * inference, so an unauthorised or malformed sender never sees a reply and
+   * never costs inference. A spammer can force a decrypt (the cost of sender
+   * anonymity) but can never elicit a real reply to a non-allowlisted identity,
+   * and is rate-limited to `maxPerWindow` replies per window before inference.
    */
   async function handleEvent(event) {
     try {
@@ -254,9 +307,25 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
         return;
       }
 
+      // 6. Per-sender rate limit — the inference is free but still costs CPU, so
+      //    a spammer must not be able to peg the host by flooding DMs. Checked
+      //    BEFORE inference (the expensive part). The first over-limit message
+      //    earns a single throttle notice (also pre-inference); the rest are
+      //    silently dropped until the sender's window resets.
+      const gate = rateLimit.check(senderHex);
+      if (!gate.allowed) {
+        if (gate.throttle) {
+          await sendReply(senderHex, RATE_LIMIT_NOTICE);
+          log.warn(`[npc-gateway] rate-limited ${senderHex.slice(0, 8)}… (sent throttle notice)`);
+        } else {
+          log.warn(`[npc-gateway] rate-limited ${senderHex.slice(0, 8)}… (silent drop)`);
+        }
+        return;
+      }
+
       const plaintext = typeof rumor.content === 'string' ? rumor.content : '';
 
-      // 6. Local inference with the greeter persona in the system turn.
+      // 7. Local inference with the greeter persona in the system turn.
       const messages = [
         { role: 'system', content: cfg.soul },
         { role: 'user', content: plaintext },
@@ -267,23 +336,30 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
         return;
       }
 
-      // 7. Rumor → seal (local encrypt + sign) → gift wrap (local ephemeral).
-      const rumorOut = buildRumor({ greeterHex, senderHex, plaintext: reply.content, createdAt: now() });
-      const sealCipher = await signer.nip44Encrypt(senderHex, JSON.stringify(rumorOut));
-      const sealTpl = buildSealTemplate({ ciphertext: sealCipher, greeterHex, createdAt: now() });
-      const signedSeal = await signer.signEvent(sealTpl);
-      const wrap = await giftWrap(signedSeal, senderHex);
-
-      // 8. Publish the wrap to the configured relays.
-      const pubs = await Promise.allSettled(
-        cfg.relayUrls.map((url) => pool.publish([url], wrap)),
-      );
-      const okCount = pubs.filter((p) => p.status === 'fulfilled').length;
+      // 8. Rumor → seal → wrap → publish, then log the delivery fan-out.
+      const okCount = await sendReply(senderHex, reply.content);
       log.info(`[npc-gateway] replied to ${senderHex.slice(0, 8)}… (${okCount}/${cfg.relayUrls.length} relays)`);
     } catch (err) {
       // Never crash the loop on a single bad message.
       log.warn('[npc-gateway] handle error', err?.message || err);
     }
+  }
+
+  /**
+   * Rumor → seal (local encrypt + sign) → gift wrap (local ephemeral), then
+   * publish to every configured relay. Shared by the normal reply and the
+   * throttle notice. Returns the number of relays that accepted the publish.
+   */
+  async function sendReply(senderHex, plaintext) {
+    const rumorOut = buildRumor({ greeterHex, senderHex, plaintext, createdAt: now() });
+    const sealCipher = await signer.nip44Encrypt(senderHex, JSON.stringify(rumorOut));
+    const sealTpl = buildSealTemplate({ ciphertext: sealCipher, greeterHex, createdAt: now() });
+    const signedSeal = await signer.signEvent(sealTpl);
+    const wrap = await giftWrap(signedSeal, senderHex);
+    const pubs = await Promise.allSettled(
+      cfg.relayUrls.map((url) => pool.publish([url], wrap)),
+    );
+    return pubs.filter((p) => p.status === 'fulfilled').length;
   }
 
   /** Open the gift-wrap subscription and run until stop() is called. */
