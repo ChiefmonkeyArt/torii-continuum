@@ -73,4 +73,4 @@
           - "Torii is up at https://{{ torii_domain }}/"
           - "Continuum Console at https://{{ torii_domain }}/continuum/"
           - "Run 'torii status' on the VPS for the current registry + root_app."
-          - "{{ 'Ollama enabled — pull models with: ollama pull llama3.2:3b' if (torii_enable_ollama | default(false) | bool) else 'Ollama disabled. Set torii_enable_ollama: true to add local models.' }}"
+          - "{{ 'Ollama enabled — pull models with: ollama pull llama3.2:1b' if (torii_enable_ollama | default(false) | bool) else 'Ollama disabled. Set torii_enable_ollama: true to add local models.' }}"

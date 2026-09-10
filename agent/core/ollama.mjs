@@ -19,10 +19,7 @@
  *   ollama:
  *     enabled: true
  *     endpoint: http://127.0.0.1:11434   # default Ollama bind
- *     model: llama3.2:1b                 # default when skill has no override
- *     models:
- *       chat: llama3.2:1b
- *       reflect: qwen2.5:7b              # heavier model for offline work
+ *     model: llama3.2:1b                 # single fallback model for every skill
  *     timeout_ms: 60000
  *
  * On a fresh VPS the installer pulls the configured model with

@@ -59,10 +59,8 @@ continuum_vite_agent_url: "/continuum"
 torii_enable_ollama: false
 ollama_bind: "127.0.0.1:11434"
 ollama_pull_models:
-  - "llama3.2:3b"
-  # - "qwen2.5:7b"           # uncomment for reflection tier (needs ~6 GB RAM)
+  - "llama3.2:1b"
 ollama_router_strategy: "routstr_first"            # routstr_first | ollama_first | ollama_only | routstr_only
-ollama_chat_model: "llama3.2:3b"
-ollama_reflect_model: "llama3.2:3b"                # bump to qwen2.5:7b for better reflection
+ollama_chat_model: "llama3.2:1b"
 ollama_timeout_ms: 60000
 ollama_temperature: 0.4
