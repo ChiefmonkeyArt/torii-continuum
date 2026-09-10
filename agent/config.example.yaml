@@ -234,24 +234,12 @@ ollama:
   # Where the Ollama daemon listens. Loopback only for security.
   endpoint: "http://127.0.0.1:11434"
 
-  # Default model when a skill doesn't specify one.
-  # Tier guide (Q4_K_M quantisation on CPU):
-  #   llama3.2:1b     — 1.3 GB disk, ~2 GB RAM, ~25 tok/s on 2 vCPU (RECOMMENDED; NON-thinking — see the qwen3 note below)
-  #   llama3.2:3b     — 2 GB disk, ~3 GB RAM,  ~15 tok/s on 2 vCPU
-  #   llama3.1:8b     — 5 GB disk, ~6 GB RAM,  ~5 tok/s on 4 vCPU
-  #   qwen2.5:7b      — 5 GB disk, ~6 GB RAM,  ~7 tok/s on 4 vCPU
-  #   qwen2.5:14b     — 9 GB disk, ~10 GB RAM, ~2 tok/s on 4 vCPU (GPU strongly advised)
-  #   NOTE: do NOT set a qwen3 (thinking) model as the default — over Ollama's
-  #   OpenAI-compat /v1/chat/completions it emits its whole reply into the
-  #   `reasoning` field and returns an empty `content`, so the fallback looks
-  #   dead (NAP-BRIDGE-4). qwen3 only works over the native /api/chat with
-  #   think:false, which this client does not use.
+  # Single fallback model for EVERY skill (chat and reflect alike).
+  # llama3.2:1b - non-thinking, ~1.3 GB, fast on 2 vCPU. One model everywhere
+  # keeps the fallback light, simple and predictable (NAP-BRIDGE-4). Do not set
+  # a qwen3 (thinking) model here: over Ollama's /v1/chat/completions it emits
+  # into the reasoning field and returns empty content, so the fallback looks dead.
   model: "llama3.2:1b"
-
-  # Per-skill overrides. Fall back to `model` above when unset.
-  models:
-    chat:    "llama3.2:1b"     # v0.2.116-alpha: qwen3:0.6b swapped out — non-thinking, over the qwen3 thinking-mode empty-content bug
-    reflect: "qwen2.5:7b"      # reflection is offline, can afford a bigger model
 
   # Ollama sampling knobs. Lower = more deterministic, better for reflection.
   temperature: 0.4

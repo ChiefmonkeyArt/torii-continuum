@@ -213,7 +213,7 @@ sudo systemctl edit ollama.service
 #   [Service]
 #   Environment="OLLAMA_HOST=127.0.0.1:11434"
 sudo systemctl restart ollama
-ollama pull llama3.2:3b
+ollama pull llama3.2:1b
 ```
 
 The Ansible installer (`ops/ansible/`, role `ollama`) automates all of
@@ -226,10 +226,7 @@ that plus binds Ollama to loopback and pulls the models listed in
 ollama:
   enabled: true
   endpoint: "http://127.0.0.1:11434"
-  model: "llama3.2:3b"
-  models:
-    chat:    "llama3.2:3b"
-    reflect: "qwen2.5:7b"
+  model: "llama3.2:1b"
   temperature: 0.4
   timeout_ms: 60000
 
@@ -244,16 +241,15 @@ capped by what remains of `total_budget_ms`. See *End-to-end turn budget* below.
 Restart the agent, then hit `GET /api/health/models` (admin-gated) to
 confirm both providers are reachable.
 
-### Model tier guide (Q4_K_M quant, CPU-only)
+### Single fallback model
 
-| Model                  | Disk  | RAM    | 2 vCPU  | 4 vCPU  | Use case               |
-| ---------------------- | ----- | ------ | ------- | ------- | ---------------------- |
-| `llama3.2:3b`          | 2 GB  | 3 GB   | ~15 t/s | ~30 t/s | Starter chat, reflection |
-| `qwen2.5:7b`           | 5 GB  | 6 GB   | ~4 t/s  | ~7 t/s  | Reflection, thoughtful chat |
-| `llama3.1:8b`          | 5 GB  | 6 GB   | ~3 t/s  | ~5 t/s  | Chat when you want more |
-| `qwen2.5:14b`          | 9 GB  | 10 GB  | ~1 t/s  | ~2 t/s  | Reflection only (too slow for live chat) |
+One model serves every skill (chat and reflect alike): `llama3.2:1b` —
+non-thinking, ~1.3 GB, fast on 2 vCPU. Keeping a single small model makes the
+fallback light, simple and predictable. Do not set a `qwen3` (thinking) model
+here: over Ollama's `/v1/chat/completions` it emits into `reasoning` and
+returns empty `content`, so the fallback looks dead (NAP-BRIDGE-4).
 
-For live chat on 8B+ models comfortably, use a GPU box.
+For live chat on bigger, slower models comfortably, use a GPU box.
 
 ### Router strategies
 

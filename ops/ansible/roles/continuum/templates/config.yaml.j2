@@ -39,10 +39,7 @@ routstr:
 ollama:
   enabled: {{ torii_enable_ollama | default(false) | bool | lower }}
   endpoint: "http://{{ ollama_bind | default('127.0.0.1:11434') }}"
-  model: "{{ ollama_chat_model | default('llama3.2:3b') }}"
-  models:
-    chat:    "{{ ollama_chat_model | default('llama3.2:3b') }}"
-    reflect: "{{ ollama_reflect_model | default('llama3.2:3b') }}"
+  model: "{{ ollama_chat_model | default('llama3.2:1b') }}"
   temperature: {{ ollama_temperature | default(0.4) }}
   timeout_ms: {{ ollama_timeout_ms | default(60000) }}
 
