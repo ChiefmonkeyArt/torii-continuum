@@ -9,6 +9,19 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.128-alpha — continuity-doc backfill (NAP-BRIDGE-4→8 + HERMES-DASHBOARD) (2026-09-11)
+
+**What shipped.** `torii-continuum-{todo,progress,handoff}.md` were backfilled from the Space mirror to close a silent drift: they had stopped being committed around v0.2.113 (NAP-BRIDGE-3), so NAP-BRIDGE-4 through NAP-BRIDGE-8 (v0.2.114–v0.2.124), the Hermes Web Dashboard slices (v0.2.125/v0.2.126), and the paused noticeboard intent-gating backlog note existed only in the Space mirror, never in the repo. This release restores them so the git history is the single source of truth again. **Docs only — no code change**: agent 546/546 and frontend 1822/1822 are untouched and remain green.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.127-alpha → 0.2.128-alpha.
+
+**Update-All checklist.**
+- Code + tests: [n/a] no code change.
+- Version markers: [done] both `package.json` + both lockfiles.
+- `src/config.js VERSION` / `public/sw.js CACHE_VERSION` / `tools/regression-check.mjs` / `index.html` labels / `MVP_APPROVAL_STATE.json` / `NEXT_ACTION_STATE.json`: [n/a] not present in this repo.
+- Continuity docs: [done] `torii-continuum-todo.md`, `torii-continuum-progress.md`, `torii-continuum-handoff.md` backfilled and now byte-synced with the Space mirror. `torii-continuum-strategy.md` skipped — already in sync.
+- ADR: [n/a] no architecture change.
+
 ## v0.2.127-alpha — audit append O(1) + queue recovery (2026-09-11)
 
 **What shipped.** `agent/lib/audit.mjs` appends no longer re-read the whole log. Previously `append()` called `lastHash()` and `seqCount()`, each of which read the entire JSONL, so append cost grew with history (twice per append); and the `tail` promise chain had no rejection recovery, so one failed append poisoned every later append. The recovered tail (last hash + sequence) is now cached in memory (read once on first append, or re-read after a failure invalidates the cache), and the internal continuation is separated from each caller's rejected promise so a failed append can never poison the queue.
@@ -23,6 +36,178 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `src/config.js VERSION` / `public/sw.js CACHE_VERSION` / `tools/regression-check.mjs` / `index.html` labels / `MVP_APPROVAL_STATE.json` / `NEXT_ACTION_STATE.json`: [n/a] not present in this repo.
 - Continuity docs: [done] `torii-continuum-progress.md` (this entry) + `torii-continuum-todo.md` + `torii-continuum-handoff.md`. `torii-continuum-strategy.md` skipped — no strategy change.
 - ADR: [skipped] no architecture change.
+
+## v0.2.126-alpha — Hermes Web Dashboard operator-side wiring (nginx + systemd) (HERMES-DASHBOARD-1) (2026-09-11)
+
+**What shipped.** PR #152 (merge-committed, tagged `v0.2.126-alpha`) adds the operator-side wiring that mounts the Hermes Web Dashboard at `/hermes/` behind the Continuum admin session, building on the v0.2.125 auth primitive. Purely additive ops artifacts, no application code: `ops/nginx/hermes.conf` (`location /hermes/` gated by `auth_request` to the agent's `GET /api/auth/session`, `/api/pty` WebSocket upgrade, 302 → `/continuum/` on 401), `ops/systemd/torii-hermes-dashboard.service` (loopback `hermes dashboard` as `hermes-owner`, `__HERMES_BIN__` placeholder), `ops/hermes-dashboard.md` (apply + verify runbook). The `__Host-` cookie is host-locked to the apex origin, so the dashboard must stay on `/hermes/` (a subdomain would never receive the cookie).
+
+**Surfaces touched.** three new `ops/` files only. Version 0.2.125 → 0.2.126-alpha (repo convention: every merged change bumps + tags to keep `main == tag`); no code, no tests.
+
+**Deploy.** NOT done — merged + tagged only (VPS still on v0.2.124). Next: deploy v0.2.126-alpha via torii-suite, then install/enable the unit + nginx fragment and run the four verify-at-implementation checks.
+
+## v0.2.125-alpha — Hermes Web Dashboard auth primitive: session cookie + /api/auth/session (HERMES-DASHBOARD-1) (2026-09-11)
+
+**What shipped.** PR #151 (merge-committed, tagged `v0.2.125-alpha`) adds the one primitive needed to gate Nous Research's first-party Hermes Web Dashboard at `/hermes/` behind the Continuum admin session. Continuum auth was Bearer-only, so nginx `auth_request` (which forwards a browser-auto-sent credential) could not gate a separate same-origin SPA. `agent/index.mjs` now registers `@fastify/cookie` (parse-only); `POST /api/auth/verify` + `/refresh` success set an HttpOnly/Secure/SameSite=Lax `__Host-torii_session` cookie mirroring the bearer (expires in step with the token clock); new `POST /api/auth/logout` clears it; new `GET /api/auth/session` is the read-only 200/401 `auth_request` target accepting cookie OR bearer. `requireAdmin` is unchanged (bearer-only). Frontend `logout()` fires a best-effort cookie-clear POST. ADR in `docs/hermes-two-voice.md`.
+
+**Surfaces touched.** `agent/index.mjs`, `agent/package.json` (+`@fastify/cookie`), `agent/test/auth-cookie.test.js` (new, +8), `src/data/agent.js` + `src/data/agent.test.js` (+1), `docs/hermes-two-voice.md`, package.json/agent/package.json + both lockfiles. Version → 0.2.125-alpha.
+
+**Deploy.** NOT done — merged + tagged only. Operator-side wiring prepared (uncommitted): `ops/nginx/hermes.conf`, `ops/systemd/torii-hermes-dashboard.service`, `ops/hermes-dashboard.md` (runbook + verify checklist).
+
+## v0.2.124-alpha — noticeboard publish surface + deterministic budget-clamp test (NAP-BRIDGE-8) (2026-09-10)
+
+**What shipped.** Two items, one PR (#150, squash-merged, tagged `v0.2.124-alpha`). (1) The flaky `provider-budget-clamp` test is root-caused and fixed: `createRoutstr` threads an injectable `deps.now` clock into `createBudget` (the model-router pattern), and the minimum-slice test freezes the boundary with `now: () => 0` — the real-wall-clock race that failed ~1/15 is gone. (2) The Continuum **draft→approve→sign→publish** surface for the noticeboard. `noticeboard-contract.mjs` is the single source of `NOTICEBOARD_KIND`/`NOTICEBOARD_D` (+ kinds/cap), re-exported by `npc-bridge` so read and write can't drift. Pure `noticeboard.mjs` (`normalizeNotices`/`composeNoticeboard`) builds the unsigned kind-30078 `d="noticeboard"` event — no key, no signing, no relay. `POST /api/noticeboard/draft` (admin-gated, rate-limited) validates and writes `noticeboard.draft.json` (event + `_relay` + `_proposed_at`) to the pending shelf, returning `{file,event,relay}`. The **Noticeboard** view (`/noticeboard` route + sidebar, agent client + `relay-publish` WebSocket helper) composes notices, reviews the rendered board, signs via NIP-07 in-browser (no nsec on the VPS), publishes the signed event to `noticeboard.relay` (config.yaml → `NOTICEBOARD_RELAY` → `wss://relay.chiefmonkey.art`), and discards the draft on success. Shelf metadata is stripped before signing — the signer sees exactly `{kind,content,created_at,tags}`. Nakama keeps **no** publish path.
+
+**Surfaces touched.** `agent/core/noticeboard-contract.mjs` + `agent/core/noticeboard.mjs` (new), `npc-bridge.mjs` (re-export), `agent/index.mjs` (route), `agent/config.example.yaml`, `agent/core/routstr.mjs` + `agent/test/provider-budget-clamp.test.js` (clock fix), `agent/test/noticeboard.test.js` (+5), `src/data/agent.js`, `src/lib/relay-publish.js` + `src/views/noticeboard.js` (new), `src/views/noticeboard-structure.test.js` (+8), `src/shell.js`, `src/main.js`, `docs/nap-bridge-live-feed.md` (status → publish surface implemented). Version → 0.2.124-alpha.
+
+**Tests.** agent 528→**533**, frontend 1813→**1821**, ops 46.
+
+**Deploy.** DONE — torii-suite `install-continuum.sh` ran with `TORII_CONTINUUM_REF=v0.2.124-alpha`: frontend rebuilt + `current` flipped to release `20260910T122808Z-1674832`, agent checked out + restarted, registry → 0.2.124-alpha. Verified: agent `/api/health` → 0.2.124-alpha, `https://chiefmonkey.art/continuum/` → 200, built bundle contains the Noticeboard view. VPS == tag == `main` HEAD (`1674832`).
+
+## v0.2.122 + v0.2.123-alpha — read-only noticeboard read path (NAP-BRIDGE-8) (2026-09-10)
+
+**What shipped.** The three noticeboard decisions were settled and the Nakama read path built, deployed, and enabled. Settled: kind `30078` + `d="noticeboard"`, author = operator npub; the operator publishes (draft→approve→sign); in-memory 60s cache. `npc-bridge.mjs` gained pure `parseNoticeboard`/`formatNotices`/`createNoticeboardCache` and an optional `getNoticeboard` dep appended to the system turn (a fetch failure degrades to "answer without notices", never drops the reply). `npc-gateway.mjs` reads `NPC_NOTICE_AUTHOR`/`NPC_NOTICE_TTL_MS`, fetches the operator's latest 30078 under a 5s timeout. v0.2.123 adds `normalizePubkeyHex` so `NPC_NOTICE_AUTHOR` accepts hex **or npub1**. Nakama still has **no publish path**.
+
+**Surfaces touched.** `npc-bridge.mjs`, `npc-gateway.mjs`, `agent/test/npc-bridge.test.js` (+7), `install-nap-bridge.sh`, `nap-bridge/.env.example`, `install-nap-bridge.test.sh` (+4), `docs/nap-bridge-live-feed.md` (status → decided + implemented). Version → 0.2.123-alpha.
+
+**Tests.** agent 521→**528**, frontend **1813/1813**, ops 42→**46**.
+
+**Deploy.** DONE — VPS pulled to `v0.2.123-alpha`; `NPC_NOTICE_AUTHOR=npub1a3um269…` set; both restarted; startup logs "noticeboard enabled (author ec79b568…)". **Remaining:** the operator publish surface (not built).
+
+## v0.2.121-alpha — lore refined + read-only noticeboard spec (2026-09-10)
+
+**What shipped.** Two non-code items. (1) `ops/nap-bridge/TORII_LORE.md` refined against the actual design — open-travel heartbeat gateway (not a peer handshake), NIP-07 identity, per-request AI value, two-zone structure, future items clearly marked. (2) New spec `docs/nap-bridge-live-feed.md` for the read-only world noticeboard: a single NIP-33 replaceable event (kind 30078, `d=noticeboard`) signed by the operator, read on-demand by Nakama. Nakama never publishes. Spec only — not built. Also filled the first world's `WORLD.md` (deployed to VPS profile; durable reference at `torii-quest-world.md` in the file repo).
+
+**Surfaces touched.** `ops/nap-bridge/TORII_LORE.md` (rewritten), `docs/nap-bridge-live-feed.md` (new). No code, no tests. Version markers → 0.2.121-alpha.
+
+**Deploy.** DONE — VPS pulled to `v0.2.121-alpha`; `WORLD.md` (filled) + `TORII_LORE.md` (refined) placed in the profile dir; both services restarted; agent health `0.2.121-alpha`.
+
+## v0.2.120-alpha — Nakama lore layer (world + metaverse knowledge) (NAP-BRIDGE-7) (2026-09-10)
+
+**What shipped.** Nakama now loads two static knowledge layers beyond its SOUL — `WORLD.md` (this owner's world) and `TORII_LORE.md` (shared Torii metaverse) — combined into the system prompt. This makes each Nakama an expert in its owner's world + the metaverse, still on free local inference with **no paid tokens and no Nostr traffic at all** (pure local files).
+
+**Surfaces touched.** `npc-bridge.mjs` (`buildSystemPrompt(soul, world, lore)` stacks the layers with `## This world` / `## Torii metaverse` section markers, skipping empties), `npc-gateway.mjs` (reads optional `NPC_WORLD_FILE`/`NPC_LORE_FILE`, loads both, passes the combined context as the bridge's soul), `ops/nap-bridge/TORII_LORE.md` (curated shared lore: worlds/nodes, gateway protocol, identity, nap-zone, value, player actions — new), `ops/nap-bridge/WORLD.md.example` (per-owner template — new), `install-nap-bridge.sh` (renders the two env vars with defaults; seeds both files on first install only, never overwriting edits), `ops/nap-bridge/.env.example` (synced).
+
+**Security note.** The lore layer adds no publish surface — Nakama emits nothing; it only reads local files into its prompt, so this slice cannot be spam or leak anything.
+
+**Tests.** Agent `node --test` **520→521** (+1 `buildSystemPrompt`). Frontend `vitest run` **1813/1813**. `install-nap-bridge.test.sh` **39→42** (+3 world/lore env assertions). `bash -n` + `shellcheck` clean.
+
+**Version markers bumped.** 4 package files → 0.2.120-alpha.
+
+**Deploy.** DONE — pulled `/apps/continuum/agent/repo` to `v0.2.120-alpha`, placed `TORII_LORE.md` + seeded `WORLD.md` template into `/home/hermes-npc/.hermes/profiles/npc/`, wired `NPC_WORLD_FILE`/`NPC_LORE_FILE`, restarted both services; agent health `version 0.2.120-alpha`.
+
+## v0.2.119-alpha — open Nakama to the public (NPC_PUBLIC) (NAP-BRIDGE-6) (2026-09-10)
+
+**What shipped.** Nakama can now run in **public mode**: `NPC_PUBLIC=1` admits every authenticated sender and ignores the allowlist — the per-sender rate limit (NAP-BRIDGE-5) becomes the only throttle. Default stays fail-closed (allowlist required), so opening up is an explicit opt-in, never an accident. The greeter remains fully isolated (no router / owner memory / Cashu float), so "public" means public *persona*, not public *secrets*.
+
+**Surfaces touched.** `npc-bridge.mjs` (access gate → `!cfg.public && !isSenderAllowed(...)`; public skips the allowlist), `npc-gateway.mjs` (reads `NPC_PUBLIC`, passes `public` into cfg; startup guard only refuses an empty allowlist when public is off), `install-nap-bridge.sh` (renders `NPC_PUBLIC` default 0; allowlist validator conditional; `render_env` `${NPC_ALLOWLIST:-}` fixes a `set -u` unbound-var crash on the public path; post-install hint reflects public mode).
+
+**Security note.** Public + the NAP-BRIDGE-5 rate limit is the intended pair — admit everyone, bound the cost. The gift-wrap decrypt stays the only per-message cost an attacker can force; inference never runs for a rate-limited sender.
+
+**Tests.** Agent `node --test` **518→520** (+2: public admits with empty allowlist; public still rate-limits). Frontend `vitest run` **1813/1813**. `install-nap-bridge.test.sh` **34→39** (+5 NPC_PUBLIC default/override/public-no-allowlist/help). `bash -n` + `shellcheck` clean.
+
+**Version markers bumped.** 4 package files → 0.2.119-alpha.
+
+**Deploy.** DONE — pulled `/apps/continuum/agent/repo` to `v0.2.119-alpha`, set `NPC_PUBLIC=1` in the greeter `.env`, restarted `torii-nap-bridge` + `continuum-agent`; agent health reports `version 0.2.119-alpha`.
+
+## v0.2.118-alpha — per-pubkey Nakama spam rate limit (NAP-BRIDGE-5) (2026-09-10)
+
+**What shipped.** Nakama is rate-limited per sender pubkey, checked BEFORE inference. Its inference is free (local `llama3.2:1b`) so a spammer can never spend AI credits — but flooding DMs can still peg the host CPU and slow replies for everyone. The limiter bounds that: a sender gets `maxPerWindow` replies per fixed window; the first over-limit message earns a single throttle notice; the rest drop silently until the window resets.
+
+**Surfaces touched.**
+
+1. `agent/core/npc-bridge.mjs` — new pure `createRateLimiter({ windowMs, maxPerWindow, now })` (in-memory, per-pubkey, fixed window, injectable clock). A gate in `handleEvent` runs AFTER the allowlist check and BEFORE inference; over-limit senders get one `RATE_LIMIT_NOTICE` (itself pre-inference, so even the notice is rate-limited). Extracted the rumor→seal→wrap→publish path into a shared `sendReply` used by both the normal reply and the throttle notice.
+2. `agent/npc-gateway.mjs` — reads `NPC_RATE_WINDOW_MS` (default 60000) and `NPC_RATE_MAX_PER_WINDOW` (default 6), passes them via `cfg.rateLimit`; invalid/absent values fall back inside the limiter.
+3. `ops/install-nap-bridge.sh` — renders the two env vars with defaults; header + security-posture docs updated.
+
+**Security note.** Pre-inference: the expensive local `chat()` never runs for an over-limit sender. A spammer can still force the decrypt (the standing sender-anonymity cost) but can never force inference or more than one throttle notice per window. No change to the paid Kami path, which stays per-player on the player's own float.
+
+**Tests.** Agent `node --test` **513→518** (+4 pure-limiter cases +1 end-to-end throttle case asserting `chat` does NOT re-run and exactly one notice publishes). Frontend `vitest run` **1813/1813**. `install-nap-bridge.test.sh` **30→34** (+2 default-env +2 override assertions). `bash -n` + `shellcheck` clean.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.117-alpha → 0.2.118-alpha.
+
+**Deploy.** DONE — pulled `/apps/continuum/agent/repo` to `v0.2.118-alpha` (was 5 versions behind at `v0.2.113-alpha`), added `NPC_RATE_WINDOW_MS=60000` / `NPC_RATE_MAX_PER_WINDOW=6` to the greeter `.env`, restarted `torii-nap-bridge` + `continuum-agent`. Both active; agent health reports `version 0.2.118-alpha`. The limiter fired immediately on the restart re-delivery burst (the operator's own allowlisted key → 6 allowed + 1 throttle notice + 11 silent drops, one-off and self-corrected), proving it is live.
+
+## v0.2.117-alpha — single fallback model everywhere; drop model tier-guide debt (NAP-BRIDGE-4-SIMPLIFY) (2026-09-10)
+
+**What shipped.** The Ollama fallback is now **one model** — `llama3.2:1b` — for every skill (chat and reflect alike), with the multi-model tier-guide and per-skill overrides removed. The operator's call: a fallback + Nakama should be light, fast, simple and small, not a config surface with six models and a separate bigger `reflect` model.
+
+**Surfaces touched.**
+
+1. `agent/config.example.yaml` — dropped the 6-entry tier guide and the `models:` per-skill block (`chat`/`reflect`); now a single `model: "llama3.2:1b"` with a short advisory comment (incl. the qwen3 thinking-mode warning).
+2. `agent/core/ollama.mjs` — doc comment simplified to the single-model config. (The `modelForSkill` mechanism stays, so an operator *can* still override per skill, but the shipped default is one model.)
+3. `agent/README.md` — tier-guide table replaced with a "Single fallback model" paragraph; config example + `ollama pull` line updated to `llama3.2:1b`.
+4. `ops/ansible/` — `group_vars/all.yml.example` (`ollama_pull_models` → `llama3.2:1b`, `ollama_chat_model` → `llama3.2:1b`, removed `ollama_reflect_model` + the qwen2.5:7b reflection-tier comment); `roles/continuum/templates/config.yaml.j2` (single `model`, no `models:` overrides); `site.yml` (summary string).
+
+**Trade-off noted.** The offline `reflect` skill now uses the tiny `llama3.2:1b` too, so offline reflection quality drops. It's not the fallback chatbot and only runs offline on demand, so this is the accepted simplicity trade.
+
+**Tests.** Agent `node --test` **513/513**, frontend `vitest run` **1813/1813**, `install-hermes-owner`/`-npc`/`-nap-bridge` all pass, `bash -n` clean. No new tests — config-default simplification, no behaviour surface added.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.116-alpha → 0.2.117-alpha.
+
+**Deploy.** Live owner config already reads `model:"llama3.2:1b"`; collapsed `reflect` override to `llama3.2:1b` and removed the unused `qwen3:0.6b` model off the VPS (~522 MB reclaimed). Greeter `.env` already `llama3.2:1b`.
+
+## v0.2.116-alpha — fix owner-agent Ollama fallback (qwen3 thinking-mode) (NAP-BRIDGE-4-OWNER-FALLBACK) (2026-09-10)
+
+**What shipped.** The owner agent's Ollama *fallback* (`agent/core/ollama.mjs`, driven by `config.yaml` `ollama.model`) had the exact same qwen3 thinking-mode bug fixed for the greeter in NAP-BRIDGE-4 — every qwen3 model returns empty `content` over `/v1/chat/completions`, so an `ollama_only`/`ollama_first` operator (or a `routstr_first` turn that degrades) got silence instead of a reply.
+
+**Surfaces touched.**
+
+1. `agent/config.example.yaml` — `ollama.model` + `models.chat` `qwen3:0.6b` → `llama3.2:1b`; tier guide rewritten with a `llama3.2:1b` (RECOMMENDED) entry and an explicit note that qwen3 models are unusable over the `/v1` fallback. `reflect` stays `qwen2.5:7b` (non-thinking).
+2. `agent/core/ollama.mjs` — code-level fallback `llama3.2:3b` → `llama3.2:1b`; **new defensive guard** so a reasoning-only response (empty `content` + non-empty `reasoning`) returns a loud, actionable `upstream_empty` error naming the thinking-mode cause and pointing at a non-thinking model — instead of the generic "empty completion" that sent the operator chasing a phantom timeout.
+3. `ops/install-hermes-owner.sh` — `OLLAMA_MODEL` default `qwen3:4b` → `llama3.2:1b` (the owner installer's pulled model, also wrong tier per the standing "4b too slow on 8 GB" note), + header/help/doc comments.
+4. `agent/npc-gateway.mjs` — code-level fallback `NPC_MODEL || 'qwen3:4b'` → `llama3.2:1b`. This was a leftover landmine from NAP-BRIDGE-4: the installer sets `NPC_MODEL` so it rarely triggered, but a manual run without the `.env` would have fallen back to the broken qwen3:4b.
+
+**Tests.** Agent `node --test` **513/513** (+1 new `ollama-request-shape.test.js` case asserting the reasoning-only response surfaces an `upstream_empty` error that names the cause and the remedy). Frontend `vitest run` **1813/1813** (64 files). `ops/test/install-hermes-owner.test.sh` **16/16** (qwen3:4b expectation strings → llama3.2:1b), `install-hermes-npc.test.sh` 19/19, `install-nap-bridge.test.sh` 30/30. `bash -n` + `shellcheck -S error` clean.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.115-alpha → 0.2.116-alpha.
+
+**Deploy.** Live owner agent `config.yaml` `ollama.model`/`models.chat` still read `qwen3:0.6b` — updated to `llama3.2:1b` and the agent restarted (see ship report). Model already present on the VPS from the greeter fix (no re-pull).
+
+## v0.2.115-alpha — greeter named Nakama + fix silent-inference (NAP-BRIDGE-4) (2026-09-10)
+
+**What shipped.** Two changes, both greeter-facing.
+
+1. **Identity: the greeter is now named *Nakama*** (comrade, companion, fellow). `ops/hermes-npc/SOUL.md.example` and the inline `render_soul_md()` in `ops/install-hermes-npc.sh` both gained the line *"Your name is Nakama — comrade, companion, fellow. You will never invent or adopt another name."* — binding the name explicitly so the model no longer free-associates an identity (it had invented "Kyrios").
+
+2. **Inference: default greeter model `qwen3:0.6b` → `llama3.2:1b`.** Root cause of the greeter going silent: every `qwen3` model over Ollama's OpenAI-compat `/v1/chat/completions` surface emits its entire reply into the `reasoning` field and returns an empty `content` string (qwen3's mandatory thinking scratchpad). The nap-bridge treats empty `content` as `UPSTREAM_EMPTY`, surfaced in the journal as `no reply from inference unreachable`. **Verified empirically on the live VPS:** the `chat_template_kwargs: {enable_thinking:false}` and `think:false` toggles are both IGNORED over `/v1/chat/completions` (they only work over Ollama's native `/api/chat`), so the *only* verified fix that keeps the existing `/v1/chat/completions` endpoint is switching to a **non-thinking** model. `llama3.2:1b` (~1.3 GB, non-thinking) replied to a direct probe in **2.1 s** where qwen3:0.6b returned empty.
+
+**Surfaces touched.** `ops/install-nap-bridge.sh` (`NPC_MODEL` default + header comment documenting why qwen3 is no longer valid); `ops/install-hermes-npc.sh` (`OLLAMA_MODEL` default qwen3:4b → llama3.2:1b for a single coherent greeter model, + header/help + the SOUL heredoc); `ops/hermes-npc/SOUL.md.example`.
+
+**Tests.** `ops/test/install-nap-bridge.test.sh` **30/30** (default-model assertion updated); `ops/test/install-hermes-npc.test.sh` **19/19** (+1 New assertion that the SOUL names itself Nakama; all `qwen3:4b` expectation strings updated to `llama3.2:1b`). Agent `node --test` **512/512**, frontend `vitest run` **1813/1813** (64 files), `bash -n` + `shellcheck -S error` clean.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.114-alpha → 0.2.115-alpha. Version is derived dynamically in the SPA (`appVersion()` reads `package.json`); no hardcoded stamp to change.
+
+**Follow-on flagged (NOT done here — separate surface):** the **owner** agent's Ollama *fallback* (`agent/core/ollama.mjs`, driven by `config.yaml` `ollama.model: "qwen3:0.6b"`) hits the exact same qwen3 thinking-mode empty-content bug over `/v1/chat/completions`. It defaults to `routstr_first` so Ollama is only the degraded path, but any operator who runs `ollama_only`/`ollama_first` with a qwen3 model will see the same silence. Fix is the same model-swap (or teaching `ollama.mjs` to use `/api/chat` + `think:false`). Left out of this slice to keep scope on the greeter; queued as NAP-BRIDGE-4-OWNER-FALLBACK.
+
+## v0.2.114-alpha — nap-bridge auto-defaults NPC_RELAYS to relay.<TORII_DOMAIN> (NAP-BRIDGE-DEFAULT-RELAY-1) (2026-09-10)
+
+**What shipped.** `ops/install-nap-bridge.sh` now derives `NPC_RELAYS` from `TORII_DOMAIN` when unset: `NPC_RELAYS="wss://relay.${TORII_DOMAIN}"`. Explicit `NPC_RELAYS=` still wins. Matches the torii-suite v0.9.8-alpha default (subdomain relay). An operator installing the whole stack in one shot with only `TORII_DOMAIN` set now gets a working NIP-17 gateway pointed at their own sovereign relay — no more "which relay?" cliff.
+
+**Fail-closed behavior preserved.** When both `NPC_RELAYS` and `TORII_DOMAIN` are unset, the installer still exits non-zero with the same FATAL message pattern (test 5 still green). Only the derived case is new.
+
+**Tests.** `ops/test/install-nap-bridge.test.sh` **30/30** (28 pre + 2 new for the `TORII_DOMAIN`-derived path). Agent `node --test` **512/512**, frontend `vitest run` **1813/1813**, `npm run build` clean.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.113-alpha → 0.2.114-alpha.
+
+**Update-All checklist.**
+
+- Code + tests: [done] installer default-derive + 2-test regression + full suites green.
+- Version markers: [done] `package.json`, `agent/package.json`, both `package-lock.json`.
+- `src/config.js VERSION`: [n/a] not present in this repo.
+- `public/sw.js CACHE_VERSION`: [n/a] not present.
+- `index.html` labels: [n/a].
+- `tools/regression-check.mjs EXPECTED_VERSION`: [n/a] not present.
+- Dashboard data: [n/a].
+- `MVP_APPROVAL_STATE.json`: [n/a].
+- `NEXT_ACTION_STATE.json`: [n/a].
+- Continuity docs: progress (this file, done), todo (updated), handoff (updated); strategy unchanged (this is a defaults-only slice).
+- ADRs: [none] no architecture change; the installer contract still says NPC_RELAYS wins.
+- GitHub: PR to be merged squash on `main`; tag `v0.2.114-alpha` cut from that merge.
+- VPS: no code deploy required — operator's `/home/hermes-npc/.nap-bridge/.env` already has an explicit `NPC_RELAYS=wss://relay.chiefmonkey.art`, which continues to take priority. Fresh installs pick up the default automatically.
+
+**Follow-on / paired work.** Shipped alongside `torii-suite` v0.9.8-alpha (SUITE-RELAY-SUBDOMAIN-1), which provisions the `relay.<TORII_DOMAIN>` vhost + cert in `install-nostr-git.sh` and adds DNS preflight for the subdomain in `bootstrap.sh`. The two slices together turn the manually-configured `wss://relay.chiefmonkey.art` on the live VPS into the default operator experience.
+
+---
 
 ## v0.2.113-alpha — NAP-BRIDGE-3 wire-shape fix + gateway keepalive + greeter model default (2026-09-09)
 
