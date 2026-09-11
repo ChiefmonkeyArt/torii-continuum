@@ -9,6 +9,34 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.131-alpha — audit A05 end-to-end deadlines + A08 quota delta (2026-09-11)
+
+**What shipped.** Two audit findings. **A05** — `ollama.mjs`, `routstr-provider.mjs`, `project-sources.mjs`, `release-check.mjs` each cleared their request timer right after headers arrived, so a slow response *body* ran outside the deadline (reproduced for Ollama: a 10 ms timeout let a 61 ms body succeed). The timeout is now armed through body consumption (cleared in a `finally`), and an abort during body read surfaces as `timeout`/`UPSTREAM_TIMEOUT` rather than bad JSON. **A08** — `memstore.mjs` `put()` skipped every quota check on replacement, so a 5-byte item was replaced by 100 bytes under a 10-byte cap. Replacement quota is now enforced on the signed byte delta (`byteLen − prevSize`), so a growing replacement is rejected and a shrinking one still lands.
+
+**Tests.** agent 552→**553** (+1 A05 slow-body regression, `{ timeout: 2000 }` guard; +1 A08 growing/shrinking replacement already in 552). Full `node --test` green.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.130 → 0.2.131-alpha.
+
+**Update-All checklist.** Code + tests [done]; version markers [done]; `src/config.js VERSION`/`sw.js`/`regression-check`/`index.html`/`MVP_APPROVAL_STATE`/`NEXT_ACTION_STATE` [n/a — not present]; continuity docs `progress`+`todo`+`handoff` [done]; strategy [skipped — no strategy change]; ADR [skipped — no architecture change].
+
+## v0.2.130-alpha — audit funds/privacy batch (A01 + A04 + A06 + A07) (2026-09-11)
+
+**What shipped.** Four audit findings in the funds/privacy correctness slice. **A01** — `model-router.mjs` now honours the allowlisted `strategy` override (`KNOWN_STRATEGIES` + `turnStrategy`), so a caller-supplied `strategy: local` can no longer silently become a paid remote call; `openai-adapter.mjs` threads `strategy: modelPick.strategy`. **A06** — `satsFor()` clamps provider-derived `estimateSatsForModel` to the configured `max_sats_per_request` and rejects non-finite/negative catalog prices; `chat()` reserves a total turn allowance, halts on terminal (non-retryable) failure before paying more candidates, and reports `sats_reserved` across all attempts (not just success spend). **A04** — private memory/draft writes and their parent dirs now use 0600/0700 instead of umask-default 0644 (`reflect.mjs`, `index.mjs`, `seed-drafts.mjs`). **A07** — quota/export enumeration now uses the canonical `validProjectSlug` predicate (which includes `_global`), so `_global` memory no longer vanishes from export and quota totals.
+
+**Tests.** agent 550→**551** (+1 A06 clamp regression). Full `node --test` green.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.129 → 0.2.130-alpha.
+
+**Update-All checklist.** Code + tests [done]; version markers [done]; markers not present in this repo [n/a]; continuity docs [done]; strategy [skipped]; ADR [skipped — all are bug fixes, no architecture change]. **VPS** deployed from the tag (`1b4b7a5`) — VPS == tag == main.
+
+## v0.2.129-alpha — audit destructive-test fix (install-hermes tmp fixtures) (2026-09-11)
+
+**What shipped.** `ops/test/install-hermes-{owner,npc}.test.sh` no longer `rm -rf /home/hermes-*`; installers honour `HERMES_{OWNER,NPC}_HOME` override; tests use `mktemp` fixtures. Both green (16/19 passing).
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.128 → 0.2.129-alpha.
+
+**Update-All checklist.** Code + tests [done]; version markers [done]; continuity docs [done]; strategy [skipped]; ADR [skipped].
+
 ## v0.2.128-alpha — continuity-doc backfill (NAP-BRIDGE-4→8 + HERMES-DASHBOARD) (2026-09-11)
 
 **What shipped.** `torii-continuum-{todo,progress,handoff}.md` were backfilled from the Space mirror to close a silent drift: they had stopped being committed around v0.2.113 (NAP-BRIDGE-3), so NAP-BRIDGE-4 through NAP-BRIDGE-8 (v0.2.114–v0.2.124), the Hermes Web Dashboard slices (v0.2.125/v0.2.126), and the paused noticeboard intent-gating backlog note existed only in the Space mirror, never in the repo. This release restores them so the git history is the single source of truth again. **Docs only — no code change**: agent 546/546 and frontend 1822/1822 are untouched and remain green.

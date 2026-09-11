@@ -130,6 +130,21 @@ test('memstore enforces the per-scope item quota', async () => {
   h.cleanup();
 });
 
+test('memstore enforces the byte delta on a growing replacement (audit A08)', async () => {
+  const h = harness({ quotas: { perScopeBytes: 10, perOwnerBytes: 10 } });
+  // 5-byte item fits under the 10-byte scope + owner caps.
+  const first = await h.memstore.put({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', cls: 'semantic', dTag: 'x', ciphertext: '12345' });
+  assert.equal(first.ok, true);
+  // A 100-byte replacement must not bypass the caps via the replacement branch.
+  const grown = await h.memstore.put({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', cls: 'semantic', dTag: 'x', ciphertext: 'x'.repeat(100) });
+  assert.equal(grown.ok, false);
+  assert.equal(grown.code, 'quota_bytes');
+  // A shrinking replacement stays within quota and succeeds.
+  const shrunk = await h.memstore.put({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', cls: 'semantic', dTag: 'x', ciphertext: '123' });
+  assert.equal(shrunk.ok, true);
+  h.cleanup();
+});
+
 test('memstore delete unlinks the file, drops the index record, and writes a tombstone', async () => {
   const h = harness();
   const r = await h.memstore.put({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', cls: 'semantic', dTag: 'x', ciphertext: 'c' });

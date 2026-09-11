@@ -11,6 +11,19 @@
 
 ### Active tasks
 
+- **AUDIT-REMEDIATION — drive the 2026-09-10 Suite code+storage audit findings to zero. IN PROGRESS.** Source docs: `audits/2026-09-10/{torii-suite-code-audit.md, torii-suite-audit-technical-appendices.md}` (Space mirror). Recommended order: dispatcher → destructive tests → funds/privacy → storage lifecycle → deadlines → Quest/installer → deployment contract → reclamation → consolidation → profiling. Status per finding:
+  - **Quest F01 (privileged dispatcher)** — DONE, shipped + live-verified (ops/torii-admin-run.sh v2, ADR-0102, PR #190).
+  - **Destructive tests (`rm -rf /home/hermes-*`)** — DONE v0.2.129-alpha (PR #155).
+  - **A01 chat-local routing** — DONE v0.2.130-alpha.
+  - **A04 legacy file modes** — DONE v0.2.130-alpha.
+  - **A06 total sats budget** — DONE v0.2.130-alpha.
+  - **A07 `_global` enumeration** — DONE v0.2.130-alpha.
+  - **A05 end-to-end deadlines** — DONE v0.2.131-alpha.
+  - **A08 replacement quota delta** — DONE v0.2.131-alpha.
+  - **A02/A03 wallet durability (mint state machine + per-mint tx coordinator)** — next.
+  - **A25 session-secret rotation safety hold** — next.
+  - **A09/A10/A13/A14/A15/A17/A18/A21, FE-01…16, Quest F1–F9/F02–F12, Suite installer, exposed/unbounded work, Stages 2–5** — queued.
+
 - **PERF-FIX-1 — audit append O(1) + queue recovery. DONE v0.2.127-alpha.** `agent/lib/audit.mjs` caches the recovered tail (last hash + sequence) instead of re-reading the whole log twice per append, and recovers the promise queue after a rejection so one failed append can't poison later appends. See `torii-continuum-progress.md`.
 
 - **HERMES-DASHBOARD-1 — mount the first-party Hermes Web Dashboard at `/hermes/` behind the Continuum admin session. IMPLEMENTATION MERGED + TAGGED (v0.2.125-alpha); WIRING MERGED + TAGGED (v0.2.126-alpha); DEPLOY + VERIFY pending.** **Why.** The owner wants Nous Research's shipped Hermes Web Dashboard (web admin + Chat tab embedding the real TUI) reachable in-browser, but only for the site admin — no Nous OAuth, no second login. **Settled.** Loopback `hermes dashboard` (127.0.0.1:9119, its own auth gate OFF) + nginx as the sole door via `auth_request`; the npub is the only credential. Continuum auth was Bearer-only, so the agent now also mints an HttpOnly `__Host-torii_session` cookie (at verify+refresh) + a read-only `GET /api/auth/session` (cookie OR bearer) for the gate, and `POST /api/auth/logout` to clear it. `requireAdmin` stays bearer-only. **Built (v0.2.125).** `agent/index.mjs` cookie+logout+session routes; `@fastify/cookie`; frontend `logout()` best-effort cookie-clear POST; ADR in `docs/hermes-two-voice.md`. Tests: agent 533→**541** (+8), frontend 1821→**1822** (+1). PR #151 merge-merged, tagged `v0.2.125-alpha`. **Committed (PR #152, merged + tagged `v0.2.126-alpha`).** `ops/nginx/hermes.conf` + `ops/systemd/torii-hermes-dashboard.service` + `ops/hermes-dashboard.md`. **Next.** deploy v0.2.126-alpha → install/enable unit + fragment → verify (launch form, `/hermes/` sub-path mount, `/api/pty` WebSocket, cookie round-trip).

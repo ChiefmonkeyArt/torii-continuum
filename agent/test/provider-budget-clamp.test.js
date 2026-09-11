@@ -238,3 +238,30 @@ test('ollama keeps its configured timeout when no budget is supplied', async () 
   assert.equal(r.code, ERROR_CODES.UPSTREAM_TIMEOUT);
   assert.match(r.reason, /timed out after 20ms/);
 });
+
+test('ollama aborts a slow body after headers arrive (audit A05)', { timeout: 2000 }, async () => {
+  // Headers resolve immediately but the body only rejects once the signal is
+  // aborted — this is the A05 bypass: clearing the timer after headers left a
+  // delayed body outside the deadline.
+  const seen = [];
+  globalThis.fetch = async (url, opts = {}) => {
+    seen.push(opts.signal);
+    return {
+      ok: true,
+      status: 200,
+      json: () => new Promise((_resolve, reject) => {
+        opts.signal.addEventListener('abort', () => {
+          const err = new Error('The operation was aborted');
+          err.name = 'AbortError';
+          reject(err);
+        });
+      }),
+      text: async () => '',
+    };
+  };
+  const ollama = createOllama(ollamaCfg({ timeout_ms: 20 }), log);
+  const r = await ollama.chat({ skill: 'chat', messages: MESSAGES });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, ERROR_CODES.UPSTREAM_TIMEOUT, 'slow body must still honour the deadline');
+  assert.equal(seen.length, 1);
+});

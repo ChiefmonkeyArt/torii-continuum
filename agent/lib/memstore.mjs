@@ -233,19 +233,22 @@ export function createMemStore(deps = {}) {
     const index = await readIndex(scope.scopeDir);
     const existingIdx = index.items.findIndex((it) => it.id === id);
     const replacing = existingIdx >= 0;
+    // Byte count already on the books for a replacement (owner/scope totals
+    // include the old blob), so quota is checked on the signed delta — a larger
+    // replacement cannot silently grow past the per-scope or per-owner caps.
+    const prevSize = replacing ? (Number(index.items[existingIdx].size) || 0) : 0;
+    const delta = byteLen - prevSize;
 
-    // Quota checks (skip the delta for a replacement of equal-or-smaller size).
-    if (!replacing) {
-      const scopeItems = index.items.length;
+    if (!replacing && index.items.length + 1 > quotas.perScopeItems) {
+      return { ok: false, code: 'quota_items', reason: `scope item quota ${quotas.perScopeItems} reached` };
+    }
+    if (delta > 0) {
       const scopeBytes = index.items.reduce((n, it) => n + (Number(it.size) || 0), 0);
-      if (scopeItems + 1 > quotas.perScopeItems) {
-        return { ok: false, code: 'quota_items', reason: `scope item quota ${quotas.perScopeItems} reached` };
-      }
-      if (scopeBytes + byteLen > quotas.perScopeBytes) {
+      if (scopeBytes + delta > quotas.perScopeBytes) {
         return { ok: false, code: 'quota_bytes', reason: `scope byte quota ${quotas.perScopeBytes} reached` };
       }
       const oBytes = await ownerBytes(scope.ownerHex);
-      if (oBytes + byteLen > quotas.perOwnerBytes) {
+      if (oBytes + delta > quotas.perOwnerBytes) {
         return { ok: false, code: 'quota_owner', reason: `owner byte quota ${quotas.perOwnerBytes} reached` };
       }
     }
