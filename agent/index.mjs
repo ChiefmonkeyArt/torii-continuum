@@ -1294,7 +1294,7 @@ app.post('/api/reflect', { preHandler: requireAdmin }, async (req) => {
 // GET /api/pending — list draft events awaiting operator signature.
 app.get('/api/pending', { preHandler: requireAdmin }, async () => {
   const dir = join(AGENT_ROOT, 'pending');
-  await mkdir(dir, { recursive: true });
+  await mkdir(dir, { recursive: true, mode: 0o700 });
   const files = await readdir(dir);
   const drafts = [];
   for (const f of files) {
@@ -1354,14 +1354,14 @@ app.post(
     if (!composed.ok) return reply.code(400).send({ error: composed.reason });
 
     const dir = join(AGENT_ROOT, 'pending');
-    await mkdir(dir, { recursive: true });
+    await mkdir(dir, { recursive: true, mode: 0o700 });
     const file = 'noticeboard.draft.json';
     // The shelf stores the relay alongside the event so a draft re-opened days
     // later still knows where it must land. `_relay`/`_proposed_at` are shelf
     // metadata, stripped before signing (the signer signs only kind/content/
     // created_at/tags).
     const draft = { ...composed.event, _relay: noticeboardRelay, _proposed_at: Date.now() };
-    await writeFile(join(dir, file), JSON.stringify(draft), 'utf8');
+    await writeFile(join(dir, file), JSON.stringify(draft), { encoding: 'utf8', mode: 0o600 });
     return { file, event: composed.event, relay: noticeboardRelay };
   },
 );
