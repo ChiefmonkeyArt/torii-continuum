@@ -781,6 +781,14 @@ app.get(
   },
 );
 
+// Encrypted-store health, distinct from the public /api/health (A25): a clean
+// HTTP health or login does NOT prove the NWC/Routstr records still decrypt
+// after a session_secret rotation — this does. Admin-only, names never contents.
+app.get('/api/health/secrets', { preHandler: requireAdmin }, async () => {
+  const report = await secretStore.health();
+  return { ok: report.ok, count: report.count, undecryptable: report.undecryptable };
+});
+
 app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
   const message = req.body?.message;
   const context = req.body?.context || null;

@@ -159,3 +159,26 @@ test('fingerprint is stable, short, and not the plaintext', () => {
   assert.notEqual(fp, fingerprint('some-secret2'));
   assert.ok(!'some-secret'.includes(fp));
 });
+
+test('health() reports undecryptable records after a rotated secret (audit A25)', async () => {
+  const dir = tmpDir();
+  try {
+    const before = store(dir, SECRET);
+    await before.put('nwc', 'nwc-envelope');
+    await before.put('routstr_key', 'sk-secret');
+
+    // Same key reads clean.
+    assert.deepEqual(await before.health(), {
+      ok: true, count: 2, readable: ['nwc', 'routstr_key'], undecryptable: [],
+    });
+
+    // A rotated session_secret makes the very same records undecryptable — but
+    // health() reports that honestly instead of a clean login masking it.
+    const afterRotation = store(dir, OTHER_SECRET);
+    const report = await afterRotation.health();
+    assert.equal(report.ok, false);
+    assert.deepEqual(report.undecryptable.sort(), ['nwc', 'routstr_key']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
