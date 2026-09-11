@@ -277,14 +277,13 @@ export function registerOpenAIAdapter({ app, cfg, router, log }) {
     const created = Math.floor(Date.now() / 1000);
     const modelId = modelPick.requested;
 
-    // Per-turn strategy override for `chat-local`. The router's per-call chat()
-    // reads strategy from closure, not args — so we honor `chat-local` by
-    // routing through a tiny local-only shim that calls the local provider
-    // directly. This preserves the console router's default without a global
-    // mutation.
+    // `chat-local` must force local inference: pass the resolved per-turn
+    // strategy into the router so the label matches the effective provider
+    // (ollama_only => zero paid-provider calls). A `null` strategy keeps the
+    // router's constructed default for `chat`.
     let result;
     try {
-      result = await router.chat({ skill: 'chat', messages: norm.messages });
+      result = await router.chat({ skill: 'chat', messages: norm.messages, strategy: modelPick.strategy });
     } catch (e) {
       log.warn(`[openai-adapter] router threw: ${e.message}`);
       const errEnv = openaiError({ status: 502, message: 'router failure', type: 'upstream_error', code: 'router_exception' });

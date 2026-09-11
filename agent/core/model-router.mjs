@@ -61,6 +61,11 @@ export function shouldFallback(result) {
   return isRetryableCode(code);
 }
 
+/** Strategies the router may honour as a per-call override (in addition to its
+ * constructed default). `ollama_only` is how the adapter forces local inference
+ * for `chat-local`. */
+const KNOWN_STRATEGIES = ['routstr_only', 'ollama_only', 'ollama_first', 'routstr_first'];
+
 export function createModelRouter({ routstr, ollama, cfg, log, now }) {
   const strategy = cfg.model_router?.strategy || 'routstr_first';
   const totalBudgetMs = resolveTotalBudgetMs(cfg);
@@ -69,8 +74,15 @@ export function createModelRouter({ routstr, ollama, cfg, log, now }) {
     // One wall-clock allowance for the whole turn, shared by every provider
     // attempt below. `now` is injectable so the tests are deterministic.
     const budget = createBudget(totalBudgetMs, now ? { now } : undefined);
+    // Per-call strategy override (allowlisted). The openai-adapter passes
+    // strategy:'ollama_only' for `chat-local` so the reassuring model label
+    // actually forces local inference. Anything unrecognized falls back to the
+    // constructed default, so an arbitrary caller cannot switch the router
+    // into a paid strategy it wasn't given.
+    const turnStrategy = KNOWN_STRATEGIES.includes(args?.strategy) ? args.strategy : strategy;
+    const { strategy: _strategyOverride, ...providerArgs } = args;
     /** Args for the next provider call, carrying whatever time is left. */
-    const withBudget = () => ({ ...args, budget_ms: budget.remainingMs() });
+    const withBudget = () => ({ ...providerArgs, budget_ms: budget.remainingMs() });
     /** The turn ran out before this provider could be given a fair slice. */
     const exhausted = (provider) => ({
       ok: false,
@@ -79,7 +91,7 @@ export function createModelRouter({ routstr, ollama, cfg, log, now }) {
       retryable: false,
     });
 
-    switch (strategy) {
+    switch (turnStrategy) {
       case 'routstr_only':
         return withProvider(await routstr.chat(withBudget()), 'routstr');
 

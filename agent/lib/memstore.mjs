@@ -174,7 +174,7 @@ export function createMemStore(deps = {}) {
       let projs;
       try { projs = await readdir(projRoot); } catch { continue; }
       for (const p of projs) {
-        if (!SLUG_RE.test(p)) continue;
+        if (!validProjectSlug(p)) continue;
         const idx = await readIndex(join(projRoot, p));
         for (const it of idx.items) total += Number(it.size) || 0;
       }
@@ -329,7 +329,7 @@ export function createMemStore(deps = {}) {
       let projs;
       try { projs = await readdir(projRoot); } catch { continue; }
       for (const p of projs) {
-        if (!SLUG_RE.test(p)) continue;
+        if (!validProjectSlug(p)) continue;
         const scopeDir = join(projRoot, p);
         const index = await readIndex(scopeDir);
         for (const rec of index.items) {
@@ -400,7 +400,7 @@ export function createMemStore(deps = {}) {
       let projs;
       try { projs = await readdir(projRoot); } catch { continue; }
       for (const p of projs) {
-        if (!SLUG_RE.test(p)) continue;
+        if (!validProjectSlug(p)) continue;
         const index = await readIndex(join(projRoot, p));
         const bytes = index.items.reduce((n, it) => n + (Number(it.size) || 0), 0);
         const byClass = {};

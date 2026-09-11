@@ -53,7 +53,7 @@ async function writeDraft(name, draft, extra = {}) {
     _needs: 'operator NIP-44 encrypt (to own npub) + sign via Plebeian Signer',
     ...extra,
   };
-  await writeFile(path, JSON.stringify(record, null, 2), 'utf8');
+  await writeFile(path, JSON.stringify(record, null, 2), { encoding: 'utf8', mode: 0o600 });
   console.log(`  wrote: ${name}`);
 }
 
