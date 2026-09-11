@@ -9,6 +9,26 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.133-alpha — audit A02/A03 wallet durability (2026-09-11)
+
+**What shipped.** The two funds-durability findings. **A02** — `checkMintQuote` no longer writes `minted:true` before `mintProofsBolt11`/persistence (which left a crash window reporting success with no proofs). Proofs are now persisted FIRST, then the marker flips; the `ISSUED` branch recovers proofs idempotently (`mintProofsBolt11` is NUT-04-idempotent by quote id) instead of marking minted without them. **A03** — `writeProofs` is now atomic-and-durable (temp + fsync + rename, no torn JSON), and a per-wallet async mutex (`withMutationLock`) serialises every read-modify-write (receive / send / mint-append / rollback / markSpent), with idempotent-by-`proofKey` dedupe on append.
+
+**Tests.** agent 555→**556**: +1 concurrency (25 simultaneous receives retain all 25 sats), ISSUED test updated to assert recovery re-mint, +1 cached-result-never-double-counts. Full `node --test` green.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.132 → 0.2.133-alpha.
+
+**Update-All checklist.** Code + tests [done]; version markers [done]; markers not present [n/a]; continuity docs [done]; strategy [skipped]; ADR [skipped — no architecture change].
+
+## v0.2.132-alpha — audit A25 encrypted-store health (2026-09-11)
+
+**What shipped.** `lib/secretstore.mjs` gains `health()` — decrypts every stored secret under the current key and reports `undecryptable` names (a rotated `session_secret` fails each GCM tag). Admin-only `GET /api/health/secrets` in `index.mjs` exposes `{ ok, count, undecryptable }` (names only). This is the encrypted-store health the Suite rotation hold needs, distinct from HTTP health/login. Matching Suite change shipped separately (v0.9.12).
+
+**Tests.** agent 554→**555**: +1 rotation-flips-records-to-undecryptable.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.131 → 0.2.132-alpha.
+
+**Update-All checklist.** Code + tests [done]; version markers [done]; continuity docs [done]; strategy [skipped]; ADR [skipped].
+
 ## v0.2.131-alpha — audit A05 end-to-end deadlines + A08 quota delta (2026-09-11)
 
 **What shipped.** Two audit findings. **A05** — `ollama.mjs`, `routstr-provider.mjs`, `project-sources.mjs`, `release-check.mjs` each cleared their request timer right after headers arrived, so a slow response *body* ran outside the deadline (reproduced for Ollama: a 10 ms timeout let a 61 ms body succeed). The timeout is now armed through body consumption (cleared in a `finally`), and an abort during body read surfaces as `timeout`/`UPSTREAM_TIMEOUT` rather than bad JSON. **A08** — `memstore.mjs` `put()` skipped every quota check on replacement, so a 5-byte item was replaced by 100 bytes under a 10-byte cap. Replacement quota is now enforced on the signed byte delta (`byteLen − prevSize`), so a growing replacement is rejected and a shrinking one still lands.

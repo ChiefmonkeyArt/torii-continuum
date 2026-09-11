@@ -202,7 +202,7 @@ test('checkMintQuote never logs a full session npub (last 8 chars only) or full 
   });
 });
 
-test('checkMintQuote does not re-mint when the mint already reports ISSUED', async () => {
+test('checkMintQuote recovers proofs idempotently when the mint reports ISSUED (audit A02)', async () => {
   const state = { value: MintQuoteState.ISSUED, mintCalls: 0 };
   await withTempWallet(oneMintCfg, { walletFactory: fakeMintFactory(state) }, async (w) => {
     const q = await w.createMintQuote({ amountSats: 500 });
@@ -210,6 +210,25 @@ test('checkMintQuote does not re-mint when the mint already reports ISSUED', asy
     assert.equal(r.ok, true);
     assert.equal(r.state, 'ISSUED');
     assert.equal(r.paid, true);
-    assert.equal(state.mintCalls, 0, 'ISSUED means the mint already issued — never mint again');
+    // A02: ISSUED means the mint already issued but our proofs may never have
+    // been persisted. Recover them idempotently (NUT-04) rather than report a
+    // balance we don't hold.
+    assert.equal(state.mintCalls, 1, 'ISSUED re-mints to recover the proofs');
+    assert.equal(r.minted_sats, 500);
+  });
+});
+
+test('a second checkMintQuote after success is cached and never double-counts (audit A02)', async () => {
+  const state = { value: MintQuoteState.ISSUED, mintCalls: 0 };
+  await withTempWallet(oneMintCfg, { walletFactory: fakeMintFactory(state) }, async (w) => {
+    const q = await w.createMintQuote({ amountSats: 500 });
+    await w.checkMintQuote({ quote: q.quote }); // recovery → proofs durable + minted:true
+    const again = await w.checkMintQuote({ quote: q.quote }); // cached success path
+    assert.equal(again.ok, true);
+    assert.equal(again.paid, true);
+    // The cached path must not re-mint or re-append; balance stays exactly 500.
+    assert.equal(state.mintCalls, 1, 'the cached result must not re-mint');
+    const bal = await w.balance();
+    assert.equal(bal.total, 500, `balance must not double-count, got ${bal.total}`);
   });
 });
