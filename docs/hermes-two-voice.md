@@ -93,6 +93,32 @@ greeter with a **local per-install ephemeral nsec** — no NIP-46 bunker, no
 locally. Wire format is NIP-17 kind-1059 gift-wrap + NIP-44. See
 `docs/nap-bridge-1.md` for the signer-custody ADR and the wrap flow.
 
+## Hermes Web Dashboard behind the admin session (HERMES-DASHBOARD-1)
+
+Nous Hermes ships a first-party **Web Dashboard** (`hermes dashboard`; flags
+`--host`/`--port`/`--no-open`/`--isolated`, defaults `127.0.0.1:9119`) with a
+Chat tab that embeds the real Hermes TUI. On a **loopback bind its auth gate is
+OFF**; it only switches on for non-loopback binds or a non-loopback
+`dashboard.public_url`. Decision: bind it loopback-only (auth stays OFF) and let
+nginx be the sole door, gated on Continuum's admin session — no Nous OAuth, no
+second Hermes login.
+
+Because Continuum's auth is **Bearer-header only** (no cookie), the agent must
+also mint an HttpOnly `__Host-torii_session` cookie mirroring the bearer so
+`nginx auth_request` has something the browser sends to a second same-origin SPA:
+
+- `POST /api/auth/verify` and `POST /api/auth/refresh` set the cookie
+  (HttpOnly, Secure, SameSite=Lax, expires in step with the token).
+- `POST /api/auth/logout` clears it (HttpOnly ⇒ server-only clear; the frontend
+  fires it best-effort on sign-out).
+- `GET /api/auth/session` is a read-only 200/401 check accepting cookie OR
+  bearer — the `auth_request` target. No state change, so no CSRF surface.
+
+The dashboard process stays loopback-only under `hermes-owner` as its own
+systemd unit; `hermes-npc` is never exposed this way (DM path only). The bearer
+admin API (`/api/*`) is unchanged — the cookie unlocks only the session check,
+never the admin routes.
+
 ## Non-goals (later slices)
 
 Sats receipt / gating; encrypted-at-rest MEMORY-1 bridge; any public network

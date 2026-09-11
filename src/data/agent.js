@@ -389,6 +389,17 @@ export function logout() {
   for (const k of OWNER_SCOPED_KEYS) {
     try { localStorage.removeItem(k); } catch (_e) {}
   }
+
+  // HERMES-DASHBOARD-1: sign-out must also drop the HttpOnly __Host-torii_session
+  // cookie so the same-origin Hermes dashboard gate closes with it. HttpOnly means
+  // only the server can clear it, so this is a best-effort fire-and-forget POST;
+  // a failure is non-fatal — the cookie also expires in step with the token.
+  try {
+    const base = agentUrl();
+    if (base && typeof fetch === 'function') {
+      fetch(`${base}/api/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
+    }
+  } catch (_e) {}
 }
 
 // ─── Wallet ─────────────────────────────────────────────────
