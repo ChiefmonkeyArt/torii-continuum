@@ -127,6 +127,26 @@ describe('index auth gate — no implicit session on boot', () => {
     expect(stub.getItem('torii.session')).toBeNull();
     expect(isLoggedIn()).toBe(false);
   });
+
+  it('sign-out fires a best-effort cookie clear against the agent (HERMES-DASHBOARD-1)', async () => {
+    // The HttpOnly __Host-torii_session cookie can only be cleared server-side,
+    // so logout must POST /api/auth/logout. Fire-and-forget, non-fatal.
+    globalThis.window = { __CONTINUUM_AGENT_URL__: 'http://agent.test' };
+    const calls = [];
+    globalThis.fetch = (url, opts) => {
+      calls.push([String(url), opts]);
+      return Promise.resolve({ ok: true });
+    };
+    try {
+      setStoredToken(liveToken);
+      logout();
+      const hit = calls.find(([url, opts]) => url.endsWith('/api/auth/logout') && opts?.method === 'POST');
+      expect(hit).toBeTruthy();
+      expect(hit[1].credentials).toBe('include');
+    } finally {
+      delete globalThis.fetch;
+    }
+  });
 });
 
 describe('errorReason (safe, detailed failure text)', () => {

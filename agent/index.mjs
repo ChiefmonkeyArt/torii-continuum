@@ -17,6 +17,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
+import cookie from '@fastify/cookie';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { writeFile, mkdir, unlink, readdir, readFile, stat, rename } from 'node:fs/promises';
@@ -91,6 +92,12 @@ await app.register(cors, {
   credentials: true,
   methods: ['GET', 'POST', 'OPTIONS'],
 });
+
+// Cookie parsing (HERMES-DASHBOARD-1) — read-only. Populates req.cookies so
+// GET /api/auth/session can validate the __Host-torii_session cookie that nginx
+// `auth_request` forwards when gating the same-origin Hermes dashboard. Parse
+// only; we never sign or mint anything cookie-side.
+await app.register(cookie);
 
 // Rate limiting (v0.2.14-alpha, SUITE-VPS-READY-1).
 //
@@ -532,6 +539,19 @@ app.post('/api/auth/verify', { config: rateLimitConfig(authVerifyMax, '/api/auth
     return reply.code(401).send({ ok: false, code: result.code || null, error: result.reason });
   }
   // auth.mjs already emitted auth.verify.success.
+  // HERMES-DASHBOARD-1: mirror the bearer as an HttpOnly, Secure, SameSite=Lax,
+  // __Host- scoped cookie so OTHER same-origin SPAs (the Hermes dashboard) can
+  // be gated by nginx auth_request. Expires in step with the token; the cookie
+  // is a second copy of the same credential (the token is already client-held
+  // in localStorage), so HttpOnly adds no XSS win but keeps this copy out of JS
+  // reach and forces a server clear on logout.
+  reply.setCookie('__Host-torii_session', result.token, {
+    path: '/',
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    expires: new Date(result.expires_at * 1000), // token clock, not wall clock
+  });
   return { token: result.token, expires_at: result.expires_at };
 });
 
@@ -550,7 +570,45 @@ app.post('/api/auth/refresh', { config: rateLimitConfig(authVerifyMax, '/api/aut
   if (!result.ok) {
     return reply.code(401).send({ ok: false, code: result.code, reason: result.reason });
   }
+  // HERMES-DASHBOARD-1: refresh also re-issues the mirror cookie with the new
+  // token so the dashboard gate stays alive across session slides.
+  reply.setCookie('__Host-torii_session', result.token, {
+    path: '/',
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    expires: new Date(result.expires_at * 1000),
+  });
   return { ok: true, token: result.token, expires_at: result.expires_at };
+});
+
+// POST /api/auth/logout — clear the __Host-torii_session cookie (HERMES-DASHBOARD-1).
+// Stateless auth means sign-out is a client-side token drop; the HttpOnly cookie
+// is the one server-held sliver that also needs clearing, and only the server
+// can clear an HttpOnly cookie. No auth required — idempotent, clears only the
+// cookie, changes no state. The frontend fires this best-effort on sign-out.
+app.post('/api/auth/logout', async (req, reply) => {
+  reply.clearCookie('__Host-torii_session', { path: '/' });
+  return { ok: true };
+});
+
+// GET /api/auth/session — read-only session check for same-origin SPA gating
+// (HERMES-DASHBOARD-1). nginx `auth_request` forwards the __Host-torii_session
+// cookie here to decide whether to proxy /hermes/. Accepts the cookie OR the
+// Authorization bearer so both the browser path and the JS path work. Pure
+// check: 200/401, never mints or mutates anything, so there is no CSRF surface.
+// Deliberately NOT rate-limited — it backs every /hermes/ subrequest.
+app.get('/api/auth/session', async (req, reply) => {
+  const header = req.headers?.authorization || '';
+  let token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!token) {
+    const c = req.cookies?.['__Host-torii_session'];
+    if (typeof c === 'string' && c.length) token = c;
+  }
+  if (!token) return reply.code(401).send({ error: 'no session' });
+  const check = auth.verifySessionToken(token);
+  if (!check.ok) return reply.code(401).send({ error: `session invalid: ${check.reason}` });
+  return reply.send({ ok: true, npub: check.npub });
 });
 
 // ─────────────────────────────────────────────────────────────
