@@ -151,6 +151,31 @@ test('chatCompletionChunk shape (delta then stop)', () => {
 
 // ─── HTTP surface ────────────────────────────────────────────────────────
 
+test('chat-local passes ollama_only strategy; chat passes null (no paid shim)', async () => {
+  const { app, calls } = await buildApp();
+  try {
+    const local = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      payload: { model: 'chat-local', messages: [{ role: 'user', content: 'hi' }] },
+    });
+    assert.equal(local.statusCode, 200);
+    assert.equal(calls[0].strategy, 'ollama_only', 'chat-local must force local-only so the router cannot touch a paid provider');
+
+    const def = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      payload: { model: 'chat', messages: [{ role: 'user', content: 'hi' }] },
+    });
+    assert.equal(def.statusCode, 200);
+    assert.equal(calls[1].strategy ?? null, null, 'chat passes null so the router keeps its constructed default');
+  } finally {
+    await app.close();
+  }
+});
+
 test('fail-closed: no local_token → 503 without calling router', async () => {
   const { app, calls } = await buildApp({ token: '' });
   try {

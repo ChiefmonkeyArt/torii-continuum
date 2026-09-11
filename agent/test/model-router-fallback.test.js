@@ -44,6 +44,36 @@ function routerWith(routstrResult, ollamaResult, { ollamaEnabled = true } = {}) 
   return { router, routstr, ollama };
 }
 
+test('ollama_only per-call override routes locally with zero paid calls', async () => {
+  const routstr = stubProvider(OK_OLLAMA); // would pay if called
+  const ollama = stubProvider(OK_OLLAMA);
+  const router = createModelRouter({ routstr, ollama, cfg: {}, log }); // constructed default = routstr_first
+  const r = await router.chat({ ...ARGS, strategy: 'ollama_only' });
+  assert.equal(r.ok, true);
+  assert.equal(r.provider, 'ollama');
+  assert.equal(routstr.calls.length, 0, 'paid provider must never be called for ollama_only');
+  assert.equal(ollama.calls.length, 1);
+});
+
+test('unknown per-call strategy is ignored (falls back to constructed default)', async () => {
+  const routstr = stubProvider({ ok: true, content: 'paid', provider: 'routstr', sats_spent: 9 });
+  const ollama = stubProvider(OK_OLLAMA);
+  const router = createModelRouter({ routstr, ollama, cfg: {}, log });
+  const r = await router.chat({ ...ARGS, strategy: 'banana' });
+  assert.equal(r.provider, 'routstr', 'unknown strategy ignored -> routed via constructed default');
+  assert.equal(ollama.calls.length, 0);
+});
+
+test('ollama_only fails honestly (no paid upgrade) when local is disabled', async () => {
+  const routstr = stubProvider(OK_OLLAMA);
+  const ollama = stubProvider(OK_OLLAMA, { enabled: false });
+  const router = createModelRouter({ routstr, ollama, cfg: {}, log });
+  const r = await router.chat({ ...ARGS, strategy: 'ollama_only' });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, ERROR_CODES.PROVIDER_DISABLED);
+  assert.equal(routstr.calls.length, 0, 'must not silently upgrade to paid when local is disabled');
+});
+
 test('falls back to ollama on an upstream 5xx', async () => {
   const { router, ollama } = routerWith(
     { ok: false, code: ERROR_CODES.UPSTREAM_5XX, reason: 'routstr upstream error http 503', retryable: true },
