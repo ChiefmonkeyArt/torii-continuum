@@ -189,7 +189,29 @@ export function createSecretStore(cfg, deps = {}) {
     }
   }
 
-  return { put, get, has, remove, list, _dir: dir };
+  /**
+   * Encrypted-store health, DISTINCT from HTTP/agent health. Attempts to decrypt
+   * every stored secret under the current key; a rotated session_secret makes
+   * each record fail its GCM tag (undecryptable) rather than merely absent.
+   * The rotation hold (A25) relies on this: a clean login does not prove the
+   * NWC/Routstr records are still usable, but this check does.
+   */
+  async function health() {
+    const names = await list();
+    const undecryptable = [];
+    const readable = [];
+    for (const name of names) {
+      try {
+        await get(name);
+        readable.push(name);
+      } catch {
+        undecryptable.push(name);
+      }
+    }
+    return { ok: undecryptable.length === 0, count: names.length, readable, undecryptable };
+  }
+
+  return { put, get, has, remove, list, health, _dir: dir };
 }
 
 /**
