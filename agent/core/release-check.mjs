@@ -100,23 +100,30 @@ export function createReleaseChecker(opts = {}) {
       clearTimeout(timer);
       return { ok: false, reason: e?.name === 'AbortError' ? 'timeout' : 'network' };
     }
-    clearTimeout(timer);
-    if (!res || !res.ok) return { ok: false, reason: `http ${res?.status ?? 0}` };
+    // Keep the timeout armed through body consumption (audit A05).
+    try {
+      if (!res || !res.ok) return { ok: false, reason: `http ${res?.status ?? 0}` };
 
-    let text;
-    try {
-      text = await readBounded(res, maxBytes);
-    } catch {
-      return { ok: false, reason: 'oversized' };
+      let text;
+      try {
+        text = await readBounded(res, maxBytes);
+      } catch {
+        return { ok: false, reason: 'oversized' };
+      }
+      let arr;
+      try {
+        arr = JSON.parse(text);
+      } catch {
+        return { ok: false, reason: 'bad-json' };
+      }
+      const latest = pickLatest(arr, channelFilter);
+      return { ok: true, latest };
+    } catch (e) {
+      if (e?.name === 'AbortError') return { ok: false, reason: 'timeout' };
+      throw e;
+    } finally {
+      clearTimeout(timer);
     }
-    let arr;
-    try {
-      arr = JSON.parse(text);
-    } catch {
-      return { ok: false, reason: 'bad-json' };
-    }
-    const latest = pickLatest(arr, channelFilter);
-    return { ok: true, latest };
   }
 
   /**

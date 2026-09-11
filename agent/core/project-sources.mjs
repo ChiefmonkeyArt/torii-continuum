@@ -378,19 +378,25 @@ export function createProjectSources(cfg, deps = {}) {
       clearTimeout(timer);
       return { ok: false, status: 0, reason: e?.name === 'AbortError' ? 'timeout' : 'network', json: null, headers: null };
     }
-    clearTimeout(timer);
-
-    const declared = Number(res.headers.get('content-length'));
-    if (Number.isFinite(declared) && declared > opt.maxResponseBytes) {
-      return { ok: false, status: res.status, reason: 'response_too_large', json: null, headers: res.headers };
+    // Keep the timeout armed through body consumption (audit A05).
+    try {
+      const declared = Number(res.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > opt.maxResponseBytes) {
+        return { ok: false, status: res.status, reason: 'response_too_large', json: null, headers: res.headers };
+      }
+      const text = await readCapped(res, opt.maxResponseBytes);
+      if (text === null) {
+        return { ok: false, status: res.status, reason: 'response_too_large', json: null, headers: res.headers };
+      }
+      let json = null;
+      if (text.length) { try { json = JSON.parse(text); } catch { json = null; } }
+      return { ok: res.ok, status: res.status, json, headers: res.headers, reason: null };
+    } catch (e) {
+      if (e?.name === 'AbortError') return { ok: false, status: 0, reason: 'timeout', json: null, headers: null };
+      throw e;
+    } finally {
+      clearTimeout(timer);
     }
-    const text = await readCapped(res, opt.maxResponseBytes);
-    if (text === null) {
-      return { ok: false, status: res.status, reason: 'response_too_large', json: null, headers: res.headers };
-    }
-    let json = null;
-    if (text.length) { try { json = JSON.parse(text); } catch { json = null; } }
-    return { ok: res.ok, status: res.status, json, headers: res.headers, reason: null };
   }
 
   function ghReason(res) {

@@ -151,11 +151,79 @@ export function createOllama(cfg, log) {
       });
       return failure;
     }
-    clearTimeout(t);
+    // Keep the timeout armed through body consumption: the abort signal also
+    // aborts the response body stream, so a slow body still honours the deadline
+    // (audit A05). Cleared only in the finally once body work is done.
+    try {
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => '');
+        const failure = classifyHttpFailure({ status: res.status, body: bodyText, provider: 'ollama' });
+        log.warn(`[ollama] ${model} failed: ${failure.reason}`);
+        await appendCostLog(cfg, {
+          at: new Date().toISOString(),
+          provider: 'ollama',
+          skill,
+          model,
+          ok: false,
+          sats_spent: 0,
+          reason: failure.reason,
+          code: failure.code,
+          duration_ms: Date.now() - started,
+        });
+        return failure;
+      }
 
-    if (!res.ok) {
-      const bodyText = await res.text().catch(() => '');
-      const failure = classifyHttpFailure({ status: res.status, body: bodyText, provider: 'ollama' });
+      const parsed = await res.json();
+      const content = parsed.choices?.[0]?.message?.content;
+      if (!content) {
+        // Defensive: a qwen3 (thinking) model over Ollama's OpenAI-compat
+        // /v1/chat/completions emits its whole reply into `reasoning` and leaves
+        // `content` empty — it looks like the provider died. Surface that specific
+        // cause loudly so the operator knows to switch to a non-thinking model
+        // rather than chase a phantom timeout (NAP-BRIDGE-4).
+        const reasoning = parsed.choices?.[0]?.message?.reasoning;
+        if (typeof reasoning === 'string' && reasoning.length > 0) {
+          return providerFailure(
+            ERROR_CODES.UPSTREAM_EMPTY,
+            `ollama model ${model} returned reasoning-only (thinking mode) with empty content — use a non-thinking model (e.g. llama3.2:1b); see NAP-BRIDGE-4`,
+          );
+        }
+        return providerFailure(ERROR_CODES.UPSTREAM_EMPTY, 'ollama returned an empty completion');
+      }
+
+      const usage = parsed.usage || {};
+      const durationMs = Date.now() - started;
+
+      await appendCostLog(cfg, {
+        at: new Date().toISOString(),
+        provider: 'ollama',
+        skill,
+        model,
+        ok: true,
+        tokens_in: usage.prompt_tokens || 0,
+        tokens_out: usage.completion_tokens || 0,
+        sats_spent: 0,
+        duration_ms: durationMs,
+      });
+
+      return {
+        ok: true,
+        content,
+        model,
+        tokens_in: usage.prompt_tokens || 0,
+        tokens_out: usage.completion_tokens || 0,
+        sats_spent: 0,
+        duration_ms: durationMs,
+        provider: 'ollama',
+      };
+    } catch (e) {
+      // Abort during body read = deadline; a parse/other error keeps its own
+      // classification so a malformed JSON body is still reported distinctly
+      // (audit A05).
+      if (e?.name !== 'AbortError') {
+        return providerFailure(ERROR_CODES.UPSTREAM_BAD_JSON, `ollama returned malformed JSON: ${e.message}`);
+      }
+      const failure = classifyThrownError(e, { timeoutMs, provider: 'ollama' });
       log.warn(`[ollama] ${model} failed: ${failure.reason}`);
       await appendCostLog(cfg, {
         at: new Date().toISOString(),
@@ -169,57 +237,9 @@ export function createOllama(cfg, log) {
         duration_ms: Date.now() - started,
       });
       return failure;
+    } finally {
+      clearTimeout(t);
     }
-
-    let parsed;
-    try {
-      parsed = await res.json();
-    } catch (e) {
-      return providerFailure(ERROR_CODES.UPSTREAM_BAD_JSON, `ollama returned malformed JSON: ${e.message}`);
-    }
-
-    const content = parsed.choices?.[0]?.message?.content;
-    if (!content) {
-      // Defensive: a qwen3 (thinking) model over Ollama's OpenAI-compat
-      // /v1/chat/completions emits its whole reply into `reasoning` and leaves
-      // `content` empty — it looks like the provider died. Surface that specific
-      // cause loudly so the operator knows to switch to a non-thinking model
-      // rather than chase a phantom timeout (NAP-BRIDGE-4).
-      const reasoning = parsed.choices?.[0]?.message?.reasoning;
-      if (typeof reasoning === 'string' && reasoning.length > 0) {
-        return providerFailure(
-          ERROR_CODES.UPSTREAM_EMPTY,
-          `ollama model ${model} returned reasoning-only (thinking mode) with empty content — use a non-thinking model (e.g. llama3.2:1b); see NAP-BRIDGE-4`,
-        );
-      }
-      return providerFailure(ERROR_CODES.UPSTREAM_EMPTY, 'ollama returned an empty completion');
-    }
-
-    const usage = parsed.usage || {};
-    const durationMs = Date.now() - started;
-
-    await appendCostLog(cfg, {
-      at: new Date().toISOString(),
-      provider: 'ollama',
-      skill,
-      model,
-      ok: true,
-      tokens_in: usage.prompt_tokens || 0,
-      tokens_out: usage.completion_tokens || 0,
-      sats_spent: 0,
-      duration_ms: durationMs,
-    });
-
-    return {
-      ok: true,
-      content,
-      model,
-      tokens_in: usage.prompt_tokens || 0,
-      tokens_out: usage.completion_tokens || 0,
-      sats_spent: 0,
-      duration_ms: durationMs,
-      provider: 'ollama',
-    };
   }
 
   return { chat, probe, enabled };

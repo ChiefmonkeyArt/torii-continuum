@@ -181,23 +181,30 @@ export function createRoutstrProvider(cfg, deps = {}) {
       const aborted = e?.name === 'AbortError';
       return { ok: false, status: 0, reason: aborted ? 'timeout' : 'network', json: null };
     }
-    clearTimeout(timer);
-
-    // Bound the response body. Reject oversize by declared length up front, and
-    // hard-cap the actual bytes we read so a lying content-length can't OOM us.
-    const declared = Number(res.headers.get('content-length'));
-    if (Number.isFinite(declared) && declared > opt.maxBytes) {
-      return { ok: false, status: res.status, reason: 'response_too_large', json: null };
+    // Keep the timeout armed through body consumption so a slow body quits on
+    // the deadline, not just slow headers (audit A05).
+    try {
+      // Bound the response body. Reject oversize by declared length up front, and
+      // hard-cap the actual bytes we read so a lying content-length can't OOM us.
+      const declared = Number(res.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > opt.maxBytes) {
+        return { ok: false, status: res.status, reason: 'response_too_large', json: null };
+      }
+      const text = await readCapped(res, opt.maxBytes);
+      if (text === null) {
+        return { ok: false, status: res.status, reason: 'response_too_large', json: null };
+      }
+      let json = null;
+      if (text.length > 0) {
+        try { json = JSON.parse(text); } catch { json = null; }
+      }
+      return { ok: res.ok, status: res.status, json };
+    } catch (e) {
+      if (e?.name === 'AbortError') return { ok: false, status: 0, reason: 'timeout', json: null };
+      throw e;
+    } finally {
+      clearTimeout(timer);
     }
-    const text = await readCapped(res, opt.maxBytes);
-    if (text === null) {
-      return { ok: false, status: res.status, reason: 'response_too_large', json: null };
-    }
-    let json = null;
-    if (text.length > 0) {
-      try { json = JSON.parse(text); } catch { json = null; }
-    }
-    return { ok: res.ok, status: res.status, json };
   }
 
   function authHeaders(key) {
