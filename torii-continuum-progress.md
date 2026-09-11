@@ -9,6 +9,21 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.127-alpha — audit append O(1) + queue recovery (2026-09-11)
+
+**What shipped.** `agent/lib/audit.mjs` appends no longer re-read the whole log. Previously `append()` called `lastHash()` and `seqCount()`, each of which read the entire JSONL, so append cost grew with history (twice per append); and the `tail` promise chain had no rejection recovery, so one failed append poisoned every later append. The recovered tail (last hash + sequence) is now cached in memory (read once on first append, or re-read after a failure invalidates the cache), and the internal continuation is separated from each caller's rejected promise so a failed append can never poison the queue.
+
+**Tests.** `agent/test/audit.test.js` 6→11 (+5): a rejected append does not poison the queue; a transient write failure recovers cleanly; a benchmark asserts the log is read exactly once across 50 appends (O(1) appends — `verify()` still reads the whole chain once); a fresh instance resumes the chain; a fresh instance fails closed on a corrupt tail. Full agent `node --test` **546/546** green.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.126-alpha → 0.2.127-alpha.
+
+**Update-All checklist.**
+- Code + tests: [done].
+- Version markers: [done] `package.json`, `agent/package.json`, both lockfiles.
+- `src/config.js VERSION` / `public/sw.js CACHE_VERSION` / `tools/regression-check.mjs` / `index.html` labels / `MVP_APPROVAL_STATE.json` / `NEXT_ACTION_STATE.json`: [n/a] not present in this repo.
+- Continuity docs: [done] `torii-continuum-progress.md` (this entry) + `torii-continuum-todo.md` + `torii-continuum-handoff.md`. `torii-continuum-strategy.md` skipped — no strategy change.
+- ADR: [skipped] no architecture change.
+
 ## v0.2.113-alpha — NAP-BRIDGE-3 wire-shape fix + gateway keepalive + greeter model default (2026-09-09)
 
 **What shipped.** Three hot-patches that were proven live on the VPS during the NAP-BRIDGE-3 round-trip work now roll up into a proper slice, tests, and docs.

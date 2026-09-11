@@ -16,6 +16,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, statSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFile as realAppendFile, readFile as realReadFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createAudit } from '../lib/audit.mjs';
@@ -112,6 +113,98 @@ test('empty log verifies as an ok chain of length 0', async () => {
     const v = await audit.verify();
     assert.equal(v.ok, true);
     assert.equal(v.count, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a rejected append does not poison the queue (invalid event then valid)', async () => {
+  const { dir, path } = tmpPath();
+  try {
+    const audit = createAudit(path);
+    await assert.rejects(audit.append(123), /event tag required/);
+    const a = await audit.append('e', { n: 1 });
+    const b = await audit.append('e', { n: 2 });
+    assert.equal(a.seq, 0);
+    assert.equal(b.seq, 1);
+    assert.equal(b.prev, a.hash);
+    const v = await audit.verify();
+    assert.equal(v.ok, true);
+    assert.equal(v.count, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a transient write failure recovers and keeps the chain intact', async () => {
+  const { dir, path } = tmpPath();
+  let failNext = false;
+  const flakyAppendFile = async (p, data, opts) => {
+    if (failNext) { failNext = false; throw new Error('EIO: transient disk error'); }
+    return realAppendFile(p, data, opts);
+  };
+  try {
+    const audit = createAudit(path, { appendFile: flakyAppendFile });
+    const a = await audit.append('e', { n: 1 });
+    failNext = true;
+    await assert.rejects(audit.append('e', { n: 2 }), /EIO/);
+    const b = await audit.append('e', { n: 3 });
+    assert.equal(b.seq, 1);
+    assert.equal(b.prev, a.hash);
+    const v = await audit.verify();
+    assert.equal(v.ok, true);
+    assert.equal(v.count, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('append reads the log at most once regardless of history length', async () => {
+  const { dir, path } = tmpPath();
+  let reads = 0;
+  const countingReadFile = async (p, enc) => {
+    reads += 1;
+    return realReadFile(p, enc);
+  };
+  try {
+    const audit = createAudit(path, { readFile: countingReadFile });
+    for (let i = 0; i < 50; i++) await audit.append('e', { n: i });
+    // The only read should be the initial tail load; every later append uses the
+    // cached tail instead of re-reading the growing file (O(1) appends).
+    assert.equal(reads, 1);
+    await audit.verify(); // verify() intentionally re-reads the whole chain once
+    assert.equal(reads, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a fresh instance resumes the chain from the existing log', async () => {
+  const { dir, path } = tmpPath();
+  try {
+    const audit1 = createAudit(path);
+    const a = await audit1.append('e', { n: 1 });
+    const b = await audit1.append('e', { n: 2 });
+    const audit2 = createAudit(path); // "restart"
+    const c = await audit2.append('e', { n: 3 });
+    assert.equal(c.seq, 2);
+    assert.equal(c.prev, b.hash);
+    const v = await audit2.verify();
+    assert.equal(v.ok, true);
+    assert.equal(v.count, 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a fresh instance fails closed on a corrupt tail', async () => {
+  const { dir, path } = tmpPath();
+  try {
+    const audit1 = createAudit(path);
+    await audit1.append('e', { n: 1 });
+    writeFileSync(path, 'this line is not valid json\n', 'utf8');
+    const audit2 = createAudit(path); // "restart" onto a corrupt tail
+    await assert.rejects(audit2.append('e', { n: 2 }), /not valid JSON/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
