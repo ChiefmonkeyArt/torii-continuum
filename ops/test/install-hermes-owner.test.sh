@@ -74,16 +74,20 @@ contains "${help_out}" 'CONTINUUM_ROUTER_TOKEN' \
   && ok "--help: documents CONTINUUM_ROUTER_TOKEN"                || bad "--help: missing CONTINUUM_ROUTER_TOKEN doc"
 
 # --- 5. --dry-run (no side effects) ---------------------------------------
-rm -rf /home/hermes-owner
-dry="$(OLLAMA_MODEL="llama3.2:1b" bash "${INSTALLER}" --dry-run 2>&1)"
+# Exercise dry-run against a disposable temp home so a real /home/hermes-owner
+# is never removed or touched even if a genuine hermes-owner user exists on
+# the host (destructive-test hazard guard).
+tmp_home="$(mktemp -d)"
+trap 'rm -rf "${tmp_home}"' EXIT
+dry="$(HERMES_OWNER_HOME="${tmp_home}" OLLAMA_MODEL="llama3.2:1b" bash "${INSTALLER}" --dry-run 2>&1)"
 contains "${dry}" 'DRY RUN' \
   && ok "--dry-run: prints DRY RUN"                              || bad "--dry-run: no DRY RUN banner"
 contains "${dry}" '.hermes/config.yaml' \
   && ok "--dry-run: mentions main-config fallback plan"          || bad "--dry-run: missing main-config plan"
-if [[ -e /home/hermes-owner ]]; then
-  bad "--dry-run: created /home/hermes-owner"
+if [[ -e "${tmp_home}/.hermes" ]]; then
+  bad "--dry-run: created install content under the temp home"
 else
-  ok "--dry-run: did not create /home/hermes-owner"
+  ok "--dry-run: did not create install content"
 fi
 
 # --- 6. unknown flag --------------------------------------------------------

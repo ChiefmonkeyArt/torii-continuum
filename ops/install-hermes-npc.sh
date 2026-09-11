@@ -39,7 +39,7 @@ OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2:1b}"
 OLLAMA_USER="ollama"
 HERMES_NPC_USER="hermes-npc"
 HERMES_PROFILE="npc"
-HERMES_NPC_HOME="/home/${HERMES_NPC_USER}"
+HERMES_NPC_HOME="${HERMES_NPC_HOME:-/home/${HERMES_NPC_USER}}"
 HERMES_PROFILE_DIR="${HERMES_NPC_HOME}/.hermes/profiles/${HERMES_PROFILE}"
 
 # Local-only Ollama (the shared inference backend both voices reuse).

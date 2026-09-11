@@ -83,16 +83,20 @@ contains "${help_out}" 'OLLAMA_MODEL' \
   && ok "--help: documents OLLAMA_MODEL"                          || bad "--help: missing OLLAMA_MODEL doc"
 
 # --- 5. --dry-run (no side effects) ---------------------------------------
-rm -rf /home/hermes-npc
-dry="$(OLLAMA_MODEL="llama3.2:1b" bash "${INSTALLER}" --dry-run 2>&1)"
+# Exercise dry-run against a disposable temp home so a real /home/hermes-npc
+# is never removed or touched even if a genuine hermes-npc user exists on the
+# host (destructive-test hazard guard).
+tmp_home="$(mktemp -d)"
+trap 'rm -rf "${tmp_home}"' EXIT
+dry="$(HERMES_NPC_HOME="${tmp_home}" OLLAMA_MODEL="llama3.2:1b" bash "${INSTALLER}" --dry-run 2>&1)"
 contains "${dry}" 'DRY RUN' \
   && ok "--dry-run: prints DRY RUN"                               || bad "--dry-run: no DRY RUN banner"
 contains "${dry}" 'SOUL.md' \
   && ok "--dry-run: mentions the greeter SOUL.md"                 || bad "--dry-run: missing SOUL.md"
-if [[ -e /home/hermes-npc ]]; then
-  bad "--dry-run: created /home/hermes-npc"
+if [[ -e "${tmp_home}/.hermes" ]]; then
+  bad "--dry-run: created install content under the temp home"
 else
-  ok "--dry-run: did not create /home/hermes-npc"
+  ok "--dry-run: did not create install content"
 fi
 
 # --- 6. unknown flag --------------------------------------------------------
