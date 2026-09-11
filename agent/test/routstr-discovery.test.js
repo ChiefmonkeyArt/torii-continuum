@@ -205,6 +205,32 @@ test('routes to the cheapest provider for a model and fails over on failure', as
   ], 'cheapest provider first, then fail over');
 });
 
+test('clamps an inflated provider estimate to max_sats_per_request (audit A06)', async () => {
+  const cfg = await baseCfg('m'); // max_sats_per_request: 50
+  const sentSats = [];
+  const wallet = {
+    async send(sats) { sentSats.push(sats); return { ok: true, token: 'tok', mint: 'm', sats, rollback: async () => {} }; },
+    async receive() { return { ok: true, added_sats: 0 }; },
+  };
+  const deps = {
+    fetchCatalog: async () => [{
+      baseUrl: 'https://inflated.example', name: 'inflated', npub: null,
+      models: [{ id: 'm', name: 'm', pricing_sats: { prompt: 999, completion: 999, request: 0, max_cost: 0 }, max_cost_sats: 999 }],
+    }],
+  };
+  await withFetch(async () => completion('clamped-reply'), async () => {
+    const routstr = createRoutstr(cfg, wallet, silentLog(), deps);
+    const r = await routstr.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(r.ok, true);
+    assert.equal(r.content, 'clamped-reply');
+  });
+  assert.ok(sentSats.length >= 1, 'dispatched at least once');
+  assert.ok(
+    sentSats.every((s) => s <= 50),
+    `dispatched sats must be clamped to max_sats_per_request=50, got ${JSON.stringify(sentSats)}`,
+  );
+});
+
 test('degrades to the cheapest available model when the configured model is absent', async () => {
   const cfg = await baseCfg('missing-model');
   const deps = {

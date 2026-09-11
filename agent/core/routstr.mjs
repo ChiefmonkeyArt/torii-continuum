@@ -34,7 +34,7 @@ import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { agentRoot } from './config.mjs';
 import {
-  ERROR_CODES, classifyHttpFailure, classifyThrownError, providerFailure, looksLikeHtml,
+  ERROR_CODES, isRetryableCode, classifyHttpFailure, classifyThrownError, providerFailure, looksLikeHtml,
 } from '../lib/provider-errors.mjs';
 import {
   createBudget, sliceForProvider, worthAttempting, describeBudget,
@@ -460,9 +460,15 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
 
   /** Sats to over-allocate: model-priced when the catalog exposes sats_pricing, else the config floor. */
   function satsFor(model, messages) {
+    // Operator ceiling (max_sats_per_request). Provider pricing is untrusted:
+    // clamp every estimate to this ceiling and reject non-finite/negative
+    // values so a bad catalog cannot clear the wallet.
+    const ceiling = estimateSats(cfg, 'chat');
     const est = estimateSatsForModel(model, maxTokens, messages);
-    if (est != null) return est;
-    return estimateSats(cfg, 'chat');
+    if (typeof est === 'number' && Number.isFinite(est) && est >= 0) {
+      return Math.min(est, ceiling);
+    }
+    return ceiling;
   }
 
   /**
@@ -516,7 +522,12 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     }
 
     const attemptedModels = [];
+    // Total sats allowance for the whole turn: one per-request ceiling per
+    // reachable candidate, so genuine failover is still allowed but total spend
+    // is bounded (each attempt is additionally clamped by satsFor).
+    const satsTurnAllowance = estimateSats(cfg, 'chat') * candidates.length;
     let attempt = null;
+    let reservedSats = 0;
     for (const cand of candidates) {
       attemptedModels.push(cand.model.id);
       if (budget && !worthAttempting(budget.remainingMs())) {
@@ -524,9 +535,21 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
         break;
       }
       const sats = satsFor(cand.model, messages);
+      // Reserve a total sats allowance for the whole turn: halt before the
+      // accumulated reservations exceed the operator's monetary allowance.
+      if (reservedSats + sats > satsTurnAllowance) {
+        attempt = providerFailure(
+          ERROR_CODES.BUDGET_EXHAUSTED,
+          `routstr: total sats reservation ${reservedSats + sats} exceeds turn allowance ${satsTurnAllowance}`,
+        );
+        break;
+      }
+      reservedSats += sats;
       attempt = await callOnceAt(cand.baseUrl, cand.model.id, messages, sats, sliceNow());
       if (attempt.ok) break;
       log.warn(`[routstr] ${cand.model.id}@${cand.baseUrl} failed: ${attempt.reason}`);
+      // Stop before another paid request on a terminal (non-retryable) failure.
+      if (attempt.code && !isRetryableCode(attempt.code)) break;
     }
 
     await appendCostLog(cfg, {
@@ -536,6 +559,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       tokens_in: attempt ? attempt.tokens_in || 0 : 0,
       tokens_out: attempt ? attempt.tokens_out || 0 : 0,
       sats_spent: attempt && attempt.ok ? attempt.sats_spent : 0,
+      sats_reserved: reservedSats,
       duration_ms: attempt ? attempt.duration_ms || 0 : 0,
       attempted_models: attemptedModels,
       reason: attempt && !attempt.ok ? attempt.reason : null,
