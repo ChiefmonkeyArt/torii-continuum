@@ -21,9 +21,9 @@
  * double-spend.
  */
 
-import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, readdir, rename, open } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { Mint, Wallet, getEncodedToken, getDecodedToken, CheckStateEnum, MintQuoteState } from '@cashu/cashu-ts';
 import { agentRoot } from './config.mjs';
 
@@ -102,7 +102,18 @@ async function writeProofs(dir, mintUrl, proofs) {
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const path = fileFor(dir, mintUrl);
   const payload = JSON.stringify({ mint: mintUrl, proofs, updated_at: Date.now() }, null, 2);
-  await writeFile(path, payload, { mode: 0o600 });
+  // Atomic durable replacement (audit A03): write a temp + fsync, then rename,
+  // so a crash mid-write can never leave torn JSON as the canonical proof store.
+  const tmp = `${path}.${randomBytes(6).toString('hex')}.tmp`;
+  let fh;
+  try {
+    fh = await open(tmp, 'w', 0o600);
+    await fh.writeFile(payload, 'utf8');
+    await fh.sync();
+  } finally {
+    if (fh) await fh.close();
+  }
+  await rename(tmp, path);
 }
 
 // Exact proof identity. `secret` is unique per proof; `C` (the unblinded
@@ -203,6 +214,26 @@ export async function createWallet(cfg, log, deps = {}) {
     await wallet.loadMint();
   }
 
+  // Transaction coordinator (audit A03): a single in-process async mutex guarding
+  // every read-modify-write of the wallet's proof stores. A Node process is not a
+  // transaction lock by itself — concurrent receive/send/mint/rollback could
+  // otherwise interleave between awaits and overwrite each other's valid proofs.
+  // One coarse lock is deliberate: wallet mutation volume is low and correctness
+  // beats fine-grained concurrency here.
+  let mutationTail = Promise.resolve();
+  async function withMutationLock(fn) {
+    const prev = mutationTail;
+    let release;
+    const done = new Promise((r) => { release = r; });
+    mutationTail = prev.then(() => done);
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
   async function balance() {
     let total = 0;
     const perMint = {};
@@ -244,9 +275,10 @@ export async function createWallet(cfg, log, deps = {}) {
       return { ok: false, reason: `mint refused token: ${e.message}` };
     }
 
-    const existing = await readProofs(walletDir, mintUrl);
-    const combined = [...existing, ...received];
-    await writeProofs(walletDir, mintUrl, combined);
+    await withMutationLock(async () => {
+      const existing = await readProofs(walletDir, mintUrl);
+      await writeProofs(walletDir, mintUrl, [...existing, ...received]);
+    });
 
     const added = received.reduce((s, p) => s + (p.amount || 0), 0);
     log.info(`[wallet] received ${added} sats from ${mintUrl}`);
@@ -277,6 +309,10 @@ export async function createWallet(cfg, log, deps = {}) {
    * If no mint has enough balance, returns { ok: false, reason }.
    */
   async function send(sats) {
+    return withMutationLock(() => sendLocked(sats));
+  }
+
+  async function sendLocked(sats) {
     if (sats < 1) return { ok: false, reason: 'sats must be >= 1' };
     const floor = cfg.cashu?.hard_floor_sats || 0;
 
@@ -322,21 +358,21 @@ export async function createWallet(cfg, log, deps = {}) {
         token,
         // PRE-DISPATCH ONLY. Re-adds the fresh payment proofs. Never call after
         // the token has been handed to fetch() — those proofs are then spent.
-        rollback: async () => {
+        rollback: () => withMutationLock(async () => {
           const cur = await readProofs(walletDir, mintUrl);
           await writeProofs(walletDir, mintUrl, [...cur, ...sendResult.send]);
           log.info(`[wallet] rolled back ${sats} sats to ${mintUrl}`);
-        },
+        }),
         // Drop the exact payment proofs from storage by identity, if a
         // pre-dispatch rollback ever put them back. Idempotent no-op otherwise.
-        markSpent: async () => {
+        markSpent: () => withMutationLock(async () => {
           const cur = await readProofs(walletDir, mintUrl);
           const cleaned = cur.filter((p) => !sentKeys.has(proofKey(p)));
           if (cleaned.length !== cur.length) {
             await writeProofs(walletDir, mintUrl, cleaned);
             log.info(`[wallet] quarantined ${cur.length - cleaned.length} spent proof(s) on ${mintUrl}`);
           }
-        },
+        }),
       };
     }
 
@@ -535,25 +571,31 @@ export async function createWallet(cfg, log, deps = {}) {
     }
 
     if (resp.state === MintQuoteState.PAID) {
-      // Idempotent double-mint guard: mark minted BEFORE appending proofs, so a
-      // crash between the two loses one mint attempt rather than double-minting.
-      await writeQuoteMarker(quote, { ...marker, minted: true, minted_at: Date.now() });
+      // A02: persist proofs BEFORE marking minted, so `minted` means "proofs are
+      // durably on disk" and a crash between mint and persist leaves a retryable
+      // marker, not a false success. The mint is idempotent by quote id (NUT-04),
+      // so a safe re-mint on restart is possible and never double-spends.
       let proofs;
       try {
         log.debug('[wallet] mintProofsBolt11 start quote=%s amount=%s', truncateId(quote), marker.amount_sats);
         proofs = await wallet.mintProofsBolt11(marker.amount_sats, quote);
         log.debug('[wallet] mintProofsBolt11 ok quote=%s amount=%s', truncateId(quote), marker.amount_sats);
       } catch (e) {
-        // A CAUGHT (non-crash) failure: nothing was appended, so revert the
-        // marker to allow a safe retry — the mint is idempotent by quote id.
         log.debug('[wallet] mintProofsBolt11 failed quote=%s error=%s', truncateId(quote), sanitizeReason(e));
-        await writeQuoteMarker(quote, { ...marker, minted: false });
         logResult('PAID', false, false, `mint proofs failed: ${sanitizeReason(e)}`);
         return { ok: false, reason: `mint proofs failed: ${sanitizeReason(e)}` };
       }
-      const existing = await readProofs(walletDir, marker.mint);
-      await writeProofs(walletDir, marker.mint, [...existing, ...proofs]);
-      const minted = proofs.reduce((s, p) => s + (p.amount || 0), 0);
+      const minted = await withMutationLock(async () => {
+        // Idempotent append: a re-mint after a crash returns the SAME proofs
+        // (NUT-04), so dedupe by proof identity before writing to avoid duplicating
+        // proofs that are already durable from a prior near-complete attempt.
+        const existing = await readProofs(walletDir, marker.mint);
+        const seen = new Set(existing.map(proofKey));
+        const fresh = proofs.filter((p) => !seen.has(proofKey(p)));
+        await writeProofs(walletDir, marker.mint, [...existing, ...fresh]);
+        await writeQuoteMarker(quote, { ...marker, minted: true, minted_at: Date.now() });
+        return fresh.reduce((s, p) => s + (p.amount || 0), 0);
+      });
       const bal = await balance();
       dropOpenQuote(marker.session || sessionId, quote);
       log.info(`[wallet] minted ${minted} sats from quote mint=${marker.mint} new_balance=${bal.total}`);
@@ -562,13 +604,33 @@ export async function createWallet(cfg, log, deps = {}) {
     }
 
     if (resp.state === MintQuoteState.ISSUED) {
-      // The mint already issued proofs for this quote but our marker missed it;
-      // record minted and do NOT re-mint (avoids a double-mint on ISSUED).
-      await writeQuoteMarker(quote, { ...marker, minted: true });
+      // A02: the mint already issued proofs but our marker never recorded them
+      // durable (crash between remote issuance and local persist). Recover the
+      // proofs idempotently rather than marking minted without them.
+      let proofs;
+      try {
+        proofs = await wallet.mintProofsBolt11(marker.amount_sats, quote);
+      } catch (e) {
+        // Honest recoverable state: issued but not yet durable — keep minted:false
+        // so a later poll can resume, instead of reporting a balance we don't hold.
+        logResult('ISSUED', false, false, `proof recovery failed: ${sanitizeReason(e)}`);
+        return { ok: false, reason: `proof recovery failed: ${sanitizeReason(e)}` };
+      }
+      const minted = await withMutationLock(async () => {
+        // Idempotent append (see PAID branch): dedupe by proof identity so a
+        // recovered re-mint never duplicates proofs already durable from a prior
+        // near-complete attempt.
+        const existing = await readProofs(walletDir, marker.mint);
+        const seen = new Set(existing.map(proofKey));
+        const fresh = proofs.filter((p) => !seen.has(proofKey(p)));
+        await writeProofs(walletDir, marker.mint, [...existing, ...fresh]);
+        await writeQuoteMarker(quote, { ...marker, minted: true, minted_at: Date.now() });
+        return fresh.reduce((s, p) => s + (p.amount || 0), 0);
+      });
       dropOpenQuote(marker.session || sessionId, quote);
       const bal = await balance();
-      logResult('ISSUED', true, false, 'already issued');
-      return { ok: true, state: 'ISSUED', paid: true, minted_sats: marker.amount_sats, new_balance_sats: bal.total };
+      logResult('ISSUED', true, false, 'recovered');
+      return { ok: true, state: 'ISSUED', paid: true, minted_sats: minted, new_balance_sats: bal.total };
     }
 
     logResult('UNPAID', false, false, 'unpaid');
