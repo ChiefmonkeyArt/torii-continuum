@@ -104,8 +104,8 @@ export function createReflector({ agentRoot, cache, log }) {
   }
 
   async function writeWatermark(w) {
-    await mkdir(join(agentRoot, 'memory'), { recursive: true });
-    await writeFile(watermarkPath, JSON.stringify(w, null, 2), 'utf8');
+    await mkdir(join(agentRoot, 'memory'), { recursive: true, mode: 0o700 });
+    await writeFile(watermarkPath, JSON.stringify(w, null, 2), { encoding: 'utf8', mode: 0o600 });
   }
 
   async function listEpisodicFiles() {
@@ -183,7 +183,7 @@ export function createReflector({ agentRoot, cache, log }) {
     if (!cache.isUnlocked()) {
       return { ok: false, reason: 'memory cache locked — unlock first' };
     }
-    await mkdir(pendingDir, { recursive: true });
+    await mkdir(pendingDir, { recursive: true, mode: 0o700 });
 
     const watermark = await readWatermark();
     const files = await listEpisodicFiles();
@@ -218,7 +218,7 @@ export function createReflector({ agentRoot, cache, log }) {
               _evidence: candidate.evidence,
               _needs: 'operator NIP-44 encrypt + sign via Plebeian Signer',
             };
-            await writeFile(path, JSON.stringify(record, null, 2), 'utf8');
+            await writeFile(path, JSON.stringify(record, null, 2), { encoding: 'utf8', mode: 0o600 });
           }
           pending.add(key);
           proposed.push({ kind: candidate.kind, d_tag: dTag, pattern: p.slug_prefix });
@@ -248,7 +248,7 @@ export function createReflector({ agentRoot, cache, log }) {
    * has responded. Purely for offline reflection — never read at inference.
    */
   async function appendEpisodic({ user_message, assistant_reply, model, context }) {
-    await mkdir(episodicDir, { recursive: true });
+    await mkdir(episodicDir, { recursive: true, mode: 0o700 });
     const date = new Date();
     const iso = date.toISOString().slice(0, 10); // YYYY-MM-DD
     const file = join(episodicDir, `${iso}.jsonl`);
@@ -259,7 +259,7 @@ export function createReflector({ agentRoot, cache, log }) {
       model: model || null,
       context: context || null,
     };
-    await writeFile(file, JSON.stringify(entry) + '\n', { flag: 'a', encoding: 'utf8' });
+    await writeFile(file, JSON.stringify(entry) + '\n', { flag: 'a', encoding: 'utf8', mode: 0o600 });
   }
 
   return { reflect, appendEpisodic };
