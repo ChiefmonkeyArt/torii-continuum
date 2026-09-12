@@ -112,16 +112,18 @@ jobs:
           echo "systemd unit active (loopback 127.0.0.1:9119)"
 
           # ── 4. nginx include (discovery + guarded + reversible) ────────────
-          # Find the gateway server-block file: the config file that itself defines
-          # `location /continuum/` (the Continuum SPA). nginx -T prints a
-          # `# configuration file <path>:` marker before each file's contents.
+          # Find the gateway SERVER-block file: the config that itself drops the
+          # app fragments via `include /opt/torii/nginx-fragments/*.conf;`. Adding
+          # the snippet there puts it at server level (a sibling of the fragments),
+          # NOT nested inside `location /continuum/` — nesting it there fails with
+          # "location /hermes/ is outside location /continuum/".
           CONF=$(sudo nginx -T 2>/dev/null | awk '
             /^# configuration file \// { f=$0; sub(/^# configuration file /,"",f); sub(/:$/,"",f) }
-            /location \/continuum\// { if (f) print f }
+            /include \/opt\/torii\/nginx-fragments\// { if (f) print f }
           ' | sort -u | head -1)
 
           if [[ -z "$CONF" ]]; then
-            echo "::error::could not locate the gateway nginx server block (no 'location /continuum/' found)"
+            echo "::error::could not locate the gateway server block (no 'include /opt/torii/nginx-fragments/' found)"
             echo "Add 'include snippets/hermes.conf;' to the HTTPS server {} for the Torii gateway manually."
             exit 1
           fi
@@ -131,9 +133,11 @@ jobs:
             echo "hermes include already present in $CONF"
           else
             sudo cp -a "$CONF" "$CONF.bak.$$"
-            # Insert the include directly before the Continuum SPA location line,
-            # which is guaranteed to be inside the gateway server {} block.
-            sudo sed -i '/location \/continuum\//i\    include snippets/hermes.conf;' "$CONF"
+            # Insert at server level, before the fragments include (a stable, unique
+            # anchor). Do NOT match `location /continuum/` — that pattern also hits
+            # its nested `location /continuum/assets/`, which double-inserts and nests
+            # the snippet, failing `nginx -t`.
+            sudo sed -i '/include \/opt\/torii\/nginx-fragments\/\*\.conf;/i\    include snippets/hermes.conf;' "$CONF"
             if ! sudo nginx -t 2>&1; then
               echo "::error::nginx -t failed after edit; reverting $CONF"
               sudo mv "$CONF.bak.$$" "$CONF"
