@@ -17,6 +17,8 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 
 **Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.133 → 0.2.134-alpha.
 
+**Live + follow-up (2026-09-12).** The broken owner venv was repaired on the VPS (backup `.env`/`state.db`/`profiles`/config → remove broken runtime → Nous reinstall → `hermes --version` v0.21.2, `owner` profile intact). Continuum deployed to v0.2.134 (main == tag == VPS). Dashboard installed + gated: systemd unit active on loopback 9119, nginx snippet at server level, `/hermes/` unauth → 302 → `/continuum/`. Live-discovered + fixed a bug in `install-hermes-dashboard.yml` (PR #164, workflow-only, no version bump): its nginx discovery matched nested `location /continuum/assets/`, double-inserting the snippet and failing `nginx -t`; now anchored on the `include /opt/torii/nginx-fragments/*.conf;` server-level line.
+
 ## v0.2.133-alpha — audit A02/A03 wallet durability (2026-09-11)
 
 **What shipped.** The two funds-durability findings. **A02** — `checkMintQuote` no longer writes `minted:true` before `mintProofsBolt11`/persistence (which left a crash window reporting success with no proofs). Proofs are now persisted FIRST, then the marker flips; the `ISSUED` branch recovers proofs idempotently (`mintProofsBolt11` is NUT-04-idempotent by quote id) instead of marking minted without them. **A03** — `writeProofs` is now atomic-and-durable (temp + fsync + rename, no torn JSON), and a per-wallet async mutex (`withMutationLock`) serialises every read-modify-write (receive / send / mint-append / rollback / markSpent), with idempotent-by-`proofKey` dedupe on append.
