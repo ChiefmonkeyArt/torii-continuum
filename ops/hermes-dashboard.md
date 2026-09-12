@@ -76,3 +76,49 @@ A `hermes.chiefmonkey.art` subdomain will NOT work with the current cookie: the
 sent to a subdomain, so `auth_request` there always sees no cookie and 401s.
 Using a subdomain would require a Domain-scoped (non-`__Host-`) cookie — a
 weaker, wider credential — which is explicitly out of scope.
+
+## Repair — restore the missing Hermes venv (when `hermes` won't launch)
+
+Symptom (seen live): the systemd unit fails with
+
+```
+/home/hermes-owner/.local/bin/hermes: line 4:
+  /home/hermes-owner/.hermes/hermes-agent/venv/bin/python: No such file or directory
+```
+
+The `hermes` wrapper exists (so `command -v hermes` still resolves, and the
+idempotent installer would wrongly skip) but its venv is gone. The valuable
+state — the `owner` profile — lives separately at
+`/home/hermes-owner/.hermes/profiles/owner/`, so repairing the runtime does not
+touch the brain's config.
+
+```bash
+# ── 0. Diagnose (confirm the layout before touching anything) ────────────
+sudo -u hermes-owner ls -la /home/hermes-owner/.hermes/
+sudo -u hermes-owner cat /home/hermes-owner/.local/bin/hermes
+
+# ── 1. Back up the profile state (never the venv — that is the broken part) ──
+sudo tar -czf /root/hermes-owner-backup-$(date +%s).tar.gz \
+  -C /home/hermes-owner/.hermes profiles config.yaml 2>/dev/null || true
+
+# ── 2. Remove ONLY the broken runtime; KEEP profiles/owner ───────────────
+sudo -u hermes-owner rm -rf /home/hermes-owner/.hermes/hermes-agent
+sudo -u hermes-owner rm -f  /home/hermes-owner/.local/bin/hermes
+
+# ── 3. Reinstall vanilla Hermes (recreates venv + wrapper) ───────────────
+sudo -u hermes-owner bash -c 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash'
+
+# ── 4. Verify hermes launches and the owner profile is intact ────────────
+sudo -u hermes-owner bash -lc 'command -v hermes && hermes --version'
+sudo -u hermes-owner bash -lc 'hermes profile list'   # must still show 'owner'
+```
+
+Step 2 uses `rm -rf` — deliberately scoped to `hermes-agent/` + the wrapper only,
+never `profiles/`. Step 1's backup is the safety net. If step 0 shows anything
+unexpected, stop and reassess rather than deleting.
+
+After repair, re-run the install workflow to finish the nginx include + start:
+
+```bash
+gh workflow run install-hermes-dashboard.yml -f ref=v0.2.133-alpha
+```
