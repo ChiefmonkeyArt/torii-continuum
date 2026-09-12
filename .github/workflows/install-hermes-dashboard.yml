@@ -1,0 +1,147 @@
+name: Install Hermes Dashboard wiring
+
+# Installs the HERMES-DASHBOARD-1 operator-side wiring on the VPS:
+#   - /etc/nginx/snippets/hermes.conf          (the /hermes/ auth_request gate)
+#   - /etc/systemd/system/torii-hermes-dashboard.service
+#   - the `include snippets/hermes.conf;` line inside the gateway `server {}` block
+#
+# Reuses the SAME deploy secrets as deploy-continuum-vps.yml (VPS_DEPLOY_SSH_KEY,
+# VPS_DEPLOY_HOST). Idempotent: re-running reinstalls the same files and skips an
+# already-present nginx include.
+#
+# SAFETY:
+#   - The systemd unit is loopback-only (its own auth gate stays OFF); it cannot
+#     be reached from the internet by itself.
+#   - The nginx include is added to the gateway server block discovered from
+#     `nginx -T`, is guarded by `nginx -t`, and is reverted on any config failure.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Repo ref to source the wiring files from (tag, e.g. v0.2.133-alpha)'
+        required: true
+        default: 'v0.2.133-alpha'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout wiring files
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          sparse-checkout: |
+            ops/nginx/hermes.conf
+            ops/systemd/torii-hermes-dashboard.service
+
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.VPS_DEPLOY_SSH_KEY }}
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SSH_KEY:-}" || -z "${SSH_HOST:-}" ]]; then
+            echo "::error::VPS_DEPLOY_SSH_KEY or VPS_DEPLOY_HOST secret is not set"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          umask 077
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519_torii
+          chmod 600 ~/.ssh/id_ed25519_torii
+          host_only="${SSH_HOST#*@}"
+          ssh-keyscan -T 10 -t ed25519 "$host_only" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Install wiring on VPS
+        env:
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+          SSH_OPTS: -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15
+        run: |
+          set -euo pipefail
+          # Copy the two wiring files to the box, then run the idempotent installer.
+          scp $SSH_OPTS ops/nginx/hermes.conf ops/systemd/torii-hermes-dashboard.service "$SSH_HOST:/tmp/"
+          ssh $SSH_OPTS "$SSH_HOST" bash -s <<'REMOTE'
+          set -euo pipefail
+
+          # ── 1. nginx snippet ────────────────────────────────────────────────
+          sudo install -m 0644 /tmp/hermes.conf /etc/nginx/snippets/hermes.conf
+          echo "snippet installed: /etc/nginx/snippets/hermes.conf"
+
+          # ── 2. resolve the real hermes binary (as hermes-owner) ─────────────
+          HERMES_BIN=$(sudo -u hermes-owner bash -lc 'command -v hermes' || true)
+          if [[ -z "$HERMES_BIN" ]]; then
+            echo "::error::hermes binary not found for hermes-owner; is the owner brain installed?"
+            exit 1
+          fi
+          echo "hermes binary: $HERMES_BIN"
+
+          # ── 3. systemd unit (substitute the __HERMES_BIN__ placeholder) ─────
+          sed "s#__HERMES_BIN__#$HERMES_BIN#" /tmp/torii-hermes-dashboard.service \
+            | sudo tee /etc/systemd/system/torii-hermes-dashboard.service >/dev/null
+          sudo chmod 0644 /etc/systemd/system/torii-hermes-dashboard.service
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now torii-hermes-dashboard.service
+          sleep 2
+          if ! systemctl is-active --quiet torii-hermes-dashboard.service; then
+            echo "::error::torii-hermes-dashboard.service failed to start"
+            sudo journalctl -u torii-hermes-dashboard.service --no-pager -n 40 || true
+            exit 1
+          fi
+          echo "systemd unit active (loopback 127.0.0.1:9119)"
+
+          # ── 4. nginx include (discovery + guarded + reversible) ────────────
+          # Find the gateway server-block file: the config file that itself defines
+          # `location /continuum/` (the Continuum SPA). nginx -T prints a
+          # `# configuration file <path>:` marker before each file's contents.
+          CONF=$(sudo nginx -T 2>/dev/null | awk '
+            /^# configuration file \// { f=$0; sub(/^# configuration file /,"",f); sub(/:$/,"",f) }
+            /location \/continuum\// { if (f) print f }
+          ' | sort -u | head -1)
+
+          if [[ -z "$CONF" ]]; then
+            echo "::error::could not locate the gateway nginx server block (no 'location /continuum/' found)"
+            echo "Add 'include snippets/hermes.conf;' to the HTTPS server {} for the Torii gateway manually."
+            exit 1
+          fi
+          echo "gateway nginx config: $CONF"
+
+          if sudo grep -q 'snippets/hermes.conf' "$CONF"; then
+            echo "hermes include already present in $CONF"
+          else
+            sudo cp -a "$CONF" "$CONF.bak.$$"
+            # Insert the include directly before the Continuum SPA location line,
+            # which is guaranteed to be inside the gateway server {} block.
+            sudo sed -i '/location \/continuum\//i\    include snippets/hermes.conf;' "$CONF"
+            if ! sudo nginx -t 2>&1; then
+              echo "::error::nginx -t failed after edit; reverting $CONF"
+              sudo mv "$CONF.bak.$$" "$CONF"
+              exit 1
+            fi
+            sudo rm -f "$CONF.bak.$$"
+            echo "include added to $CONF"
+          fi
+
+          # ── 5. reload nginx ─────────────────────────────────────────────────
+          sudo systemctl reload nginx
+          echo "nginx reloaded"
+
+          # ── 6. verify ───────────────────────────────────────────────────────
+          # Unauthenticated: auth_request -> 401 -> error_page -> 302 to /continuum/.
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 'https://chiefmonkey.art/hermes/' || true)
+          echo "https://chiefmonkey.art/hermes/ -> HTTP $CODE (expect 302 unauth)"
+          case "$CODE" in
+            302|301) echo "dashboard gate active (redirecting to login)";;
+            *) echo "::warning::unexpected /hermes/ status $CODE; check the gate manually";;
+          esac
+          REMOTE
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519_torii ~/.ssh/known_hosts
