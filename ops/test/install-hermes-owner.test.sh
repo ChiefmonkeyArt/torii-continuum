@@ -102,5 +102,19 @@ out_ollama="$(OLLAMA_MODEL="qwen3:8b" bash "${INSTALLER}" --render-config)"
 contains "${out_ollama}" 'model: "qwen3:8b"' \
   && ok "OLLAMA_MODEL override honoured"                         || bad "OLLAMA_MODEL override ignored"
 
+# --- 8. idempotency gate — working binary, not wrapper presence ------------
+# install_hermes() must NOT skip on `command -v hermes`: a stale wrapper whose
+# venv python is gone (Nous bad-interpreter #21457) still resolves, so the
+# installer would silently skip a broken install. It must probe
+# `hermes --version`. Source-lock: the real probe needs runuser + a live
+# hermes-owner + venv, which CI cannot provide, so we assert the gate's shape.
+installer_src="$(cat "${INSTALLER}")"
+contains "${installer_src}" 'hermes_runs' \
+  && ok "installer defines hermes_runs (working-binary probe)"    || bad "installer missing hermes_runs"
+contains "${installer_src}" 'hermes --version' \
+  && ok "installer probes 'hermes --version'"                     || bad "installer missing 'hermes --version' probe"
+contains "${installer_src}" 'if hermes_runs; then' \
+  && ok "install gate is 'if hermes_runs; then'"                  || bad "install gate not gated on hermes_runs"
+
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

@@ -190,11 +190,19 @@ pull_ollama_model() {
   fi
 }
 
+# A working install means the binary actually RUNS. A stale `hermes` wrapper
+# whose venv python is gone (Nous bad-interpreter, #21457) still resolves via
+# `command -v hermes` but fails `hermes --version`. Gate on the latter so a
+# broken venv triggers a reinstall instead of a silent skip.
+hermes_runs() {
+  runuser -u "${HERMES_NPC_USER}" -- bash -lc 'hermes --version >/dev/null 2>&1'
+}
+
 install_hermes() {
-  if runuser -u "${HERMES_NPC_USER}" -- bash -lc 'command -v hermes >/dev/null 2>&1'; then
-    info "Hermes already installed; skipping"
+  if hermes_runs; then
+    info "Hermes already installed (hermes --version runs); skipping"
   else
-    info "installing vanilla Nous Research Hermes as '${HERMES_NPC_USER}'"
+    info "Hermes missing or broken (hermes --version fails); installing"
     runuser -u "${HERMES_NPC_USER}" -- bash -c "curl -fsSL '${HERMES_INSTALL_URL}' | bash"
   fi
   if [[ -d "${HERMES_PROFILE_DIR}" ]]; then
@@ -260,7 +268,7 @@ main() {
       info "DRY RUN — no changes will be made. Plan:"
       info "  ensure users '${OLLAMA_USER}' + '${HERMES_NPC_USER}'"
       info "  ensure Ollama (${OLLAMA_INSTALL_URL}) bound 127.0.0.1:11434, pull ${OLLAMA_MODEL}"
-      info "  install Hermes (${HERMES_INSTALL_URL}) as '${HERMES_NPC_USER}', profile '${HERMES_PROFILE}'"
+      info "  install Hermes (${HERMES_INSTALL_URL}) as '${HERMES_NPC_USER}' iff 'hermes --version' fails, then profile '${HERMES_PROFILE}'"
       info "  write ${HERMES_PROFILE_DIR}/config.yaml:"
       render_profile_config_yaml | sed 's/^/    /'
       info "  write ${HERMES_PROFILE_DIR}/SOUL.md (greeter persona):"

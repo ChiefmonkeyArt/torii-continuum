@@ -114,5 +114,14 @@ else
   ok "whole surface has no router/owner-brain reference"
 fi
 
+# --- 8. idempotency gate — working binary, not wrapper presence ------------
+installer_src="$(cat "${INSTALLER}")"
+contains "${installer_src}" 'hermes_runs' \
+  && ok "installer defines hermes_runs (working-binary probe)"    || bad "installer missing hermes_runs"
+contains "${installer_src}" 'hermes --version' \
+  && ok "installer probes 'hermes --version'"                     || bad "installer missing 'hermes --version' probe"
+contains "${installer_src}" 'if hermes_runs; then' \
+  && ok "install gate is 'if hermes_runs; then'"                  || bad "install gate not gated on hermes_runs"
+
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]
