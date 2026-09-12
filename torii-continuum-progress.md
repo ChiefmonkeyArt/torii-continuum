@@ -9,6 +9,14 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.134-alpha — Hermes installer idempotency hardening (2026-09-12)
+
+**What shipped.** `install_hermes()` in both `ops/install-hermes-owner.sh` and `-npc.sh` gated on `command -v hermes` (wrapper presence), so a broken Hermes venv (Nous bad-interpreter #21457 — the wrapper resolves but `~/.hermes/hermes-agent/venv/bin/python` is gone) was silently skipped on reinstall. The gate is now `hermes_runs()` → `hermes --version`, so a vanished venv is detected and re-installed. This closes the exact "the idempotent installer would wrongly skip" gap the parallel session's Repair runbook documented — that session also landed `install-hermes-dashboard.yml` + the Repair section (PRs #160–162) without a version bump.
+
+**Tests.** ops shell suites 18→**19** (owner) and 21→**22** (npc): +1 source-lock each asserting the install gate probes `hermes --version` via `hermes_runs` rather than `command -v hermes` (the real probe needs runuser + a live venv, so the gate's shape is locked at source). Agent/frontend unchanged.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.133 → 0.2.134-alpha.
+
 ## v0.2.133-alpha — audit A02/A03 wallet durability (2026-09-11)
 
 **What shipped.** The two funds-durability findings. **A02** — `checkMintQuote` no longer writes `minted:true` before `mintProofsBolt11`/persistence (which left a crash window reporting success with no proofs). Proofs are now persisted FIRST, then the marker flips; the `ISSUED` branch recovers proofs idempotently (`mintProofsBolt11` is NUT-04-idempotent by quote id) instead of marking minted without them. **A03** — `writeProofs` is now atomic-and-durable (temp + fsync + rename, no torn JSON), and a per-wallet async mutex (`withMutationLock`) serialises every read-modify-write (receive / send / mint-append / rollback / markSpent), with idempotent-by-`proofKey` dedupe on append.
