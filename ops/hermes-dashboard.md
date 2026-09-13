@@ -27,7 +27,7 @@ hermes.chiefmonkey.art   A   <VPS-IP>
 
 ```bash
 gh workflow run install-hermes-dashboard.yml \
-  -f ref=v0.2.135-alpha \
+  -f ref=v0.2.136-alpha \
   -f hostname=hermes.chiefmonkey.art
 ```
 
@@ -36,12 +36,30 @@ reuses the existing credential and signing secret — it never rotates them. It
 configures Hermes through `hermes config set` (dot-notation keys), not by
 hand-editing YAML, so it survives Hermes changing its config-file layout.
 
-On first run it generates a random login password and writes it (0600, never to
-logs) to `/home/hermes-owner/.hermes/dashboard-password`. Read it there:
+## Credentials — who they come from
+
+The login is a single username/password on the subdomain. How the operator
+learns it depends on the install path, and the rule is that **a regular user
+never SSHes** — their only manual step is the DNS A record at the top.
+
+**Regular users — no SSH, ever.** A regular operator sets their own dashboard
+password through the install surface (Continuum's web flow drives
+`dashboard.basic_auth.password` with the value they choose). There is nothing
+to retrieve: they already know it, and their VPS work stops at DNS.
+
+**Developers — SSH-recover, then rotate.** The
+`install-hermes-dashboard.yml` workflow, run from a developer machine,
+auto-generates a strong random password on first run and writes it (0600,
+never to logs) to `/home/hermes-owner/.hermes/dashboard-password`. Recover it,
+sign in once, then rotate it and delete the file (next section) so no durable
+plaintext is left behind:
 
 ```bash
 sudo cat /home/hermes-owner/.hermes/dashboard-password
 ```
+
+This SSH-file path is a **developer fallback only** — it must never be part of
+a regular user's onboarding.
 
 ## Verify (against the live box, not docs)
 
@@ -87,12 +105,24 @@ sudo cat /home/hermes-owner/.hermes/dashboard-password
 - Before relying on a fresh Hermes release, run `hermes config migrate` to pick
   up renamed/retired settings, and re-check the `Verify` items above.
 
-## Changing / resetting the password
+## Changing / resetting the password (and deleting the bootstrap file)
+
+Set a password you chose (displaces any generated one):
 
 ```bash
 sudo -u hermes-owner bash -lc 'hermes config set dashboard.basic_auth.password "new-password"'
 sudo systemctl restart torii-hermes-dashboard.service
 ```
+
+After you have signed in with your own password, delete the bootstrap copy so
+no plaintext credential lingers on disk:
+
+```bash
+sudo rm -f /home/hermes-owner/.hermes/dashboard-password
+```
+
+Re-running the install later will not recreate it (the workflow skips
+credential generation once `dashboard.basic_auth.username` is already set).
 
 ## Why not `/hermes/`
 
@@ -146,5 +176,5 @@ unexpected, stop and reassess rather than deleting.
 After repair, re-run the install workflow to re-apply config + nginx + start:
 
 ```bash
-gh workflow run install-hermes-dashboard.yml -f ref=v0.2.135-alpha
+gh workflow run install-hermes-dashboard.yml -f ref=v0.2.136-alpha
 ```
