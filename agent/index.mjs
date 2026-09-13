@@ -823,7 +823,7 @@ app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
   // operator can create/update milestones + todos straight from chat and the
   // project panels update live from the single shared document. Failed writes
   // are reported (not silently dropped) but never fail the reply itself.
-  const { reply, actions } = extractStoreActions(result.reply);
+  const { reply: replyText, actions } = extractStoreActions(result.reply);
   const store_writes = [];
   for (const action of actions) {
     const applied = await projectStore.applyAction(action);
@@ -831,7 +831,7 @@ app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
   }
 
   return {
-    reply,
+    reply: replyText,
     model: result.model,
     provider: result.provider,
     duration_ms: result.duration_ms,
