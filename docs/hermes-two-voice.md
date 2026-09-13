@@ -93,15 +93,23 @@ greeter with a **local per-install ephemeral nsec** — no NIP-46 bunker, no
 locally. Wire format is NIP-17 kind-1059 gift-wrap + NIP-44. See
 `docs/nap-bridge-1.md` for the signer-custody ADR and the wrap flow.
 
-## Hermes Web Dashboard — loopback behind the Nostr gateway (passwordless)
+## Hermes Web Dashboard — RETIRED (OWNER-UI-4, v0.2.145-alpha)
 
-Nous Hermes ships a first-party **Web Dashboard** (`hermes dashboard`; flags
-`--host`/`--port`/`--no-open`/`--isolated`, defaults `127.0.0.1:9119`) with a
-Chat tab that embeds the real Hermes TUI. It runs **passwordless** on loopback
-and is mounted at `/hermes/` on the Continuum apex, gated by Continuum's own
+**Retired.** The first-party Nous Hermes Web Dashboard (loopback `127.0.0.1:9119`,
+mounted at `/hermes/`) was a bolted-on third-party chat surface duplicating the
+console. Continuum's own console is now the sole owner interface, so the
+dashboard, its nginx fragment, its systemd unit, and its install workflow are
+removed. **Unchanged:** the two-voice boundary, the headless `hermes-owner` brain
+(its `owner` profile + `/v1` spine below), and `hermes-npc`'s DM-only path.
+launching Hermes from within Continuum remains possible through the headless
+brain via `/v1`. Historical wiring details follow for the record.
+
+The retired wiring was: a first-party **Web Dashboard** (`hermes dashboard`;
+flags `--host`/`--port`/`--no-open`/`--isolated`, defaults `127.0.0.1:9119`) with a
+Chat tab that embeds the real Hermes TUI. It ran **passwordless** on loopback
+and was mounted at `/hermes/` on the Continuum apex, gated by Continuum's own
 session — no subdomain, no username/password. See
-`docs/hermes-dashboard-auth.md` (decision) and `ops/hermes-dashboard.md`
-(runbook).
+`docs/hermes-dashboard-auth.md` (decision, now retired).
 
 Two corrections landed this: (1) Hermes's SPA **does** honour
 `X-Forwarded-Prefix` — it rewrites its root-relative `/assets/*`, `/fonts/*` and
@@ -122,11 +130,11 @@ mirroring the bearer (for the console and any other same-origin gated surface):
 - `GET /api/auth/session` is a read-only 200/401 check accepting cookie OR
   bearer — usable as an `auth_request` target on same-origin surfaces.
 
-The dashboard stays loopback-only under `hermes-owner` as its own systemd unit;
-the nginx gateway mounts it at `/hermes/` and re-checks the Continuum session
-before proxying. `hermes-npc` is never exposed this way (DM path only). The
-bearer admin API (`/api/*`) is unchanged — the cookie unlocks only the session
-check, never the admin routes.
+The retired dashboard ran loopback-only under `hermes-owner` as its own systemd
+unit, mounted by the nginx gateway at `/hermes/` behind the Continuum session.
+`hermes-npc` is never exposed this way (DM path only). The bearer admin API
+(`/api/*`) is unchanged — the cookie unlocked only the session check, never the
+admin routes.
 
 ## Non-goals (later slices)
 
