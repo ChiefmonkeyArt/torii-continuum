@@ -36,6 +36,7 @@ import { createMemoryLoader } from './lib/memory.mjs';
 import { createReflector } from './lib/reflect.mjs';
 import { KINDS, dirForKind, legacyDirForKind } from './lib/events.mjs';
 import { createMemStore, classForKind } from './lib/memstore.mjs';
+import { createSessionStore } from './lib/sessions.mjs';
 import { createConsent } from './lib/consent.mjs';
 import { createPortability } from './lib/portability.mjs';
 import { buildWorkingValues } from './lib/workingvalues.mjs';
@@ -215,6 +216,7 @@ const genesis = createGenesis({ agentRoot: AGENT_ROOT, audit, log: app.log });
 // manual encrypted portability. All under the single writable root memory/.
 const MEMORY_ROOT = join(AGENT_ROOT, 'memory');
 const memstore = createMemStore({ memoryRoot: MEMORY_ROOT, log: app.log });
+const sessionStore = createSessionStore({ memoryRoot: MEMORY_ROOT, log: app.log });
 const consent = createConsent({ memoryRoot: MEMORY_ROOT, memstore, audit, log: app.log });
 const portability = createPortability({ memoryRoot: MEMORY_ROOT, memstore, audit, log: app.log });
 
@@ -1172,6 +1174,43 @@ app.post('/api/memory/proposals/:id/reject', { preHandler: requireAdmin }, async
     ownerNpub: req.session.npub, botId, id: req.params.id, approvalNonce: req.body?.approval_nonce,
   });
   if (!r.ok) return reply.code(r.code === 'not_found' ? 404 : 400).send({ error: r.reason, code: r.code });
+  return r;
+});
+
+// ── OWNER-UI-1: sealed sessions (list/create/read/delete) ──────────────────
+// The browser NIP-44-seals each session to the owner's npub; the agent stores
+// only ciphertext (never plaintext at rest) and never holds a key. See
+// agent/lib/sessions.mjs for the trust model + safety invariants.
+
+// GET /api/sessions — list one owner's sessions (non-secret metadata only).
+app.get('/api/sessions', { preHandler: requireAdmin }, async (req, reply) => {
+  const r = await sessionStore.list(req.session.npub);
+  if (!r.ok) return reply.code(400).send({ error: r.reason });
+  return r;
+});
+
+// POST /api/sessions — create or replace a sealed session blob. { id, ciphertext }
+app.post('/api/sessions', { preHandler: requireAdmin }, async (req, reply) => {
+  const r = await sessionStore.upsert(req.session.npub, { id: req.body?.id, ciphertext: req.body?.ciphertext });
+  if (!r.ok) return reply.code(400).send({ error: r.reason });
+  return r;
+});
+
+// GET /api/sessions/:id — read one session's ciphertext (browser decrypts).
+app.get('/api/sessions/:id', { preHandler: requireAdmin }, async (req, reply) => {
+  const r = await sessionStore.read(req.session.npub, req.params.id);
+  if (!r.ok) return reply.code(404).send({ error: r.reason });
+  return r;
+});
+
+// DELETE /api/sessions/:id — delete a session blob + index entry.
+app.delete('/api/sessions/:id', { preHandler: requireAdmin }, async (req, reply) => {
+  const r = await sessionStore.remove(req.session.npub, req.params.id);
+  if (!r.ok) return reply.code(404).send({ error: r.reason });
+  await audit.append('session.delete', {
+    owner_pubkey_prefix: (ownerHexFromNpub(req.session.npub) || '').slice(0, 12),
+    id: req.params.id,
+  }).catch((e) => app.log.error(`[sessions] audit delete failed: ${e.message}`));
   return r;
 });
 
