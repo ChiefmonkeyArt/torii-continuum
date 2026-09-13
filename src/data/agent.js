@@ -527,6 +527,29 @@ export async function chat({ message, context }) {
   return req('POST', '/api/chat', { message, context }, { timeoutMs: CHAT_CLIENT_TIMEOUT_MS });
 }
 
+// ─── Sessions (OWNER-UI-1) ────────────────────────────────────
+//
+// Server-side sealed sessions. The client NIP-44-seals each session's messages
+// before POSTing; the agent stores only ciphertext (see src/session-crypto.js).
+// Returns are the agent's `{ ok, data }` envelope — `data.sessions` (list) or
+// `data.ciphertext` (read) — or `{ ok:false, code, reason }` on failure.
+
+export async function listSessions() {
+  return req('GET', '/api/sessions');
+}
+
+export async function readSession(id) {
+  return req('GET', `/api/sessions/${encodeURIComponent(id)}`);
+}
+
+export async function saveSession(id, ciphertext) {
+  return req('POST', '/api/sessions', { id, ciphertext });
+}
+
+export async function deleteSession(id) {
+  return req('DELETE', `/api/sessions/${encodeURIComponent(id)}`);
+}
+
 // ─── Genesis (GENESIS-1) ────────────────────────────────────
 //
 // The sovereign-bot birth certificate. The owner pubkey is bound server-side

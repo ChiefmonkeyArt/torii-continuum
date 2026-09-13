@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.141-alpha — OWNER-UI-1: client sealing + session history/delete UI (2026-09-13)
+
+**What shipped.** Second half of OWNER-UI-1 — the client side of the sealed session layer, completing milestone 1. New `src/session-crypto.js` (`sealSession`/`unsealSession`/`sanitizeMessages`: the browser NIP-44-seals each session as `{v, threadKey, messages}`, with `threadKey` riding inside the ciphertext so threads restore losslessly). New `sessionIdFor` in `chat-threads.js` maps a thread key to the server's slug-id grammar. `src/data/agent.js` gains `listSessions`/`readSession`/`saveSession`/`deleteSession` over the admin-gated `/api/sessions` routes. The chat dock (`src/chat.js`) now persists threads to the server best-effort — greeting-only threads are skipped (no empty-session spam), seal/network failures never break the dock, and server data is hydrated over the localStorage copy on mount. New `src/views/sessions.js` (`/sessions` route + sidebar entry) lists the owner's sessions (non-secret id + timestamp + size) and deletes any behind a `confirm()`, with no decrypt and no signer needed.
+
+**Tests.** +16 frontend: `session-crypto.test.js` (+10: round-trip + threadKey, receiver-binding, foreign/corrupt rejection, missing-deps) and `views/sessions.test.js` (+6: label mapping + no-decrypt / confirm-gated / empty-state source-structure guards). Frontend 1825 → **1841**.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.140 → 0.2.141-alpha.
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [unchanged — trust model still `agent/lib/crypto.mjs`, no key material on the box]; strategy [unchanged — OWNER-UI-1 now complete, OWNER-UI-2 remains].
+
 ## v0.2.140-alpha — OWNER-UI-1: sealed session store + /api/sessions (2026-09-13)
 
 **What shipped.** First slice of the owner-console consolidation: a server-side session store that moves owner chat sessions off browser `localStorage` and onto the agent under the same trust model as MEMORY-1. New `agent/lib/sessions.mjs` (`createSessionStore`) stores, per owner, one NIP-44-v2 ciphertext blob per session (`memory/owners/<ownerHex>/sessions/<id>.enc`) plus a minimal non-secret index (`id`, `created_at`/`updated_at`, `bytes`, `sha256`); the browser NIP-44-seals each session (title + messages live inside the blob), so the agent never sees plaintext at rest and never holds a key. Safety mirrors `memstore.mjs`: ownerHex is 64-hex, session ids are validated slugs, every resolved path re-checks containment (no traversal/IDOR), writes are atomic (temp+rename), payload is capped at NIP-44's 65535 bytes, and per-owner session count is quota-bounded. `agent/index.mjs` gains admin-gated routes: `GET /api/sessions` (list metadata), `POST /api/sessions` (`{id, ciphertext}` upsert), `GET /api/sessions/:id` (ciphertext, sha256-verified), `DELETE /api/sessions/:id` (unlink + index entry + audit).
