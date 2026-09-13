@@ -1,88 +1,106 @@
-# Decision: Hermes dashboard uses its own auth on a subdomain
+# Decision: Hermes runs passwordless behind the Continuum Nostr gateway
 
-- **Status:** Accepted
+- **Status:** Accepted (replaces the withdrawn subdomain + `basic_auth` design)
 - **Date:** 2026-09-13
-- **Supersedes:** the `/hermes/` same-origin path mount (HERMES-DASHBOARD-1)
-- **Decision drivers:** Hermes v0.21.x's June-2026 dashboard hardening
+- **Supersedes:** HERMES-DASHBOARD-2 (subdomain + Hermes `basic_auth` username/password)
+- **Decision driver:** identity is Nostr, and a regular user must never SSH or
+  maintain a second credential.
 
 ## Context
 
-We wanted the Hermes Web Dashboard (owner brain) reachable through the Torii
-gateway, gated on the existing Continuum admin session, with no second login.
-The original design bound the dashboard loopback-only and mounted it at
-`/hermes/` on the apex origin, with `nginx auth_request` against
-`GET /api/auth/session` as the single gate.
+We ship Hermes's Web Dashboard for the owner brain. The first attempt mounted it
+at `/hermes/` on the Continuum apex (HERMES-DASHBOARD-1); the second moved it to
+a subdomain gated by Hermes's own `basic_auth` (HERMES-DASHBOARD-2). Both were
+wrong in the same way: Hermes was given its *own* identity layer instead of
+inheriting the one the operator already has.
 
-Two facts surfaced while verifying that design against the real build:
-
-1. **A path prefix cannot work.** Hermes's web SPA is built for a root mount.
-   Its login form posts to `/auth/password-login` and it lazy-loads chunks from
-   `/assets/` — both root-relative URLs that ignore the `X-Forwarded-Prefix`
-   header and the `dashboard.public_url` path. Under `/hermes/` those requests
-   fall out of the prefix and 404, so login never completes and the Chat tab
-   never loads.
-
-2. **Any non-loopback exposure requires Hermes's own auth.** Since the June-2026
-   hardening, `dashboard.public_url` set to a non-loopback host engages an auth
-   gate that cannot be disabled. `hermes dashboard --insecure` is a no-op; the
-   help text states a public bind "always requires an auth provider (password or
-   OAuth)".
-
-The second fact also rules out the original "drop the Continuum cookie onto the
-same origin" idea on a subdomain: the session cookie is `__Host-torii_session`,
-host-locked to the apex, so it is never sent to a subdomain and `auth_request`
-against it would always 401.
+The product rule is now fixed: **a user authenticates once with their Nostr
+signer and that identity is their authority everywhere.** A username/password
+for Hermes violates that — it is a second credential, set and recovered over
+SSH, neither of which a regular user should be asked to do.
 
 ## Decision
 
-Serve the dashboard at the **root of a dedicated subdomain**
-(`hermes.chiefmonkey.art`), gated by **Hermes's own `dashboard.basic_auth`**
-(password form login, ~30-day session). The dashboard process stays
-loopback-only (`127.0.0.1:9119`); nginx is a plain reverse proxy that forwards
-and does not authenticate.
+**Hermes is a loopback-only, passwordless local backend. Continuum is the sole
+front door, and the Nostr-signed session is the sole authority. Launching Hermes
+from within Continuum means the Continuum gateway proxies Hermes's UI and
+WebSocket for an already-Nostr-authenticated browser — there is no Hermes
+username or password at all.**
 
-Consequences we accept:
+Specifically:
 
-- **A human password is now in the auth path.** The operator signs in once with
-  a username + password; the session cookie lasts ~30 days. This is a *second*
-  credential, but the alternative — no dashboard, or a broken path mount — is
-  worse. The password is configurable afterwards.
-- **Regular users never SSH; their ceiling is DNS.** A non-developer operator
-  must not be asked to open a terminal — their only manual step is the DNS A
-  record. The credential is therefore *user-supplied* through the install
-  surface (Continuum's web flow drives `dashboard.basic_auth.password` with a
-  value the operator chose), never a value they have to retrieve. The
-  auto-generate-and-file (0600) path in `install-hermes-dashboard.yml` is a
-  **developer-only fallback** (recover via `sudo cat`, then rotate + delete),
-  not an onboarding step for regular users.
-- **The Continuum session does not gate the dashboard.** It cannot transit to a
-  subdomain (host-locked cookie). Hermes's own auth is the sole door on this
-  host, by design.
-- **Loopback bind remains the security boundary.** Hermes is never directly
-  internet-reachable; nginx is the only ingress to `9119`.
+1. **Hermes binds `127.0.0.1:9119` and declares no auth provider** — Hermes's
+   native "unauthenticated loopback mode." It is never directly internet- or
+   even VPS-WAN-reachable; only the loopback gateway can reach it.
+2. **Continuum's agent is the gateway.** Continuum already authenticates with
+   the Nostr signer (NIP-07 `window.nostr` → sign a `kind: 22242` challenge → the
+   agent verifies against a relay → issues an HMAC session bound to the user's
+   **npub**). That npub-bearing session is the only credential that opens
+   Hermes.
+3. **No second login, no password, no SSH.** The user's Continuum session *is*
+   their authorization. The `dashboard-password` bootstrap file and the
+   `basic_auth` config are removed.
 
-## Resilience to Hermes updates
+## Why the username/password only ever appeared
 
-Configuration is applied through `hermes config set` / `hermes config get` using
-dot-notation keys (`dashboard.public_url`, `dashboard.basic_auth.username`,
-`dashboard.basic_auth.password`), and file locations resolved via
-`hermes config path` / `hermes config env-path`. We do **not** hand-edit
-`config.yaml` or import Hermes's internal `hash_password` module, either of
-which could break when Hermes changes its layout. The `password` key is stored
-plaintext and hashed in-memory by Hermes (its documented alternative to a
-precomputed `password_hash`); op-security is preserved by `config.yaml` being
-`0600`. A stable `HERMES_DASHBOARD_BASIC_AUTH_SECRET` keeps login sessions alive
-across restarts.
+Hermes wires "declare a public hostname" and "require auth" together on purpose.
+Setting a non-loopback `dashboard.public_url` populates the Host/Origin trust
+set, but that same declaration engages Hermes's auth gate, which then demands an
+auth provider (password or OAuth) — otherwise the loopback SPA session token
+would become remotely reachable. `HERMES_DASHBOARD-2` set `public_url` and
+therefore had no choice but to add `basic_auth`. Dropping `public_url` restores
+passwordless loopback mode; the auth responsibility moves to the gateway that
+already understands Nostr.
+
+## What carries the identity across the boundary
+
+The carrier is the **same-origin path mount** — Hermes is served at `/hermes/`
+on the Continuum apex, where the `__Host-torii_session` cookie already works and
+there is no cross-origin hop. Hermes natively supports this: behind
+`X-Forwarded-Prefix: /hermes` it rewrites its root-relative `/assets/*` and
+`/fonts/*` URLs and injects `window.__HERMES_BASE_PATH__`, so the SPA loads at
+the prefix without a rebuild. The earlier `/hermes/` mount (HERMES-DASHBOARD-1)
+broke only because nginx was not sending that header; it was never a Hermes
+limitation.
+
+Either way the *authority* is unchanged: the Nostr-bound npub, verified by the
+agent.
 
 ## Rejected alternatives
 
-- **Same-origin `/hermes/` path mount** — broken by the SPA's root-relative URLs
-  (login 404s, assets 404), confirmed against the live build.
-- **Path mount + upgrading the Continuum cookie to Domain-scoped** — weakens a
-  deliberate security boundary (a wider, non-`__Host-` credential) to save a
-  prefix, and still doesn't fix the SPA's root-relative URLs.
-- **Rebuilding Hermes's web UI with a prefix base** — forks a third-party
-  artifact and creates an ongoing rebuild burden on every Hermes release.
-- **nginx-injected Authorization header** — Hermes `basic_auth` is a form/cookie
-  flow (`POST /auth/password-login`), not HTTP Basic; there is no header to
-  inject.
+- **Hermes `basic_auth` (HERMES-DASHBOARD-2)** — a second credential, set and
+  recovered over SSH; withdrawn.
+- **`HERMES_DESKTOP=1` loopback exemption** — Hermes's own allowance for a
+  "Desktop-owned loopback backend behind a proxy," but the flag drags in
+  desktop-specific behavior (cron ownership, GPU, per-profile routing) that is
+  wrong for a headless VPS backend.
+- **Third-party OAuth** — reintroduces an external identity provider and
+  contradicts "Nostr is the identity."
+- **Forking Hermes's UI to add a base path** — ongoing rebuild burden.
+
+## Spike result (validated live 2026-09-13)
+
+The spike proved the full path on the live VPS:
+
+- **Passwordless loopback** — unsetting `dashboard.public_url` and `basic_auth`
+  makes Hermes serve the dashboard with no login (loopback root returns `200`, no
+  redirect).
+- **`X-Forwarded-Prefix` asset rewrite** — confirmed: behind
+  `X-Forwarded-Prefix: /hermes`, Hermes rewrites `/assets/*`, `/fonts/*` and
+  `/favicon.ico` to the `/hermes/` prefix and injects
+  `window.__HERMES_BASE_PATH__="/hermes"` and the session token.
+- **WebSocket hand-off** — the trio is solved:
+  - **Host** must be rewritten to loopback (`127.0.0.1:9119`); loopback mode
+    accepts only loopback Hosts.
+  - **Origin** must be stripped — CORS is locked to a `localhost`/`127.0.0.1`
+    regex, and the loopback host guard rejects a cross-origin `https://…` Origin.
+  - **Peer** stays loopback because nginx does NOT forward `X-Forwarded-For`.
+  - **Token (`?token=`)** is the pinned `HERMES_DASHBOARD_SESSION_TOKEN` — and it
+    must be **URL-safe (hex)**: a base64 token containing `+` breaks, because the
+    query string decodes `+` to a space and the comparison yields `token_mismatch`.
+  Result: `/api/ws` and `/api/pty` return `101 Switching Protocols` through nginx
+  with a `chiefmonkey.art` Host/Origin and the correct token, and `403` without it.
+
+The subdomain (`hermes.chiefmonkey.art`), its cert, `basic_auth`, the
+`dashboard-password` bootstrap file, and `HERMES_DASHBOARD_BASIC_AUTH_SECRET` are
+all removed. The `hermes.chiefmonkey.art` DNS A record is no longer needed.

@@ -93,22 +93,24 @@ greeter with a **local per-install ephemeral nsec** — no NIP-46 bunker, no
 locally. Wire format is NIP-17 kind-1059 gift-wrap + NIP-44. See
 `docs/nap-bridge-1.md` for the signer-custody ADR and the wrap flow.
 
-## Hermes Web Dashboard — subdomain with its own auth (HERMES-DASHBOARD-2)
+## Hermes Web Dashboard — loopback behind the Nostr gateway (passwordless)
 
 Nous Hermes ships a first-party **Web Dashboard** (`hermes dashboard`; flags
 `--host`/`--port`/`--no-open`/`--isolated`, defaults `127.0.0.1:9119`) with a
-Chat tab that embeds the real Hermes TUI. It now runs on its **own subdomain**
-(`hermes.chiefmonkey.art`) gated by Hermes's **own password auth**
-(`dashboard.basic_auth`), not by Continuum's session. See
+Chat tab that embeds the real Hermes TUI. It runs **passwordless** on loopback
+and is mounted at `/hermes/` on the Continuum apex, gated by Continuum's own
+session — no subdomain, no username/password. See
 `docs/hermes-dashboard-auth.md` (decision) and `ops/hermes-dashboard.md`
 (runbook).
 
-Two facts forced this away from the original `/hermes/` same-origin design: (1)
-the SPA ignores `X-Forwarded-Prefix` for its root-relative form actions and
-asset chunks, so a path mount 404s on login; and (2) since Hermes's June-2026
-hardening, any non-loopback `dashboard.public_url` requires a Hermes auth
-provider that cannot be disabled. The `__Host-torii_session` cookie is
-host-locked to the apex, so it cannot transit to a subdomain either.
+Two corrections landed this: (1) Hermes's SPA **does** honour
+`X-Forwarded-Prefix` — it rewrites its root-relative `/assets/*`, `/fonts/*` and
+`/favicon.ico` and injects `window.__HERMES_BASE_PATH__`, so a same-origin path
+mount works (the earlier `/hermes/` failure was only a missing header, never a
+Hermes limitation); and (2) with no `dashboard.public_url` and no `basic_auth`,
+Hermes runs in unauthenticated loopback mode, so the auth responsibility moves
+to the gateway that already understands Nostr. The loopback WS hand-off needs a
+loopback Host, a stripped Origin, and a URL-safe (hex) `?token=` session token.
 
 Continuum's own auth still mints the HttpOnly `__Host-torii_session` cookie
 mirroring the bearer (for the console and any other same-origin gated surface):
@@ -121,9 +123,10 @@ mirroring the bearer (for the console and any other same-origin gated surface):
   bearer — usable as an `auth_request` target on same-origin surfaces.
 
 The dashboard stays loopback-only under `hermes-owner` as its own systemd unit;
-nginx is a plain reverse proxy on the subdomain. `hermes-npc` is never exposed
-this way (DM path only). The bearer admin API (`/api/*`) is unchanged — the
-cookie unlocks only the session check, never the admin routes.
+the nginx gateway mounts it at `/hermes/` and re-checks the Continuum session
+before proxying. `hermes-npc` is never exposed this way (DM path only). The
+bearer admin API (`/api/*`) is unchanged — the cookie unlocks only the session
+check, never the admin routes.
 
 ## Non-goals (later slices)
 

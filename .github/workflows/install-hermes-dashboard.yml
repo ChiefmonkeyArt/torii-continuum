@@ -1,52 +1,38 @@
 name: Install Hermes Dashboard wiring
 
-# Installs the owner-brain Hermes Web Dashboard as a standalone subdomain vhost,
-# gated by Hermes's OWN password auth (basic_auth). This replaces the earlier
-# same-origin /hermes/ path mount, which is impossible to proxy cleanly: Hermes's
-# SPA uses root-relative form actions and asset URLs that ignore
-# X-Forwarded-Prefix. See docs/hermes-dashboard-auth.md for the decision.
+# Installs the owner-brain Hermes Web Dashboard as a passwordless loopback
+# backend, mounted at /hermes/ on the Continuum apex and gated by the operator's
+# existing Continuum Nostr session. This replaces the subdomain + basic_auth
+# design (HERMES-DASHBOARD-2), which was withdrawn. See
+# docs/hermes-dashboard-auth.md for the decision and the validated spike.
 #
 # What it puts on the VPS:
-#   - dashboard.basic_auth.{username,password} + dashboard.public_url (via `hermes config set`)
-#   - HERMES_DASHBOARD_BASIC_AUTH_SECRET in Hermes's .env (stable sessions)
+#   - un-keys dashboard.public_url + dashboard.basic_auth (passwordless loopback)
+#   - HERMES_DASHBOARD_SESSION_TOKEN (hex) in Hermes's .env (stable WS token)
 #   - /etc/systemd/system/torii-hermes-dashboard.service (loopback 127.0.0.1:9119)
-#   - /etc/nginx/sites-available/<hostname>.conf + symlink (reverse proxy)
-#   - a Let's Encrypt cert for <hostname>
+#   - /opt/torii/nginx-fragments/hermes.conf (the /hermes/ gateway block)
 #
 # ROBUSTNESS GUARANTEES:
-#   - idempotent: re-running skips already-configured auth, reuses the secret, and
-#     re-installs the same files. It does not rotate credentials.
-#   - config via `hermes config set` (dot-notation keys) + `hermes config path`/`env-path`,
-#     NOT hand-edited YAML, so it survives Hermes renaming its config file layout.
-#   - verify-then-proceed: nginx -t is guarded and reverted on failure; the unit
-#     must reach active before the vhost is wired; DNS must resolve before certbot.
-#   - the generated login password is written to 0600 at ~/.hermes/dashboard-password
-#     (never echoed to logs). Read it from there to sign in.
+#   - idempotent: re-running re-installs the same files and reuses the pinned
+#     session token. It never rotates it.
+#   - no plaintext credential lands on disk (no password, no bootstrap file).
+#   - config via `hermes config unset` + `hermes config path`/`env-path`, not
+#     hand-edited YAML, so it survives Hermes renaming its config layout.
 #
-# PREREQUISITE THE WORKFLOW CANNOT DO FOR YOU: a DNS record for <hostname>. Add
-#   <hostname>  A  <VPS-IP>
-# at your registrar first; the install fails with a clear message if it doesn't resolve.
+# NO PREREQUISITE for the user: no DNS A record, no password, no SSH. The user
+# signs in to Continuum with their Nostr signer; Hermes opens at /hermes/ behind
+# that session.
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Repo ref to source the wiring files from (tag, e.g. v0.2.136-alpha)'
+        description: 'Repo ref to source the wiring files from (tag, e.g. v0.2.137-alpha)'
         required: true
-        default: 'v0.2.136-alpha'
-        type: string
-      hostname:
-        description: 'Dashboard subdomain FQDN'
-        required: true
-        default: 'hermes.chiefmonkey.art'
-        type: string
-      username:
-        description: 'Dashboard login username'
-        required: false
-        default: 'hermes'
+        default: 'v0.2.137-alpha'
         type: string
       disable:
-        description: 'Set true to stop the dashboard, remove the vhost, and disable the unit (rollback)'
+        description: 'Set true to stop the dashboard, remove the fragment, and disable the unit (rollback)'
         required: false
         default: false
         type: boolean
@@ -92,8 +78,6 @@ jobs:
           SSH_OPTS: -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15
         run: |
           set -euo pipefail
-          HOST='${{ inputs.hostname }}'
-          USERNAME='${{ inputs.username }}'
           scp $SSH_OPTS ops/nginx/hermes.conf ops/systemd/torii-hermes-dashboard.service "$SSH_HOST:/tmp/"
 
           # ── Rollback / cleanup mode ────────────────────────────────────────
@@ -101,18 +85,15 @@ jobs:
             ssh $SSH_OPTS "$SSH_HOST" "set -euo pipefail
               sudo systemctl disable --now torii-hermes-dashboard.service 2>/dev/null || true
               sudo systemctl reset-failed torii-hermes-dashboard.service 2>/dev/null || true
-              sudo rm -f '/etc/nginx/sites-enabled/${HOST}.conf'
-              sudo rm -f '/etc/nginx/sites-available/${HOST}.conf'
+              sudo rm -f /opt/torii/nginx-fragments/hermes.conf
               sudo nginx -t && sudo systemctl reload nginx
-              echo 'dashboard unit stopped + vhost removed (config/auth/cert left in place)'
+              echo 'dashboard unit stopped + /hermes/ fragment removed (config + token left in place)'
             "
             exit 0
           fi
 
-          ssh $SSH_OPTS "$SSH_HOST" bash -s "$HOST" "$USERNAME" <<'REMOTE'
+          ssh $SSH_OPTS "$SSH_HOST" bash -s <<'REMOTE'
           set -euo pipefail
-          HOST="$1"
-          USERNAME="$2"
 
           # ── 0. Resolve hermes paths + binary (robust: no hardcoded layout) ──
           HBIN=$(sudo -u hermes-owner bash -lc 'command -v hermes' || true)
@@ -120,43 +101,30 @@ jobs:
             echo "::error::hermes binary not found for hermes-owner; install the owner brain first"
             exit 1
           fi
-          HCONF=$(sudo -u hermes-owner bash -lc 'hermes config path' | tail -1)
           HENV=$(sudo -u hermes-owner bash -lc 'hermes config env-path' | tail -1)
-          echo "hermes binary:      $HBIN"
-          echo "hermes config.yaml: $HCONF"
-          echo "hermes .env:        $HENV"
+          echo "hermes binary: $HBIN"
+          echo "hermes .env:   $HENV"
 
-          get_cfg() { sudo -u hermes-owner bash -lc "hermes config get '$1'" 2>/dev/null | tail -1 | tr -d '[:space:]'; }
+          # ── 1. Restore passwordless loopback (idempotent un-keys) ──────────
+          # Dropping public_url + basic_auth puts Hermes in unauthenticated
+          # loopback mode: no login, no password. The Nostr session gate in
+          # nginx is the sole authority.
+          sudo -u hermes-owner bash -lc 'hermes config unset dashboard.public_url' 2>/dev/null || true
+          sudo -u hermes-owner bash -lc 'hermes config unset dashboard.basic_auth' 2>/dev/null || true
+          echo "dashboard.public_url + basic_auth unset (passwordless loopback)"
 
-          # ── 1. Configure basic_auth (idempotent — never rotate) ────────────
-          CUR_USER=$(get_cfg dashboard.basic_auth.username)
-          if [[ -n "$CUR_USER" ]]; then
-            echo "basic_auth already configured (username=$CUR_USER); skipping credential setup"
+          # ── 2. Stable session token (hex — MUST be URL-safe) ───────────────
+          # A base64 token containing '+' breaks the ?token= WS comparison
+          # (the query string decodes '+' to a space). Hex is safe.
+          if ! sudo -u hermes-owner grep -q '^HERMES_DASHBOARD_SESSION_TOKEN=' "$HENV" 2>/dev/null; then
+            TOK=$(openssl rand -hex 32)
+            printf 'HERMES_DASHBOARD_SESSION_TOKEN=%s\n' "$TOK" | sudo -u hermes-owner tee -a "$HENV" >/dev/null
+            echo "pinned HERMES_DASHBOARD_SESSION_TOKEN (hex) to $HENV"
           else
-            PW=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)
-            # Persist the plaintext for the operator (0600; never echoed to logs).
-            umask 077
-            printf '%s\n' "$PW" | sudo -u hermes-owner tee "/home/hermes-owner/.hermes/dashboard-password" >/dev/null
-            sudo -u hermes-owner chmod 600 "/home/hermes-owner/.hermes/dashboard-password"
-            sudo -u hermes-owner bash -lc "hermes config set dashboard.basic_auth.username \"$USERNAME\""
-            sudo -u hermes-owner bash -lc "hermes config set dashboard.basic_auth.password \"$PW\""
-            echo "generated dashboard credentials; password saved to ~/.hermes/dashboard-password (0600)"
+            echo "session token already present; reusing"
           fi
 
-          # ── 2. public_url (non-loopback → engages Hermes's own auth) ───────
-          sudo -u hermes-owner bash -lc "hermes config set dashboard.public_url \"https://$HOST\""
-          echo "dashboard.public_url = https://$HOST"
-
-          # ── 3. Stable auth signing secret (idempotent) ─────────────────────
-          if ! sudo -u hermes-owner grep -q '^HERMES_DASHBOARD_BASIC_AUTH_SECRET=' "$HENV" 2>/dev/null; then
-            SECRET=$(openssl rand -base64 32 | tr -d '\n')
-            printf 'HERMES_DASHBOARD_BASIC_AUTH_SECRET=%s\n' "$SECRET" | sudo -u hermes-owner tee -a "$HENV" >/dev/null
-            echo "wrote HERMES_DASHBOARD_BASIC_AUTH_SECRET to $HENV"
-          else
-            echo "auth secret already present; reusing"
-          fi
-
-          # ── 4. systemd unit (loopback bind is the security boundary) ──────
+          # ── 3. systemd unit (loopback bind is the security boundary) ──────
           sudo sed "s#__HERMES_BIN__#$HBIN#" /tmp/torii-hermes-dashboard.service \
             | sudo tee /etc/systemd/system/torii-hermes-dashboard.service >/dev/null
           sudo chmod 0644 /etc/systemd/system/torii-hermes-dashboard.service
@@ -170,63 +138,26 @@ jobs:
           fi
           echo "dashboard unit active (loopback 127.0.0.1:9119)"
 
-          # ── 5. DNS must resolve before certbot (clear error, not a hang) ────
-          IP=$( (dig +short +time=5 +tries=2 "$HOST" @1.1.1.1 2>/dev/null || getent ahostsv4 "$HOST" 2>/dev/null | awk '{print $1}') | head -1 )
-          if [[ -z "$IP" ]]; then
-            echo "::error::$HOST does not resolve. Add a DNS A record '$HOST' -> this VPS's public IP, wait for propagation, then re-run."
-            exit 1
-          fi
-          echo "$HOST resolves to $IP"
-
-          # ── 6. Cert (if absent) → full vhost ──────────────────────────────
-          sudo mkdir -p /var/www/certbot
-          if sudo test -f "/etc/letsencrypt/live/${HOST}/fullchain.pem"; then
-            echo "cert already present for $HOST (skipping challenge vhost + issuance)"
-          else
-            # Fresh box: install a minimal port-80 vhost FIRST so Let's Encrypt
-            # can reach the ACME challenge before the 443 cert exists (nginx can't
-            # load a vhost that references a not-yet-issued ssl_certificate).
-            {
-              printf 'server {\n'
-              printf '    listen 80;\n'
-              printf '    listen [::]:80;\n'
-              printf '    server_name %s;\n' "$HOST"
-              printf '    location /.well-known/acme-challenge/ { root /var/www/certbot; }\n'
-              printf '    location / { return 301 https://$host$request_uri; }\n'
-              printf '}\n'
-            } | sudo tee "/etc/nginx/sites-available/${HOST}.conf" >/dev/null
-            sudo ln -sf "/etc/nginx/sites-available/${HOST}.conf" "/etc/nginx/sites-enabled/${HOST}.conf"
-            sudo nginx -t && sudo systemctl reload nginx
-            sudo certbot certonly --webroot -w /var/www/certbot -d "$HOST" \
-              --non-interactive --agree-tos --keep-until-expiring
-            sudo test -f "/etc/letsencrypt/live/${HOST}/fullchain.pem" || { echo "::error::cert issuance failed"; exit 1; }
-          fi
-
-          # Now the full production vhost (HTTP redirect + HTTPS reverse proxy).
-          sudo sed "s/__HERMES_DASHBOARD_HOST__/$HOST/g" /tmp/hermes.conf \
-            | sudo tee "/etc/nginx/sites-available/${HOST}.conf" >/dev/null
+          # ── 4. Install the /hermes/ gateway fragment (same origin) ─────────
+          sudo cp /tmp/hermes.conf /opt/torii/nginx-fragments/hermes.conf
+          sudo chown torii:torii /opt/torii/nginx-fragments/hermes.conf
+          sudo chmod 0644 /opt/torii/nginx-fragments/hermes.conf
           if ! sudo nginx -t 2>&1; then
-            echo "::error::nginx -t failed with the production vhost"
+            echo "::error::nginx -t failed with the /hermes/ fragment"
             exit 1
           fi
           sudo systemctl reload nginx
-          echo "nginx vhost live: ${HOST}"
+          echo "nginx /hermes/ fragment live"
 
-          # ── 7. Verify ───────────────────────────────────────────────────────
+          # ── 5. Verify ───────────────────────────────────────────────────────
           LP=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:9119/ || true)
-          HT=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://${HOST}/" || true)
-          echo "loopback (no auth) -> HTTP $LP (expect 302 -> /login: auth engaged)"
-          echo "https://${HOST}/   -> HTTP $HT (expect 302/200: reaching the login)"
+          echo "loopback (no auth) -> HTTP $LP (expect 200: passwordless)"
           case "$LP" in
-            302|301) echo "dashboard auth gate active";;
-            *) echo "::warning::unexpected loopback status $LP; check the unit";;
+            200) echo "passwordless loopback confirmed";;
+            *)   echo "::warning::unexpected loopback status $LP; expected 200 (no public_url/basic_auth)";;
           esac
-          echo "DONE. Sign in at https://${HOST}/ with username '$USERNAME' and the password in ~/.hermes/dashboard-password"
+          echo "DONE. Hermes is gated behind the Continuum Nostr session at /hermes/."
           REMOTE
-
-          echo "---- note ----"
-          echo "Login password was written to /home/hermes-owner/.hermes/dashboard-password (0600) if this was the first run; read it with:"
-          echo "  sudo cat /home/hermes-owner/.hermes/dashboard-password"
 
       - name: Clean up SSH key
         if: always()
