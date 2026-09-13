@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.135-alpha — Hermes dashboard subdomain + basic_auth (HERMES-DASHBOARD-2) (2026-09-13)
+
+**What shipped.** Retired the `/hermes/` path mount. Hermes's v0.21.x SPA ignores `X-Forwarded-Prefix` for its root-relative login form (`/auth/password-login`) and asset chunks (`/assets/`), and the June-2026 hardening makes any non-loopback `dashboard.public_url` require a Hermes auth provider that can't be disabled — so a path mount 404s on login and the Chat tab can't load. The dashboard now serves at the root of `hermes.chiefmonkey.art`, gated by Hermes's own `dashboard.basic_auth`, with the process still loopback-only (127.0.0.1:9119) and nginx a plain reverse proxy. Rewrote `install-hermes-dashboard.yml` to configure via `hermes config set` (dot-notation keys) + `hermes config path`/`env-path` (no hand-edited YAML, no internal `hash_password` module), generate credentials idempotently (password to a 0600 file, `HERMES_DASHBOARD_BASIC_AUTH_SECRET` reused on re-run), preflight DNS, issue the cert, and verify + rollback. Added `docs/hermes-dashboard-auth.md` (decision + rejected alternatives); updated `ops/hermes-dashboard.md`, `ops/nginx/hermes.conf`, `ops/systemd/torii-hermes-dashboard.service`, and the `docs/hermes-two-voice.md` section.
+
+**Live.** The dashboard was cut over to the subdomain + basic_auth on the VPS during this work (login + Chat/pty WebSocket round-trip verified end to end). No agent/frontend code changed.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.134 → 0.2.135-alpha.
+
+**Update-All checklist.** Code + tests [n/a — ops/docs only, no agent/frontend change]; version markers [done]; continuity docs [done]; ADR [done — `docs/hermes-dashboard-auth.md`]; strategy [skipped — no direction change]; Start9 packaging [deferred — separate follow-on].
+
 ## v0.2.134-alpha — Hermes installer idempotency hardening (2026-09-12)
 
 **What shipped.** `install_hermes()` in both `ops/install-hermes-owner.sh` and `-npc.sh` gated on `command -v hermes` (wrapper presence), so a broken Hermes venv (Nous bad-interpreter #21457 — the wrapper resolves but `~/.hermes/hermes-agent/venv/bin/python` is gone) was silently skipped on reinstall. The gate is now `hermes_runs()` → `hermes --version`, so a vanished venv is detected and re-installed. This closes the exact "the idempotent installer would wrongly skip" gap the parallel session's Repair runbook documented — that session also landed `install-hermes-dashboard.yml` + the Repair section (PRs #160–162) without a version bump.
