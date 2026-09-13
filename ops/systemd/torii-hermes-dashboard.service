@@ -3,17 +3,27 @@
 # Installed to /etc/systemd/system/torii-hermes-dashboard.service. Runs Nous
 # Research's `hermes dashboard` for the owner brain, bound to loopback only.
 #
-# SECURITY BOUNDARY: the loopback bind is what keeps the dashboard off the
-# public internet. Hermes's own auth gate is OFF on a loopback bind, and nginx
-# (snippets/hermes.conf) is the sole door, gated on the Continuum admin session.
-# The process MUST never bind 0.0.0.0 — if the installed binary ignores --host,
+# SECURITY BOUNDARY: the loopback bind (127.0.0.1:9119) is what keeps the
+# dashboard off the public internet. Hermes's OWN password auth IS engaged —
+# because dashboard.public_url is set to a non-loopback hostname, Hermes's
+# June-2026 hardening requires an auth provider, so `dashboard.basic_auth`
+# (username + password) is the door. nginx (ops/nginx/hermes.conf) is a plain
+# reverse proxy on the dashboard subdomain; it forwards, it does not auth. The
+# process MUST never bind 0.0.0.0 — if the installed binary ignores --host,
 # block port 9119 for non-loopback at the firewall (defence in depth).
+#
+# The auth signing secret (HERMES_DASHBOARD_BASIC_AUTH_SECRET) lives in Hermes's
+# own env file (~/.hermes/.env, i.e. `hermes config env-path`), so login
+# sessions survive restarts. It is written idempotently by the install
+# workflow; if it is absent Hermes falls back to a random per-process key and
+# sessions simply don't survive a restart (login again) — never a startup
+# failure.
 #
 # This unit is DELIBERATELY less hardened than torii-continuum-agent.service:
 # Hermes is a third-party binary whose runtime surface (subprocesses, tool
 # execution from the Chat tab, model backends) is not fully known here, so
 # kernel/syscall filters that are safe for our own agent could silently break
-# tool execution. The loopback bind + nginx gate is the real control; the
+# tool execution. The loopback bind + Hermes auth is the real control; the
 # hardening below is best-effort and MUST be re-verified on the live box.
 
 [Unit]
@@ -38,15 +48,11 @@ Environment=HOME=/home/hermes-owner
 # with that absolute path: under systemd the per-user PATH is not set the same
 # way, so a bare `hermes` will not resolve.
 #
-# VERIFY the exact launch form against the installed build before first enable
-# (see ops/hermes-dashboard.md focus: launch form):
-#   - `hermes dashboard` (machine dashboard) shows all profiles on this box —
-#     on a single-user VPS that is just the `owner` profile. Simplest default.
-#   - `hermes dashboard --isolated` serves one profile in isolation if the
-#     operator wants strict single-brain scope.
-# Both expose the same Web Dashboard; the difference is profile scope, not the
-# UI. The Chat tab's WebSocket (/api/pty) must authenticate cleanly with the
-# dashboard's own gate OFF — verify before relying on it.
+# Launch form: `hermes dashboard` (machine dashboard) attaches to ONE
+# machine-level server and shows all profiles on this box — on a single-user
+# VPS that is just the `owner` profile. Simple default. `hermes dashboard
+# --isolated` serves one profile in isolation for strict single-brain scope.
+# Both expose the same Web Dashboard; the difference is profile scope.
 ExecStart=__HERMES_BIN__ dashboard --host 127.0.0.1 --port 9119 --no-open
 
 Restart=on-failure
