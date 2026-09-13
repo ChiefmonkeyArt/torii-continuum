@@ -41,6 +41,7 @@ import { createConsent } from './lib/consent.mjs';
 import { createPortability } from './lib/portability.mjs';
 import { buildWorkingValues } from './lib/workingvalues.mjs';
 import { createSecretStore } from './lib/secretstore.mjs';
+import { createProjectStore } from './lib/projectstore.mjs';
 import { createNwcClient, createLiveNwcTransport } from './core/nwc.mjs';
 import { createRoutstrProvider } from './core/routstr-provider.mjs';
 import { createOnboarding } from './core/onboarding.mjs';
@@ -275,6 +276,8 @@ async function resolveBotId(ownerNpub) {
 // so the onboarding logic stays testable with an injected client.
 const secretStore = createSecretStore(cfg, { log: app.log });
 const routstrProvider = createRoutstrProvider(cfg, { log: app.log });
+const projectStore = createProjectStore({ secretStore, log: app.log });
+void projectStore.load().catch((e) => app.log.warn(`[projectstore] boot load failed: ${e.message}`));
 
 // Disk-backed marker store for NWC-issued top-up invoices (v0.2.83-alpha). An
 // audit record only — the payment hash is validated hex before it is echoed into
@@ -1212,6 +1215,23 @@ app.delete('/api/sessions/:id', { preHandler: requireAdmin }, async (req, reply)
     id: req.params.id,
   }).catch((e) => app.log.error(`[sessions] audit delete failed: ${e.message}`));
   return r;
+});
+
+// ── OWNER-UI-2: project store (server-backed, encrypted at rest) ──────────
+// The single shared document the UI reads/writes (and OWNER-UI-3's agent write
+// bridge will mutate). Admin-gated: only the operator's session reaches it;
+// the public NPC is a separate, sealed-out process. See lib/projectstore.mjs.
+app.get('/api/store', { preHandler: requireAdmin }, async () => {
+  return { ok: true, state: projectStore.get() };
+});
+
+app.put('/api/store', { preHandler: requireAdmin }, async (req, reply) => {
+  const next = req.body?.state;
+  if (!next || typeof next !== 'object' || Array.isArray(next)) {
+    return reply.code(400).send({ error: 'body must be { state: {...} }' });
+  }
+  const state = await projectStore.replace(next);
+  return { ok: true, state };
 });
 
 // ── MEMORY-1: scoped storage inspection + deletion ──────────────────────────
