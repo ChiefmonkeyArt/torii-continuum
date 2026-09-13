@@ -46,8 +46,15 @@ Consequences we accept:
 - **A human password is now in the auth path.** The operator signs in once with
   a username + password; the session cookie lasts ~30 days. This is a *second*
   credential, but the alternative — no dashboard, or a broken path mount — is
-  worse. The password is generated once at install (persisted 0600, never
-  logged) and configurable afterwards.
+  worse. The password is configurable afterwards.
+- **Regular users never SSH; their ceiling is DNS.** A non-developer operator
+  must not be asked to open a terminal — their only manual step is the DNS A
+  record. The credential is therefore *user-supplied* through the install
+  surface (Continuum's web flow drives `dashboard.basic_auth.password` with a
+  value the operator chose), never a value they have to retrieve. The
+  auto-generate-and-file (0600) path in `install-hermes-dashboard.yml` is a
+  **developer-only fallback** (recover via `sudo cat`, then rotate + delete),
+  not an onboarding step for regular users.
 - **The Continuum session does not gate the dashboard.** It cannot transit to a
   subdomain (host-locked cookie). Hermes's own auth is the sole door on this
   host, by design.
