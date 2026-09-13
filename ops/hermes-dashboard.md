@@ -25,7 +25,7 @@ second credential and no terminal access.
 ## Apply (via the workflow)
 
 ```bash
-gh workflow run install-hermes-dashboard.yml -f ref=v0.2.137-alpha
+gh workflow run install-hermes-dashboard.yml -f ref=v0.2.139-alpha
 ```
 
 The workflow is **idempotent**: re-running re-installs the same files and
@@ -49,6 +49,15 @@ credential ever lands on disk.
    should accept it. This exercises the `/hermes/` WS hand-off (loopback Host,
    stripped Origin, `?token=`), the one part worth checking after any Hermes
    upgrade.
+5. **Runtime chunks (no blank tabs).** Open the **Chat**, **System**, and
+   **Sessions** tabs — they must render, not blank. These are lazy-loaded by the
+   SPA at **root-relative `/assets/…`** (Hermes's bundler bakes `base: "/"`, so
+   `X-Forwarded-Prefix` fixes only the static `index.html`, never the runtime
+   chunk loader). The fragment's `/assets/*.{js,css,woff2}` location proxies them
+   to Hermes on loopback (falling back to the launcher on 404). Confirm directly:
+   `curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' https://<apex>/assets/ChatPage-DZ_svdcE.js`
+   → `200 text/javascript` (hash changes per Hermes build; grab the current
+   filename from the browser's DevTools Network tab).
 
 ## Security invariants (do not break)
 
@@ -75,10 +84,18 @@ credential ever lands on disk.
   `HERMES_DASHBOARD_SESSION_TOKEN`. It must stay present — if removed Hermes
   falls back to a random per-process token and the browser's cached `/hermes/`
   SPA loses its WS auth until reload.
-- `X-Forwarded-Prefix: /hermes` is what makes Hermes rewrite its `/assets/`,
-  `/fonts/` and `/favicon.ico` URLs to the prefix (it injects
-  `window.__HERMES_BASE_PATH__`). The gateway fragment sends it; do not drop it
-  or the SPA 404s on its own assets.
+- `X-Forwarded-Prefix: /hermes` is what makes Hermes rewrite its **static**
+  `index.html` asset URLs and inject `window.__HERMES_BASE_PATH__` for `/api/*`.
+  The gateway fragment sends it; do not drop it or the SPA 404s on its own
+  entry assets.
+- **The bundler's runtime chunk loader does NOT honour `X-Forwarded-Prefix`.**
+  Hermes's SPA is built with `base: "/"`, so its lazy route chunks (Chat, System,
+  Sessions, Docs) resolve at runtime to root-relative `/assets/<name>-<hash>.js|
+  .css|.woff2`. The fragment's regex location (`~ ^/assets/.+\.(js|css|woff2)$`)
+  proxies those to Hermes on loopback and falls back to the launcher on 404 — it
+  must stay in place or the Chat/System tabs blank. It proxies (rather than
+  serving `web_dist` directly) because that tree sits under the `0700`
+  `hermes-owner` home, which nginx's worker user cannot traverse.
 - Before relying on a fresh Hermes release, run `hermes config migrate` and
   re-check the four `Verify` items above (especially the Chat WebSocket).
 
@@ -135,5 +152,5 @@ unexpected, stop and reassess rather than deleting.
 After repair, re-run the install workflow to re-apply config + nginx + start:
 
 ```bash
-gh workflow run install-hermes-dashboard.yml -f ref=v0.2.137-alpha
+gh workflow run install-hermes-dashboard.yml -f ref=v0.2.139-alpha
 ```
