@@ -16,6 +16,7 @@
  */
 
 import { chat as agentChat, isAgentConfigured, listSessions, readSession, saveSession } from './data/agent.js';
+import { hydrateFromServer } from './data/store.js';
 import { isSessionLive } from './auth.js';
 import { currentRoute } from './router.js';
 import { threadKeyFor, pageTypeFor, projectSlugFrom, trimThread, sanitizeThreads, THREAD_CAP, sessionIdFor } from './chat-threads.js';
@@ -442,6 +443,12 @@ async function getReply(text, ctx) {
   if (isSessionLive()) {
     const r = await agentChat({ message: text, context: ctx });
     if (r.ok && r.data?.reply) {
+      // OWNER-UI-3: when the agent wrote to the shared store this turn (created/
+      // updated a milestone or todo), reconcile the browser cache so the project
+      // panels re-render live against the server's freshest document.
+      if (Array.isArray(r.data.store_writes) && r.data.store_writes.length > 0) {
+        void hydrateFromServer();
+      }
       // Be honest when the paid provider failed and the free local model answered.
       const fellBack = r.data.fell_back_from;
       return fellBack

@@ -30,6 +30,8 @@
  * not an accidental one.
  */
 
+import { makeTodoEvent, makeMilestoneEvent } from './store-events.mjs';
+
 const STORE_NAME = 'project_store';
 const EMPTY = Object.freeze({
   projects: [],
@@ -108,7 +110,98 @@ export function createProjectStore(deps = {}) {
     return state;
   }
 
-  return { load, get, replace, name: STORE_NAME };
+  function projectExists(slug) {
+    return state.projects.some((p) => p && p.content && p.content.slug === slug);
+  }
+
+  async function persistState() {
+    await secretStore.put(STORE_NAME, JSON.stringify(state));
+  }
+
+  /**
+   * Add a todo to a project's list (OWNER-UI-3 write bridge). Default-deny:
+   * an unknown project slug is refused rather than silently minting orphans.
+   */
+  async function addTodo(slug, text) {
+    if (typeof slug !== 'string' || !slug) return { ok: false, reason: 'bad project' };
+    if (typeof text !== 'string' || !text.trim()) return { ok: false, reason: 'bad text' };
+    if (!projectExists(slug)) return { ok: false, reason: 'unknown project' };
+    const order = state.todos.filter((t) => t.content && t.content.projectSlug === slug).length;
+    const ev = makeTodoEvent(slug, text.trim(), order);
+    state.todos.push(ev);
+    await persistState();
+    return { ok: true, slug, kind: 'todo', created: ev };
+  }
+
+  /** Flip a todo's done flag, matched by project + text (the model's key). */
+  async function toggleTodo(slug, text) {
+    if (typeof slug !== 'string' || typeof text !== 'string') return { ok: false, reason: 'bad request' };
+    const ev = state.todos.find(
+      (t) => t.content && t.content.projectSlug === slug && t.content.text === text.trim(),
+    );
+    if (!ev) return { ok: false, reason: 'not found' };
+    ev.content.done = !ev.content.done;
+    ev.created_at = Math.floor(Date.now() / 1000);
+    await persistState();
+    return { ok: true, slug, kind: 'todo', toggled: ev };
+  }
+
+  /** Add a milestone (default `pending`) to a project's list. */
+  async function addMilestone(slug, { title, status = 'pending', note = '' } = {}) {
+    if (typeof slug !== 'string' || !slug) return { ok: false, reason: 'bad project' };
+    if (typeof title !== 'string' || !title.trim()) return { ok: false, reason: 'bad title' };
+    if (!projectExists(slug)) return { ok: false, reason: 'unknown project' };
+    const index = state.milestones.filter((m) => m.content && m.content.projectSlug === slug).length + 1;
+    const ev = makeMilestoneEvent(slug, { title: title.trim(), status, note: (note || '').trim(), index });
+    state.milestones.push(ev);
+    await persistState();
+    return { ok: true, slug, kind: 'milestone', created: ev };
+  }
+
+  /** Update a milestone's status, matched by project + title. */
+  async function setMilestoneStatus(slug, title, status) {
+    if (typeof slug !== 'string' || typeof title !== 'string') return { ok: false, reason: 'bad request' };
+    const ev = state.milestones.find(
+      (m) => m.content && m.content.projectSlug === slug && m.content.title === title.trim(),
+    );
+    if (!ev) return { ok: false, reason: 'not found' };
+    ev.content.status = status;
+    ev.created_at = Math.floor(Date.now() / 1000);
+    await persistState();
+    return { ok: true, slug, kind: 'milestone', updated: ev };
+  }
+
+  /**
+   * Apply one normalized store action (from lib/store-actions.mjs) to the
+   * document and persist. Returns a structured result the chat route relays.
+   */
+  async function applyAction(action) {
+    if (!action || typeof action !== 'object') return { ok: false, reason: 'bad action' };
+    switch (action.action) {
+      case 'add_todo':
+        return addTodo(action.project, action.text);
+      case 'toggle_todo':
+        return toggleTodo(action.project, action.text);
+      case 'add_milestone':
+        return addMilestone(action.project, action);
+      case 'set_milestone_status':
+        return setMilestoneStatus(action.project, action.title, action.status);
+      default:
+        return { ok: false, reason: 'unknown action' };
+    }
+  }
+
+  return {
+    load,
+    get,
+    replace,
+    addTodo,
+    toggleTodo,
+    addMilestone,
+    setMilestoneStatus,
+    applyAction,
+    name: STORE_NAME,
+  };
 }
 
 export { sanitizeProjectState, EMPTY as EMPTY_PROJECT_STATE };

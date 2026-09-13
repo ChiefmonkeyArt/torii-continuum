@@ -77,3 +77,67 @@ test('load on an absent blob starts empty and does not throw', async () => {
   assert.equal(loaded.projects.length, 0);
   h.cleanup();
 });
+
+// ─── OWNER-UI-3 — the agent write bridge (applyAction) ───
+
+async function seeded() {
+  const h = harness();
+  await h.store.replace({ projects: [{ content: { slug: 'demoproject', name: 'Demo' } }] });
+  return h;
+}
+
+test('applyAction add_todo mints a compatible todo into the shared doc', async () => {
+  const h = await seeded();
+  const r = await h.store.applyAction({ action: 'add_todo', project: 'demoproject', text: 'wire tests' });
+  assert.equal(r.ok, true);
+  assert.equal(r.kind, 'todo');
+  const todo = h.store.get().todos.find((t) => t.content.text === 'wire tests');
+  assert.ok(todo, 'todo must be in the in-memory doc');
+  assert.equal(todo.kind, 30081);
+  assert.equal(todo.content.projectSlug, 'demoproject');
+  assert.equal(todo.content.done, false);
+  // persisted: a fresh store loads it back
+  const fresh = createProjectStore({ secretStore: h.secretStore });
+  const loaded = await fresh.load();
+  assert.ok(loaded.todos.some((t) => t.content.text === 'wire tests'));
+  h.cleanup();
+});
+
+test('applyAction add_milestone + set_milestone_status round-trip', async () => {
+  const h = await seeded();
+  const add = await h.store.applyAction({ action: 'add_milestone', project: 'demoproject', title: 'Ship v1', status: 'active' });
+  assert.equal(add.ok, true);
+  assert.equal(add.kind, 'milestone');
+  const bump = await h.store.applyAction({ action: 'set_milestone_status', project: 'demoproject', title: 'Ship v1', status: 'done' });
+  assert.equal(bump.ok, true);
+  const m = h.store.get().milestones.find((x) => x.content.title === 'Ship v1');
+  assert.equal(m.content.status, 'done');
+  h.cleanup();
+});
+
+test('applyAction toggle_todo flips done', async () => {
+  const h = await seeded();
+  await h.store.applyAction({ action: 'add_todo', project: 'demoproject', text: 'flip me' });
+  const r = await h.store.applyAction({ action: 'toggle_todo', project: 'demoproject', text: 'flip me' });
+  assert.equal(r.ok, true);
+  const todo = h.store.get().todos.find((t) => t.content.text === 'flip me');
+  assert.equal(todo.content.done, true);
+  h.cleanup();
+});
+
+test('applyAction refuses a write to an unknown project (default-deny)', async () => {
+  const h = await seeded();
+  const r = await h.store.applyAction({ action: 'add_todo', project: 'nosuchproject', text: 'x' });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'unknown project');
+  assert.equal(h.store.get().todos.length, 0);
+  h.cleanup();
+});
+
+test('applyAction rejects an unknown action verb', async () => {
+  const h = await seeded();
+  const r = await h.store.applyAction({ action: 'rm -rf /', project: 'demoproject' });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'unknown action');
+  h.cleanup();
+});

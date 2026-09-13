@@ -38,6 +38,20 @@ Be concise, honest, no filler. Never invent capabilities the app doesn't have. F
 const LOCKED_NOTICE =
   'Character memory is LOCKED: do not claim durable preferences/beliefs (say you\'d need memory unlocked) and do not draft memory events. You can still help with app navigation and general questions.';
 
+// OWNER-UI-3 — store-write protocol. Injected on EVERY chat turn (it is a core
+// app capability, not character memory) so the operator can create/update
+// milestones + todos straight from chat. The agent parses the fenced block and
+// applies the writes to the shared project store; the operator never sees the
+// raw JSON. Kept short so it doesn't bloat the prefill budget.
+const STORE_ACTIONS_INSTRUCTIONS = `You can create or update project milestones and todos on the operator's behalf when they ask. End your reply with a fenced JSON block labelled "store" — a single object or a list — only when the operator actually asks for such a change:
+\`\`\`store
+{"action":"add_todo","project":"<slug>","text":"..."}
+{"action":"toggle_todo","project":"<slug>","text":"..."}
+{"action":"add_milestone","project":"<slug>","title":"...","status":"pending|active|done","note":"..."}
+{"action":"set_milestone_status","project":"<slug>","title":"...","status":"pending|active|done"}
+\`\`\`
+Use the project slug from the current page's context when available. If you are unsure of the slug, ask instead of guessing.`;
+
 // Hard cap on any single injected memory fragment, in characters. ~4 chars/token,
 // so 600 chars \u2248 150 tokens. Keeps a "gm" turn well under the 500-token target
 // even with character + semantic + procedural all present.
@@ -150,7 +164,7 @@ export function composeSystemPrompt({ memory, context }) {
   // can never silently override it. Deterministic + versioned; provenance is
   // logged by handle() for prompt diagnostics without exposing anything secret.
   const { header: workingValues } = buildWorkingValues();
-  const parts = [workingValues, SKILL_INSTRUCTIONS];
+  const parts = [workingValues, SKILL_INSTRUCTIONS, STORE_ACTIONS_INSTRUCTIONS];
 
   if (memory) {
     const status = memory.status();

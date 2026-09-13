@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.143-alpha — OWNER-UI-3: the agent write bridge (2026-09-13)
+
+**What shipped.** The owner AI can now create/update milestones + todos straight from chat, and the project panels update live from the single shared document. New `agent/lib/store-events.mjs` mints todos (30081) + milestones (30080) in the exact client event shape, so an agent-written record is indistinguishable from one added by hand. New `agent/lib/store-actions.mjs` (`extractStoreActions`) parses a fenced `store` JSON block from the model's reply — allowlist verbs only, bounded titles/slugs, fence stripped from the visible reply. `projectstore.mjs` gains `addTodo`/`toggleTodo`/`addMilestone`/`setMilestoneStatus`/`applyAction` (default-deny: a write to an unknown project slug is refused). `/api/chat` now applies the model's actions in-process and returns `store_writes`; the chat skill carries a short always-on instruction teaching the model the protocol; the client re-hydrates the store when a turn reports writes so panels re-render live.
+
+**Tests.** +15 agent (`store-events` 3, `store-actions` 7, `applyAction` 5); +2 frontend (`store-bridge`). Agent 570 → **585**; frontend 1844 → **1846**.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.142 → 0.2.143-alpha.
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [unchanged — the OWNER-UI-2 trust model governs the write bridge; no new decision]; strategy [unchanged].
+
 ## v0.2.142-alpha — OWNER-UI-2: server-backed shared store (2026-09-13)
 
 **What shipped.** Replaced the browser-localStorage store with a single server-resident, encrypted-at-rest document shared by the UI and (next) the agent. New `agent/lib/projectstore.mjs` (`createProjectStore`) holds the full event document (projects/milestones/todos/board/files/members/routstr) and persists it via the existing `secretstore.mjs` (AES-256-GCM, HKDF-keyed from `session_secret`) — a cold disk shows only ciphertext, and a `session_secret` rotation fails closed to empty. `agent/index.mjs` gains admin-gated `GET`/`PUT /api/store` (whole-document read/replace). `src/data/store.js` keeps localStorage as the instant in-browser cache (and the demo build's only store) but now mirrors every mutation to the server and hydrates the authoritative copy on boot + sign-in. New ADR `docs/project-store-trust.md` records the one named exception to the no-key invariant (the store is server-side-encrypted, not client-sealed, because the agent must write it for OWNER-UI-3).
