@@ -31,9 +31,9 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Repo ref to source the wiring files from (tag, e.g. v0.2.135-alpha)'
+        description: 'Repo ref to source the wiring files from (tag, e.g. v0.2.136-alpha)'
         required: true
-        default: 'v0.2.135-alpha'
+        default: 'v0.2.136-alpha'
         type: string
       hostname:
         description: 'Dashboard subdomain FQDN'
@@ -178,28 +178,29 @@ jobs:
           fi
           echo "$HOST resolves to $IP"
 
-          # ── 6. Challenge-only vhost → certbot → full vhost ─────────────────
-          # First a minimal port-80 block so Let's Encrypt can reach the box.
-          {
-            printf 'server {\n'
-            printf '    listen 80;\n'
-            printf '    listen [::]:80;\n'
-            printf '    server_name %s;\n' "$HOST"
-            printf '    location /.well-known/acme-challenge/ { root /var/www/certbot; }\n'
-            printf '    location / { return 301 https://$host$request_uri; }\n'
-            printf '}\n'
-          } | sudo tee "/etc/nginx/sites-available/${HOST}.conf" >/dev/null
-          sudo ln -sf "/etc/nginx/sites-available/${HOST}.conf" "/etc/nginx/sites-enabled/${HOST}.conf"
-          sudo nginx -t && sudo systemctl reload nginx
+          # ── 6. Cert (if absent) → full vhost ──────────────────────────────
           sudo mkdir -p /var/www/certbot
-
-          if [[ ! -f "/etc/letsencrypt/live/${HOST}/fullchain.pem" ]]; then
+          if sudo test -f "/etc/letsencrypt/live/${HOST}/fullchain.pem"; then
+            echo "cert already present for $HOST (skipping challenge vhost + issuance)"
+          else
+            # Fresh box: install a minimal port-80 vhost FIRST so Let's Encrypt
+            # can reach the ACME challenge before the 443 cert exists (nginx can't
+            # load a vhost that references a not-yet-issued ssl_certificate).
+            {
+              printf 'server {\n'
+              printf '    listen 80;\n'
+              printf '    listen [::]:80;\n'
+              printf '    server_name %s;\n' "$HOST"
+              printf '    location /.well-known/acme-challenge/ { root /var/www/certbot; }\n'
+              printf '    location / { return 301 https://$host$request_uri; }\n'
+              printf '}\n'
+            } | sudo tee "/etc/nginx/sites-available/${HOST}.conf" >/dev/null
+            sudo ln -sf "/etc/nginx/sites-available/${HOST}.conf" "/etc/nginx/sites-enabled/${HOST}.conf"
+            sudo nginx -t && sudo systemctl reload nginx
             sudo certbot certonly --webroot -w /var/www/certbot -d "$HOST" \
               --non-interactive --agree-tos --keep-until-expiring
-          else
-            echo "cert already present for $HOST"
+            sudo test -f "/etc/letsencrypt/live/${HOST}/fullchain.pem" || { echo "::error::cert issuance failed"; exit 1; }
           fi
-          [[ -f "/etc/letsencrypt/live/${HOST}/fullchain.pem" ]] || { echo "::error::cert issuance failed"; exit 1; }
 
           # Now the full production vhost (HTTP redirect + HTTPS reverse proxy).
           sudo sed "s/__HERMES_DASHBOARD_HOST__/$HOST/g" /tmp/hermes.conf \
