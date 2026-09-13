@@ -15,11 +15,12 @@
  * the current project/page.
  */
 
-import { chat as agentChat, isAgentConfigured } from './data/agent.js';
+import { chat as agentChat, isAgentConfigured, listSessions, readSession, saveSession } from './data/agent.js';
 import { isSessionLive } from './auth.js';
 import { currentRoute } from './router.js';
-import { threadKeyFor, pageTypeFor, projectSlugFrom, trimThread, sanitizeThreads, THREAD_CAP } from './chat-threads.js';
+import { threadKeyFor, pageTypeFor, projectSlugFrom, trimThread, sanitizeThreads, THREAD_CAP, sessionIdFor } from './chat-threads.js';
 import { clampInputHeight, inputShouldScroll, reserveSpaceFor } from './chat-layout.js';
+import { sealSession, unsealSession } from './session-crypto.js';
 
 let logEl, inputEl, sendBtn, contextEl, modeEl, toggleEl, dockEl;
 let dockResizeObserver = null;
@@ -240,12 +241,70 @@ function loadThreads() {
     const raw = localStorage.getItem(THREADS_STORAGE_KEY);
     if (raw) threads = sanitizeThreads(JSON.parse(raw), THREAD_CAP);
   } catch (_e) { threads = {}; }
+  // Server-stored sessions are the durable copy (OWNER-UI-1). Hydrate them
+  // best-effort over the localStorage read so history survives a browser clear.
+  void hydrateServerSessions();
 }
 
 function saveThreads() {
   try {
     localStorage.setItem(THREADS_STORAGE_KEY, JSON.stringify(threads));
   } catch (_e) { /* quota / disabled storage — keep threads in-memory only */ }
+}
+
+// A session can only be sealed/unsealed when signed in AND a NIP-44 signer is
+// present. Otherwise the dock falls back to its in-browser (localStorage) copy.
+function serverSessionsAvailable() {
+  return isSessionLive()
+    && typeof window !== 'undefined'
+    && !!(window.nostr && window.nostr.nip44
+      && typeof window.nostr.nip44.encrypt === 'function'
+      && typeof window.nostr.nip44.decrypt === 'function'
+      && typeof window.nostr.getPublicKey === 'function');
+}
+
+// Best-effort: pull the owner's sealed sessions and merge them into threads.
+// Server wins over localStorage on the same thread key (it is the durable,
+// private-by-default store). A thread that fails to decrypt is treated as
+// foreign/corrupt and skipped, never allowed to crash the dock.
+async function hydrateServerSessions() {
+  if (!serverSessionsAvailable()) return;
+  let pubkey;
+  try { pubkey = await window.nostr.getPublicKey(); } catch (_e) { return; }
+  const deps = { pubkey, decrypt: (p, c) => window.nostr.nip44.decrypt(p, c) };
+  try {
+    const r = await listSessions();
+    if (!r.ok) return;
+    const sessions = (r.data && Array.isArray(r.data.sessions)) ? r.data.sessions : [];
+    for (const s of sessions) {
+      if (!s || typeof s.id !== 'string') continue;
+      const rr = await readSession(s.id);
+      if (!rr.ok || !rr.data?.ciphertext) continue;
+      let session;
+      try { session = await unsealSession(deps, rr.data.ciphertext); }
+      catch (_e) { continue; }
+      if (!session.threadKey) continue;
+      threads[session.threadKey] = trimThread(session.messages, THREAD_CAP);
+    }
+    if (Array.isArray(threads[activeKey])) renderLog();
+  } catch (_e) { /* best-effort hydration */ }
+}
+
+// Best-effort: seal the current thread and write it to the server. A greeting-
+// only thread (no user turn) is not persisted, so merely visiting a page does
+// not mint empty sessions. Seal/network failures never break the dock.
+async function persistServerSession(key) {
+  if (!serverSessionsAvailable()) return;
+  if (!Array.isArray(threads[key])) return;
+  if (!threads[key].some((m) => m && m.who === 'user')) return;
+  try {
+    const pubkey = await window.nostr.getPublicKey();
+    const ciphertext = await sealSession(
+      { pubkey, encrypt: (p, pt) => window.nostr.nip44.encrypt(p, pt) },
+      { threadKey: key, messages: threads[key] },
+    );
+    await saveSession(sessionIdFor(key), ciphertext);
+  } catch (_e) { /* best-effort persistence */ }
 }
 
 function renderLog() {
@@ -315,6 +374,7 @@ function pushTo(key, who, text, action) {
   threads[key].push({ who, text, at: Date.now(), ...(action ? { action } : {}) });
   threads[key] = trimThread(threads[key], THREAD_CAP);
   saveThreads();
+  void persistServerSession(key);
   if (key === activeKey) renderLog();
 }
 

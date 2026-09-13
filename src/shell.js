@@ -21,6 +21,7 @@ const NAV_ITEMS = [
   { id: 'team',        label: 'Team',        icon: iconTeam,        path: '/team' },
   { id: 'genesis',     label: 'Genesis',     icon: iconGenesis,     path: '/genesis' },
   { id: 'memory',      label: 'Memory',      icon: iconMemory,      path: '/memory' },
+  { id: 'sessions',    label: 'Sessions',    icon: iconSessions,    path: '/sessions' },
   { id: 'noticeboard', label: 'Noticeboard', icon: iconNoticeboard, path: '/noticeboard' },
 ];
 
@@ -355,6 +356,9 @@ function iconGenesis() {
 }
 function iconMemory() {
   return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="10" height="10" rx="1.5"/><path d="M1 6h2M1 10h2M13 6h2M13 10h2M6 1v2M10 1v2M6 13v2M10 13v2"/><rect x="6" y="6" width="4" height="4" rx="0.5"/></svg>`;
+}
+function iconSessions() {
+  return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5.5V8l1.75 1.75"/></svg>`;
 }
 function iconNoticeboard() {
   return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M5.5 13.5V2.5M10.5 13.5V2.5"/><path d="M3 6h10M3 9.5h10"/></svg>`;

@@ -69,6 +69,26 @@ export function threadKeyFor(ctx, mode) {
 }
 
 /**
+ * Map a thread key to the stable, filesystem-safe session id the server stores
+ * it under (OWNER-UI-1). Must satisfy the agent's session-id slug grammar
+ * (`/^[a-z0-9][a-z0-9_-]{0,63}$/`): lowercased, `:` and every other non-slug
+ * character folded to `-`, runs collapsed, and leading/trailing separators
+ * trimmed. Different thread keys must not collide (e.g. `project:foo` →
+ * `project-foo`, `page:/dashboard` → `page-dashboard`, `general` → `general`).
+ * @param {string} threadKey
+ * @returns {string}
+ */
+export function sessionIdFor(threadKey) {
+  let s = String(threadKey == null ? '' : threadKey).toLowerCase()
+    .replace(/[:/\\\s]+/g, '-')
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '')
+    .slice(0, 64);
+  return s || 'general';
+}
+
+/**
  * Return the tail of a message list bounded to `cap` (oldest trimmed). Pure —
  * returns a new array, never mutates the input.
  * @param {Array} msgs

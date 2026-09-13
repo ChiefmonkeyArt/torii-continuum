@@ -31,6 +31,7 @@ import { renderTeam } from './views/team.js';
 import { renderGenesis } from './views/genesis.js';
 import { renderMemory } from './views/memory.js';
 import { renderNoticeboard } from './views/noticeboard.js';
+import { renderSessions } from './views/sessions.js';
 
 function setLandingMode(on) {
   const app = document.getElementById('app');
@@ -134,6 +135,7 @@ function boot() {
   route('/genesis', guarded('/genesis', () => { setLandingMode(false); renderGenesis(mainContent()); renderSidebar(); }));
   route('/memory', guarded('/memory', () => { setLandingMode(false); renderMemory(mainContent()); renderSidebar(); }));
   route('/noticeboard', guarded('/noticeboard', () => { setLandingMode(false); renderNoticeboard(mainContent()); renderSidebar(); }));
+  route('/sessions', guarded('/sessions', () => { setLandingMode(false); renderSessions(mainContent()); renderSidebar(); }));
   route('/dashboard', guarded('/dashboard', () => { setLandingMode(false); renderDashboard(mainContent()); renderSidebar(); }));
 
   // Public demo surface (/demo/*). Read-only mockup rendered from obviously-fake
