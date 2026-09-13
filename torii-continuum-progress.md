@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.146-alpha — OWNER-UI-5: Perplexity-like chat polish (2026-09-13)
+
+**What shipped.** The chat dock reads as a clean thread instead of an avatar-and-bubble chat. Removed the per-turn "you"/"AI" avatar chrome (`src/chat.js` now emits a single bubble), and restyled `src/styles/chat.css`: assistant turns are flat text with no border/background (clean reading flow), user turns are right-aligned tinted pills, and the thinking indicator aligns with the assistant text. The conversation log stays an accessible live region (`role="log"` + `aria-live="polite"`). New `src/chat-polish.test.js` pins the no-avatar/flat-assistant treatment. **This closes OWNER-UI-1..5 — the owner interface now lives wholly in Continuum's own console.**
+
+**Tests.** Frontend 1845 → **1848** (+3 chat-polish). Agent unchanged at **586**.
+
+**Version markers bumped.** 0.2.145 → 0.2.146-alpha (all four).
+
+**Update-All checklist.** Code+styles+tests [done]; version markers [done]; continuity docs [done]; ADR [unchanged]; strategy [unchanged — OWNER-UI-5 already enumerated].
+
 ## v0.2.145-alpha — OWNER-UI-4: retire the Hermes owner dashboard (2026-09-13)
 
 **What shipped.** Continuum's console is now the sole owner interface; the bolted-on third-party Hermes Web Dashboard is retired. Removed the `/hermes/` launcher link + `iconHermes()` from the sidebar (`src/shell.js`), deleted the dashboard's install surface (`.github/workflows/install-hermes-dashboard.yml`, `ops/nginx/hermes.conf`, `ops/systemd/torii-hermes-dashboard.service`, `ops/hermes-dashboard.md` runbook), and marked `docs/hermes-dashboard-auth.md` RETIRED with a pointer in `docs/hermes-two-voice.md`. **Unchanged:** the two-voice boundary, the headless `hermes-owner` brain, and the `/v1` openai-adapter spine ("launch Hermes from within Continuum" stays possible through the headless brain). New `src/shell-hermes-retired.test.js` pins the removal.
