@@ -67,6 +67,7 @@ The layers + normative hierarchy are exposed via `GET /api/constitution` and sur
 - **Human in the loop by construction.** The agent drafts. The human approves. The browser signs. No autonomous publish path in v1.
 - **Read-only until proven.** Every Continuum feature starts read-only or mockup-only. Live actions require an explicit slice, explicit gates, and explicit approval.
 - **Local-first, encrypted-first.** Filesystem posture is `chmod 700`, dedicated OS user, no plaintext prompts in production logs.
+- **Server-stored, private by default.** All Continuum state — owner sessions, project metadata, agent memory — lives on the operator's own VPS and is encrypted at rest. Nostr is for identity and *delivery*, never for storing private state: nothing is relay-published without an explicit per-event owner opt-in, and owner→AI sessions are never relayed at all. "Nostr-shaped" (signed, addressable, portable) is a *format* choice; where the bytes live (server vs relay) is a separate, privacy-first decision.
 - **No vendor lock-in.** Providers (Routstr endpoints, relays, mints) are pinned in config and swappable without rewrites. Every dependency has a documented fallback plan even if the fallback ships later.
 - **Incremental, no big rewrites.** Same discipline as Quest. Every slice leaves the system cleaner, smaller, or better-indexed than it found it.
 - **Trade-offs over fake certainty.** Every architectural choice is documented with its cost, not just its benefit.
@@ -105,6 +106,18 @@ Continuum splits its agentic surface into **two isolated Hermes voices**:
 - **`hermes-npc`** — public in-world NPC greeter for Kami mode / Torii Quest, chat only, no tools, local-only inference, no secrets on disk, structurally unable to reach owner secrets. Provisioned by `ops/install-hermes-npc.sh` (separate `hermes-npc` user, `npc` profile, greeter `SOUL.md`). It is reachable over Nostr via the isolated **nap-bridge** gateway (NAP-BRIDGE-1): `agent/npc-gateway.mjs` + `ops/install-nap-bridge.sh` sign as the greeter with a **local per-install ephemeral nsec** (NAP-BRIDGE-3 — no NIP-46 bunker, no `nostrconnect://` approval; a throwaway funds-free identity minted at install), gate DMs on a **fail-closed npub allowlist**, and infer locally. DMs are **NIP-17 kind-1059 gift-wrap + NIP-44** (NAP-BRIDGE-2): rumor (14) → seal (13, greeter-signed) → wrap (1059, local ephemeral key). See `docs/nap-bridge-1.md`.
 
 Unix users are the primary trust boundary; Docker is optional hardening only, never the identity boundary. The Fastify router in `agent/index.mjs` is not either voice — it is the shared inference spine the owner voice sits behind, via the OpenAI-compatible `/v1` surface (`agent/core/openai-adapter.mjs`): loopback-only, fail-closed local bearer, no persona, delegates to `model-router.chat()` unchanged. Shared Ollama (127.0.0.1:11434) is the one deliberately-shared surface for stateless inference. See `docs/hermes-two-voice.md` for the full ADR and boundary rules.
+
+### Owner-console consolidation (OWNER-UI-1..5, planned 2026-09-13)
+
+The owner voice's interface moves from the bolted-on third-party Hermes dashboard to Continuum's own console. The two-voice boundary is **unchanged** — owner stays a private full-tool agent on the Routstr/Cashu spine, NPC stays a public store/world-only greeter on local Ollama — the only thing that changes is the *owner's* UI and where owner data lives.
+
+**Storage principle (binding).** All storage is **server-backed, private by default, encrypted at rest**. Sessions are never relay-published. "Nostr-shaped" (signed, addressable) does not imply "relay-published" — format and location are separate decisions, and for private owner state the location is always the operator's own VPS.
+
+- **OWNER-UI-1 — server-side encrypted session layer.** Backend `/api/sessions` (list/create/delete/rename) + encrypted-at-rest persistence + a session list/delete UI. Replaces client-only localStorage thread buckets.
+- **OWNER-UI-2 — server-backed shared store.** Replace browser `localStorage` (`src/data/store.js`) with a server-side store the agent and UI both read/write, encrypted at rest.
+- **OWNER-UI-3 — agent write bridge.** The owner AI creates/updates milestones + todos through the agent, and the project panels update live (single shared store).
+- **OWNER-UI-4 — fold the owner persona.** Continuum's console becomes the owner interface; retire the Hermes owner dashboard (keep hermes-owner as a headless backend only if needed).
+- **OWNER-UI-5 — chat polish.** Perplexity-like owner chat: less chrome, cleaner message flow.
 
 ### CONT-AGENT-1 — v1 skeleton (active)
 
