@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.138-alpha — Continuum launcher opens Hermes at /hermes/ (2026-09-13)
+
+**What shipped.** The Continuum sidebar now carries a **Hermes** entry under a new **Apps** section that opens the same-origin Hermes dashboard at `/hermes/` — full-page navigation to the sibling app (not an internal hash route), so the operator launches the owner brain from within Continuum with no second login: the `/hermes/` nginx gate re-checks the current Continuum Nostr session. `src/shell.js` renders a non-hash `<a href="/hermes/">` (which `navClickTarget` leaves to the browser) gated on `isAgentConfigured()` so it never appears in the `/demo` mockup, with `aria-label="Open Hermes (owner brain)"`. Added `src/shell-hermes-link.test.js` (3 source-structure assertions: absolute `/hermes/` path vs `#/hermes`, the configured-install gate, and the accessible label).
+
+**Tests.** Frontend `vitest run` **1825/1825** (66 files); `npm run build` clean.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.137 → 0.2.138-alpha.
+
+**Update-All checklist.** Code + tests [done]; version markers [done]; continuity docs [done]; ADR [unchanged — `docs/hermes-dashboard-auth.md` governs the `/hermes/` design, no change]; strategy [skipped].
+
 ## v0.2.137-alpha — Hermes passwordless loopback behind the Nostr gateway (2026-09-13)
 
 **What shipped.** Reverted the subdomain + `basic_auth` design (HERMES-DASHBOARD-2) to the correct model. Hermes now runs passwordless on loopback (no `dashboard.public_url`, no `basic_auth`) and is mounted at a same-origin `/hermes/` path, gated by the operator's Continuum Nostr session via nginx `auth_request`. Confirmed by live-read that Hermes's SPA honours `X-Forwarded-Prefix` (rewrites `/assets/*`/`/fonts/*`/`/favicon.ico` and injects `window.__HERMES_BASE_PATH__`), reversing the earlier "path mount impossible" conclusion. Proved the WS hand-off live: loopback Host + stripped Origin (CORS is a localhost/127.0.0.1 regex) + a URL-safe hex `?token=` session token (`HERMES_DASHBOARD_SESSION_TOKEN`) → `/api/ws` + `/api/pty` return `101` through nginx. Live-discovered and fixed the `+` token bug — a base64 token's `+` decodes to a space in `?token=`, yielding `token_mismatch`, so the token must be hex. Removed the subdomain vhost + cert + `basic_auth` + `dashboard-password`. No agent/frontend JS changed; the `hermes.chiefmonkey.art` A record is no longer needed.

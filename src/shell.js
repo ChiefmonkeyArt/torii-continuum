@@ -89,6 +89,13 @@ export function renderSidebar() {
       <span>Usage</span>
     </a>
 
+    ${isAgentConfigured() ? `
+    <div class="nav-section">Apps</div>
+    <a class="nav-item" href="/hermes/" aria-label="Open Hermes (owner brain)">
+      <span class="nav-icon">${iconHermes()}</span>
+      <span>Hermes</span>
+    </a>` : ''}
+
     <div class="sidebar-footer">
       <div class="footer-note">
         <b>Local-first.</b> Continuum stores your projects as nostr-shaped events — portable, signable, yours.
@@ -357,6 +364,9 @@ function iconStar() {
 }
 function iconPulse() {
   return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8H4l1.5-4 3 8L10 8h4.5"/></svg>`;
+}
+function iconHermes() {
+  return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="8" height="8" rx="1.5"/><rect x="7" y="7" width="2" height="2"/><path d="M8 1.5v2.5M8 12v2.5M1.5 8h2.5M12 8h2.5"/></svg>`;
 }
 function iconSun() {
   return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M2.6 2.6l1.05 1.05M12.35 12.35l1.05 1.05M1.5 8h1.5M13 8h1.5M2.6 13.4l1.05-1.05M12.35 3.65l1.05-1.05"/></svg>`;
