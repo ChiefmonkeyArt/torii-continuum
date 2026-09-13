@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.139-alpha — Hermes runtime chunks: blank Chat/System tabs fixed (2026-09-13)
+
+**What shipped.** Fixed the blank screen on Hermes's **Chat** / **System** / **Sessions** / **Docs** tabs. Root cause: Hermes's SPA is built with `base: "/"`, so its **lazy-loaded route chunks** are resolved by the bundler at **runtime** as root-relative `/assets/<name>-<hash>.js|.css|.woff2` — `X-Forwarded-Prefix` only rewrites the static `index.html` and the `__HERMES_BASE_PATH__` used for `/api/*`, never the runtime chunk loader. Those chunk requests landed on the launcher's `/assets/` tree and 404'd, so the lazy routes never mounted. `ops/nginx/hermes.conf` now adds a regex location (`~ ^/assets/.+\.(js|css|woff2)$`) that **proxies** `/assets/*` to Hermes on loopback and falls back to the launcher on Hermes 404 (`proxy_intercept_errors` + `error_page 404 = @torii_launcher_assets`). It proxies rather than serving `web_dist` directly because that tree sits under the `0700` `hermes-owner` home, which nginx (www-data) cannot traverse. Static chunks carry no secrets (the session token is injected only into the gated index.html), so the `/assets/` route is intentionally ungated; the `/hermes/` index and every `/api/` call stay Nostr-session-gated. Verified live: Hermes chunks return `200` with correct MIME, launcher assets still `200`, unknown files still `404`.
+
+**Tests.** N/A (nginx fragment only; validated with `nginx -t` + live curl).
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.138 → 0.2.139-alpha.
+
+**Update-All checklist.** Code + tests [n/a — no app code; nginx config validated `nginx -t` + live]; version markers [done]; continuity docs [done]; ADR [unchanged — `docs/hermes-dashboard-auth.md` design intact; this corrects its over-broad "SPA honours X-Forwarded-Prefix" claim in the runbook]; strategy [skipped].
+
 ## v0.2.138-alpha — Continuum launcher opens Hermes at /hermes/ (2026-09-13)
 
 **What shipped.** The Continuum sidebar now carries a **Hermes** entry under a new **Apps** section that opens the same-origin Hermes dashboard at `/hermes/` — full-page navigation to the sibling app (not an internal hash route), so the operator launches the owner brain from within Continuum with no second login: the `/hermes/` nginx gate re-checks the current Continuum Nostr session. `src/shell.js` renders a non-hash `<a href="/hermes/">` (which `navClickTarget` leaves to the browser) gated on `isAgentConfigured()` so it never appears in the `/demo` mockup, with `aria-label="Open Hermes (owner brain)"`. Added `src/shell-hermes-link.test.js` (3 source-structure assertions: absolute `/hermes/` path vs `#/hermes`, the configured-install gate, and the accessible label).
