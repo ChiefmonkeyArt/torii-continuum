@@ -313,10 +313,7 @@ function renderLog() {
   for (const m of currentMessages()) {
     const el = document.createElement('div');
     el.className = 'chat-msg ' + m.who;
-    el.innerHTML = `
-      <div class="avatar">${m.who === 'user' ? 'you' : 'AI'}</div>
-      <div class="bubble"></div>
-    `;
+    el.innerHTML = `<div class="bubble"></div>`;
     const bubble = el.querySelector('.bubble');
     bubble.textContent = m.text;
     if (m.action === 'topup') {
