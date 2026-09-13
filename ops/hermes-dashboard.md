@@ -1,137 +1,96 @@
-# Hermes Web Dashboard — subdomain + basic_auth runbook (HERMES-DASHBOARD-2)
+# Hermes Web Dashboard — loopback + Nostr gateway (passwordless)
 
 Serve Nous Research's first-party **Hermes Web Dashboard** (`hermes dashboard`)
-for the owner brain on its own subdomain (e.g. `hermes.chiefmonkey.art`), gated
-by Hermes's **own password auth**. This supersedes the earlier `/hermes/`
-path-mount design (HERMES-DASHBOARD-1), which is unworkable — see
-[Why not `/hermes/`](#why-not-hermes) and `docs/hermes-dashboard-auth.md`.
+for the owner brain, mounted at `/hermes/` on the Continuum apex and gated by
+the operator's **existing Continuum Nostr session**. There is **no password, no
+subdomain, and no SSH** for the user. This supersedes the subdomain +
+`basic_auth` design (HERMES-DASHBOARD-2), which was withdrawn — see
+`docs/hermes-dashboard-auth.md`.
 
 ## What ships where
 
 | File | Target on VPS |
 |---|---|
-| `ops/nginx/hermes.conf` | `/etc/nginx/sites-available/<hostname>.conf` (+ symlink into `sites-enabled/`) |
+| `ops/nginx/hermes.conf` | `/opt/torii/nginx-fragments/hermes.conf` (included by the torii-base gateway) |
 | `ops/systemd/torii-hermes-dashboard.service` | `/etc/systemd/system/torii-hermes-dashboard.service` |
 
-## Prerequisite you must do yourself
+## What the user does
 
-A **DNS record** for the subdomain, pointing at the VPS. The install cannot
-create it (it lives at your registrar / DNS provider) and fails with a clear
-message if it doesn't resolve:
-
-```
-hermes.chiefmonkey.art   A   <VPS-IP>
-```
+Nothing new. They sign in to Continuum with their **Nostr signer** (the same
+identity they already use), then open Hermes from within Continuum — it appears
+at `/hermes/` already authorised. The **most a regular user ever does** is add a
+few DNS A records for the VPS itself; installing the dashboard requires no
+second credential and no terminal access.
 
 ## Apply (via the workflow)
 
 ```bash
-gh workflow run install-hermes-dashboard.yml \
-  -f ref=v0.2.136-alpha \
-  -f hostname=hermes.chiefmonkey.art
+gh workflow run install-hermes-dashboard.yml -f ref=v0.2.137-alpha
 ```
 
 The workflow is **idempotent**: re-running re-installs the same files and
-reuses the existing credential and signing secret — it never rotates them. It
-configures Hermes through `hermes config set` (dot-notation keys), not by
-hand-editing YAML, so it survives Hermes changing its config-file layout.
-
-## Credentials — who they come from
-
-The login is a single username/password on the subdomain. How the operator
-learns it depends on the install path, and the rule is that **a regular user
-never SSHes** — their only manual step is the DNS A record at the top.
-
-**Regular users — no SSH, ever.** A regular operator sets their own dashboard
-password through the install surface (Continuum's web flow drives
-`dashboard.basic_auth.password` with the value they choose). There is nothing
-to retrieve: they already know it, and their VPS work stops at DNS.
-
-**Developers — SSH-recover, then rotate.** The
-`install-hermes-dashboard.yml` workflow, run from a developer machine,
-auto-generates a strong random password on first run and writes it (0600,
-never to logs) to `/home/hermes-owner/.hermes/dashboard-password`. Recover it,
-sign in once, then rotate it and delete the file (next section) so no durable
-plaintext is left behind:
-
-```bash
-sudo cat /home/hermes-owner/.hermes/dashboard-password
-```
-
-This SSH-file path is a **developer fallback only** — it must never be part of
-a regular user's onboarding.
+reuses the pinned session token — it never rotates it. It un-keys
+`dashboard.public_url` and `dashboard.basic_auth` (restoring passwordless
+loopback mode) and pins `HERMES_DASHBOARD_SESSION_TOKEN`, so no plaintext
+credential ever lands on disk.
 
 ## Verify (against the live box, not docs)
 
 1. **Unit up, loopback only.** `systemctl status torii-hermes-dashboard.service`
    shows `active`; the journal prints `HERMES_DASHBOARD_READY port=9119`. The
    service must never bind `0.0.0.0`.
-2. **Auth engaged.** `curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:9119/`
-   returns `302` (redirect to `/login`) — not `200`. A `200` without auth means
-   `dashboard.public_url` didn't engage the gate.
-3. **Login.** Browse `https://hermes.chiefmonkey.art/`, sign in with the username
-   and the password from step above. The dashboard opens; the footer shows
-   `<user> / via basic`.
+2. **Passwordless loopback.** `curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:9119/`
+   returns `200` — not a redirect. A `302` to `/login` means `public_url` /
+   `basic_auth` is still set and the gate is still on.
+3. **Gated through the gateway.** `curl -sS -o /dev/null -w '%{http_code}' https://<apex>/hermes/`
+   returns `302` (to `/continuum/`) when unauthenticated, and the dashboard
+   opens only with a valid Continuum session.
 4. **Chat WebSocket.** Open the Chat tab and send a message. The embedded TUI
-   should accept it (not stay blank). Root mount means no asset 404s.
+   should accept it. This exercises the `/hermes/` WS hand-off (loopback Host,
+   stripped Origin, `?token=`), the one part worth checking after any Hermes
+   upgrade.
 
 ## Security invariants (do not break)
 
-- **Loopback is load-bearing.** The dashboard binds `127.0.0.1:9119`; nginx is a
-  plain reverse proxy (it forwards, it does not auth). If the binary ignores
-  `--host`, block non-loopback 9119 at the firewall.
-- **Hermes's own auth is the door.** `dashboard.public_url` is set to the
-  subdomain, so Hermes requires `dashboard.basic_auth`. There is no unauth
-  public-dashboard mode since the June-2026 hardening.
-- **No Continuum-session gating on the subdomain.** The `__Host-torii_session`
-  cookie is host-locked to the apex and is never sent to a subdomain, so
-  `auth_request` against it would always 401. Hermes auth is the sole gate here
-  — by design, not by omission.
+- **Loopback is load-bearing.** The dashboard binds `127.0.0.1:9119`; the
+  gateway is the only route in, and it authenticates before proxying. If the
+  binary ignores `--host`, block non-loopback 9119 at the firewall.
+- **Nostr session is the sole authority.** The nginx `auth_request` target
+  forwards the `__Host-torii_session` cookie to the Continuum agent's
+  `GET /api/auth/session`; 200 allows, 401 redirects to `/continuum/`. There is
+  no Hermes username/password.
+- **Session token must be URL-safe.** `HERMES_DASHBOARD_SESSION_TOKEN` must be
+  **hex** (or base64url). A standard base64 value containing `+` breaks the
+  `?token=` comparison — the query string decodes `+` to a space, yielding
+  `token_mismatch` and a dead Chat tab.
 - **NPC never exposed.** Only `hermes-owner` runs a dashboard. `hermes-npc`
   stays loopback-only, reachable solely via the NAP-BRIDGE DM path.
 
 ## Update-resilience notes
 
-- Config is written via `hermes config set` with dot-notation keys
-  (`dashboard.public_url`, `dashboard.basic_auth.username`,
-  `dashboard.basic_auth.password`), and read via `hermes config get` /
-  `hermes config path` / `hermes config env-path`. No hardcoded file paths, no
-  importing Hermes's internal `hash_password` module.
-- `dashboard.basic_auth.password` is stored as plaintext and hashed in-memory by
-  Hermes (its documented alternative to precomputing `password_hash`). It sits
-  in `config.yaml` (0600). If you prefer no plaintext at rest, replace it with a
-  `password_hash` using Hermes's hasher — but that relies on an internal module
-  path that could move on update.
-- Before relying on a fresh Hermes release, run `hermes config migrate` to pick
-  up renamed/retired settings, and re-check the `Verify` items above.
+- Config is cleared via `hermes config unset dashboard.public_url` and
+  `hermes config unset dashboard.basic_auth`, and read via `hermes config get`
+  / `hermes config path` / `hermes config env-path`. No hardcoded file paths.
+- The session token lives in Hermes's `.env` (`hermes config env-path`), read as
+  `HERMES_DASHBOARD_SESSION_TOKEN`. It must stay present — if removed Hermes
+  falls back to a random per-process token and the browser's cached `/hermes/`
+  SPA loses its WS auth until reload.
+- `X-Forwarded-Prefix: /hermes` is what makes Hermes rewrite its `/assets/`,
+  `/fonts/` and `/favicon.ico` URLs to the prefix (it injects
+  `window.__HERMES_BASE_PATH__`). The gateway fragment sends it; do not drop it
+  or the SPA 404s on its own assets.
+- Before relying on a fresh Hermes release, run `hermes config migrate` and
+  re-check the four `Verify` items above (especially the Chat WebSocket).
 
-## Changing / resetting the password (and deleting the bootstrap file)
-
-Set a password you chose (displaces any generated one):
+## Rotating the session token
 
 ```bash
-sudo -u hermes-owner bash -lc 'hermes config set dashboard.basic_auth.password "new-password"'
+sudo -u hermes-owner bash -c "sed -i 's|^HERMES_DASHBOARD_SESSION_TOKEN=.*|HERMES_DASHBOARD_SESSION_TOKEN='$(openssl rand -hex 32)'|' $(hermes config env-path)"
 sudo systemctl restart torii-hermes-dashboard.service
 ```
 
-After you have signed in with your own password, delete the bootstrap copy so
-no plaintext credential lingers on disk:
-
-```bash
-sudo rm -f /home/hermes-owner/.hermes/dashboard-password
-```
-
-Re-running the install later will not recreate it (the workflow skips
-credential generation once `dashboard.basic_auth.username` is already set).
-
-## Why not `/hermes/`
-
-Hermes's web SPA (v0.21.x) is built for a **root** mount. Its login form posts
-to `/auth/password-login` and it lazy-loads chunks from `/assets/` — both
-root-relative URLs that **ignore** `X-Forwarded-Prefix` and the `public_url`
-path. A path-prefix mount therefore 404s on login and breaks the Chat tab. A
-subdomain (root) is the only clean form. Full reasoning in
-`docs/hermes-dashboard-auth.md`.
+Re-running the install later will not rotate it (the workflow keeps an existing
+token idempotently).
 
 ## Repair — restore the missing Hermes venv (when `hermes` won't launch)
 
@@ -176,5 +135,5 @@ unexpected, stop and reassess rather than deleting.
 After repair, re-run the install workflow to re-apply config + nginx + start:
 
 ```bash
-gh workflow run install-hermes-dashboard.yml -f ref=v0.2.136-alpha
+gh workflow run install-hermes-dashboard.yml -f ref=v0.2.137-alpha
 ```

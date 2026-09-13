@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.137-alpha — Hermes passwordless loopback behind the Nostr gateway (2026-09-13)
+
+**What shipped.** Reverted the subdomain + `basic_auth` design (HERMES-DASHBOARD-2) to the correct model. Hermes now runs passwordless on loopback (no `dashboard.public_url`, no `basic_auth`) and is mounted at a same-origin `/hermes/` path, gated by the operator's Continuum Nostr session via nginx `auth_request`. Confirmed by live-read that Hermes's SPA honours `X-Forwarded-Prefix` (rewrites `/assets/*`/`/fonts/*`/`/favicon.ico` and injects `window.__HERMES_BASE_PATH__`), reversing the earlier "path mount impossible" conclusion. Proved the WS hand-off live: loopback Host + stripped Origin (CORS is a localhost/127.0.0.1 regex) + a URL-safe hex `?token=` session token (`HERMES_DASHBOARD_SESSION_TOKEN`) → `/api/ws` + `/api/pty` return `101` through nginx. Live-discovered and fixed the `+` token bug — a base64 token's `+` decodes to a space in `?token=`, yielding `token_mismatch`, so the token must be hex. Removed the subdomain vhost + cert + `basic_auth` + `dashboard-password`. No agent/frontend JS changed; the `hermes.chiefmonkey.art` A record is no longer needed.
+
+**Live.** Hermes flipped passwordless (loopback root `200`); the `/hermes/` fragment installed in `/opt/torii/nginx-fragments/` (unauth → `302` → `/continuum/`); WS/PTY round-trip proven through nginx.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.136 → 0.2.137-alpha.
+
+**Update-All checklist.** Code + tests [n/a — ops/docs only]; version markers [done]; continuity docs [done]; ADR [updated — docs/hermes-dashboard-auth.md supersedes HERMES-DASHBOARD-2]; strategy [skipped — no strategy change].
+
 ## v0.2.136-alpha — cert-check fix (install false-negative on existing cert) (2026-09-13)
 
 **What shipped.** Live-running the idempotent install exposed a real flake: `/etc/letsencrypt/live` is mode `0700` (root-only), so the workflow's unprivileged `[[ -f ]]` cert checks returned false on a valid existing cert — certbot ran (`--keep-until-expiring` → "no action"), then the fallback check also false-negatived and the install exited 1. Both checks are now `sudo test -f`, and the challenge-only vhost is only built when the cert is genuinely absent (so a re-run no longer tears down the 443 block into a transient HTTPS outage). Re-ran the workflow green end-to-end against the live VPS. No agent/frontend change.

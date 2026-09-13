@@ -4,27 +4,29 @@
 # Research's `hermes dashboard` for the owner brain, bound to loopback only.
 #
 # SECURITY BOUNDARY: the loopback bind (127.0.0.1:9119) is what keeps the
-# dashboard off the public internet. Hermes's OWN password auth IS engaged —
-# because dashboard.public_url is set to a non-loopback hostname, Hermes's
-# June-2026 hardening requires an auth provider, so `dashboard.basic_auth`
-# (username + password) is the door. nginx (ops/nginx/hermes.conf) is a plain
-# reverse proxy on the dashboard subdomain; it forwards, it does not auth. The
-# process MUST never bind 0.0.0.0 — if the installed binary ignores --host,
-# block port 9119 for non-loopback at the firewall (defence in depth).
+# dashboard off the public internet. Hermes runs PASSWORDLESS — NO
+# dashboard.public_url and NO basic_auth, so it is in unauthenticated loopback
+# mode (no username/password). The ONLY route in is the nginx /hermes/ fragment
+# (ops/nginx/hermes.conf), a same-origin path mount gated on the operator's
+# Continuum Nostr session via auth_request. nginx authenticates BEFORE it
+# proxies. The process MUST never bind 0.0.0.0 — if the installed binary ignores
+# --host, block port 9119 for non-loopback at the firewall (defence in depth).
 #
-# The auth signing secret (HERMES_DASHBOARD_BASIC_AUTH_SECRET) lives in Hermes's
-# own env file (~/.hermes/.env, i.e. `hermes config env-path`), so login
-# sessions survive restarts. It is written idempotently by the install
-# workflow; if it is absent Hermes falls back to a random per-process key and
-# sessions simply don't survive a restart (login again) — never a startup
-# failure.
+# The loopback WebSocket token (HERMES_DASHBOARD_SESSION_TOKEN) lives in Hermes's
+# own env file (~/.hermes/.env, i.e. `hermes config env-path`). It MUST be a
+# URL-safe value (hex): a base64 token containing '+' breaks the ?token=
+# comparison because the query string decodes '+' to a space. It is pinned
+# idempotently by the install workflow; if it is absent Hermes falls back to a
+# random per-process token and the browser's cached /hermes/ SPA loses WS auth on
+# restart — never a startup failure.
 #
 # This unit is DELIBERATELY less hardened than torii-continuum-agent.service:
 # Hermes is a third-party binary whose runtime surface (subprocesses, tool
 # execution from the Chat tab, model backends) is not fully known here, so
 # kernel/syscall filters that are safe for our own agent could silently break
-# tool execution. The loopback bind + Hermes auth is the real control; the
-# hardening below is best-effort and MUST be re-verified on the live box.
+# tool execution. The loopback bind + the Nostr-session gateway is the real
+# control; the hardening below is best-effort and MUST be re-verified on the
+# live box.
 
 [Unit]
 Description=Hermes Web Dashboard (owner brain, loopback-only)
