@@ -550,6 +550,21 @@ export async function deleteSession(id) {
   return req('DELETE', `/api/sessions/${encodeURIComponent(id)}`);
 }
 
+// ─── Project store (OWNER-UI-2) ─────────────────────────────
+//
+// The server-backed shared document (projects/milestones/todos/board/...).
+// Encrypted at rest server-side (see agent/lib/projectstore.mjs); the UI reads
+// the whole document and replaces it wholesale on mutation, mirroring the
+// single-blob model the old localStorage store used.
+
+export async function getStore() {
+  return req('GET', '/api/store');
+}
+
+export async function putStore(state) {
+  return req('PUT', '/api/store', { state });
+}
+
 // ─── Genesis (GENESIS-1) ────────────────────────────────────
 //
 // The sovereign-bot birth certificate. The owner pubkey is bound server-side

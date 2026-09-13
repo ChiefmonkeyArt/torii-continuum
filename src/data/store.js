@@ -10,6 +10,7 @@
 import { KIND, makeEvent, newId, nowSec } from './schema.js';
 import { seedProjects, seedSessions, seedMilestones, seedTodos, seedFiles, seedMarketTasks, seedRoutstr } from './seed.js';
 import { parseNpub } from '../lib/npub.js';
+import { getStore, putStore, isAgentConfigured, getStoredToken } from './agent.js';
 
 const STORAGE_KEY = 'continuum.v1';
 
@@ -47,6 +48,43 @@ function persist() {
   } catch (e) {
     console.warn('[continuum] persist failed', e);
   }
+  void persistServer();
+}
+
+// ── OWNER-UI-2: server-backed shared store ────────────────────────────────
+// The document now also lives on the agent (encrypted at rest) so the UI and
+// the agent share one source of truth. localStorage remains the instant,
+// in-browser cache for the demo build and signed-out visitors; a live agent
+// session additionally mirrors to / hydrates from the server best-effort.
+
+function serverStoreAvailable() {
+  return isAgentConfigured() && !!getStoredToken();
+}
+
+async function persistServer() {
+  if (!serverStoreAvailable()) return;
+  try {
+    await putStore(state);
+  } catch (_e) { /* best-effort mirror — localStorage stays the in-browser cache */ }
+}
+
+// Pull the authoritative server copy over the cached state, coerce its shape
+// defensively (mirroring initStore's schema-evolution guards), and notify
+// subscribers so views re-render against the freshest document.
+async function hydrateFromServer() {
+  if (!serverStoreAvailable()) return;
+  try {
+    const r = await getStore();
+    if (!r.ok || !r.data?.state || typeof r.data.state !== 'object') return;
+    const next = { ...emptyState(), ...r.data.state };
+    if (!Array.isArray(next.columns)) next.columns = [];
+    if (!Array.isArray(next.cards)) next.cards = [];
+    if (!Array.isArray(next.members)) next.members = [];
+    if (!Array.isArray(next.marketTasks) || next.marketTasks.length === 0) next.marketTasks = seedMarketTasks();
+    if (!next.routstr) next.routstr = seedRoutstr();
+    state = next;
+    notify();
+  } catch (_e) { /* best-effort hydration */ }
 }
 
 export function initStore() {
@@ -67,6 +105,15 @@ export function initStore() {
   } else {
     state = seedInitialState();
     persist();
+  }
+  // OWNER-UI-2: hydrate the authoritative server copy now, and again on sign-in
+  // (the document is admin-gated, so it only becomes reachable once a session
+  // exists). A failed/missed hydrate leaves the cached copy in place.
+  void hydrateFromServer();
+  if (typeof document !== 'undefined') {
+    document.addEventListener('continuum:session-changed', () => {
+      if (serverStoreAvailable()) void hydrateFromServer();
+    });
   }
   return state;
 }

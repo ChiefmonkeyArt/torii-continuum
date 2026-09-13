@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.142-alpha — OWNER-UI-2: server-backed shared store (2026-09-13)
+
+**What shipped.** Replaced the browser-localStorage store with a single server-resident, encrypted-at-rest document shared by the UI and (next) the agent. New `agent/lib/projectstore.mjs` (`createProjectStore`) holds the full event document (projects/milestones/todos/board/files/members/routstr) and persists it via the existing `secretstore.mjs` (AES-256-GCM, HKDF-keyed from `session_secret`) — a cold disk shows only ciphertext, and a `session_secret` rotation fails closed to empty. `agent/index.mjs` gains admin-gated `GET`/`PUT /api/store` (whole-document read/replace). `src/data/store.js` keeps localStorage as the instant in-browser cache (and the demo build's only store) but now mirrors every mutation to the server and hydrates the authoritative copy on boot + sign-in. New ADR `docs/project-store-trust.md` records the one named exception to the no-key invariant (the store is server-side-encrypted, not client-sealed, because the agent must write it for OWNER-UI-3).
+
+**Tests.** +5 agent (`projectstore.test.js`: ciphertext-on-disk, replace→load round-trip, rotated-secret fail-closed, shape sanitizer); +3 frontend (`store-server.test.js`: mirror/hydrate wired + session-gated + localStorage kept). Agent 565 → **570**; frontend 1841 → **1844**.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.141 → 0.2.142-alpha.
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [ADDED — `docs/project-store-trust.md`]; strategy [unchanged — OWNER-UI-2 already enumerated; trust model now codified in the ADR].
+
 ## v0.2.141-alpha — OWNER-UI-1: client sealing + session history/delete UI (2026-09-13)
 
 **What shipped.** Second half of OWNER-UI-1 — the client side of the sealed session layer, completing milestone 1. New `src/session-crypto.js` (`sealSession`/`unsealSession`/`sanitizeMessages`: the browser NIP-44-seals each session as `{v, threadKey, messages}`, with `threadKey` riding inside the ciphertext so threads restore losslessly). New `sessionIdFor` in `chat-threads.js` maps a thread key to the server's slug-id grammar. `src/data/agent.js` gains `listSessions`/`readSession`/`saveSession`/`deleteSession` over the admin-gated `/api/sessions` routes. The chat dock (`src/chat.js`) now persists threads to the server best-effort — greeting-only threads are skipped (no empty-session spam), seal/network failures never break the dock, and server data is hydrated over the localStorage copy on mount. New `src/views/sessions.js` (`/sessions` route + sidebar entry) lists the owner's sessions (non-secret id + timestamp + size) and deletes any behind a `confirm()`, with no decrypt and no signer needed.
