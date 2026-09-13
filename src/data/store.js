@@ -71,7 +71,7 @@ async function persistServer() {
 // Pull the authoritative server copy over the cached state, coerce its shape
 // defensively (mirroring initStore's schema-evolution guards), and notify
 // subscribers so views re-render against the freshest document.
-async function hydrateFromServer() {
+export async function hydrateFromServer() {
   if (!serverStoreAvailable()) return;
   try {
     const r = await getStore();

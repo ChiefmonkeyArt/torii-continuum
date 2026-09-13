@@ -42,6 +42,7 @@ import { createPortability } from './lib/portability.mjs';
 import { buildWorkingValues } from './lib/workingvalues.mjs';
 import { createSecretStore } from './lib/secretstore.mjs';
 import { createProjectStore } from './lib/projectstore.mjs';
+import { extractStoreActions } from './lib/store-actions.mjs';
 import { createNwcClient, createLiveNwcTransport } from './core/nwc.mjs';
 import { createRoutstrProvider } from './core/routstr-provider.mjs';
 import { createOnboarding } from './core/onboarding.mjs';
@@ -818,13 +819,25 @@ app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
     });
   }
 
+  // OWNER-UI-3: apply any store-write actions the model requested so the
+  // operator can create/update milestones + todos straight from chat and the
+  // project panels update live from the single shared document. Failed writes
+  // are reported (not silently dropped) but never fail the reply itself.
+  const { reply, actions } = extractStoreActions(result.reply);
+  const store_writes = [];
+  for (const action of actions) {
+    const applied = await projectStore.applyAction(action);
+    store_writes.push({ action: action.action, project: action.project, ok: applied.ok, reason: applied.reason || null });
+  }
+
   return {
-    reply: result.reply,
+    reply,
     model: result.model,
     provider: result.provider,
     duration_ms: result.duration_ms,
     sats_spent: result.sats_spent,
     fell_back_from: result.fell_back_from || null,
+    store_writes: store_writes.length ? store_writes : null,
   };
 });
 
