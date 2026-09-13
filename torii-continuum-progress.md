@@ -9,6 +9,14 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.144-alpha — hotfix: agent boot crash (2026-09-13)
+
+**What shipped.** v0.2.143-alpha took the live agent down with a 502: a `const { reply, actions }` destructure inside `/api/chat` shadowed the Fastify `reply` parameter (a SyntaxError) that shipped because `node --test` never loads the entry point. Renamed the binding (`replyText`). Added `agent/test/syntax-guard.test.js` — a `node --check` guard over `index.mjs` + `skills/*.mjs`, the two blind spots no test imports transitively — so a syntax regression can never again reach the deploy. Agent 585 → **586**.
+
+**Version markers bumped.** 0.2.143 → 0.2.144-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [unchanged]; strategy [unchanged].
+
 ## v0.2.143-alpha — OWNER-UI-3: the agent write bridge (2026-09-13)
 
 **What shipped.** The owner AI can now create/update milestones + todos straight from chat, and the project panels update live from the single shared document. New `agent/lib/store-events.mjs` mints todos (30081) + milestones (30080) in the exact client event shape, so an agent-written record is indistinguishable from one added by hand. New `agent/lib/store-actions.mjs` (`extractStoreActions`) parses a fenced `store` JSON block from the model's reply — allowlist verbs only, bounded titles/slugs, fence stripped from the visible reply. `projectstore.mjs` gains `addTodo`/`toggleTodo`/`addMilestone`/`setMilestoneStatus`/`applyAction` (default-deny: a write to an unknown project slug is refused). `/api/chat` now applies the model's actions in-process and returns `store_writes`; the chat skill carries a short always-on instruction teaching the model the protocol; the client re-hydrates the store when a turn reports writes so panels re-render live.
