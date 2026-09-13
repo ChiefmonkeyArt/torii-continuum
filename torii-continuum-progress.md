@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.145-alpha — OWNER-UI-4: retire the Hermes owner dashboard (2026-09-13)
+
+**What shipped.** Continuum's console is now the sole owner interface; the bolted-on third-party Hermes Web Dashboard is retired. Removed the `/hermes/` launcher link + `iconHermes()` from the sidebar (`src/shell.js`), deleted the dashboard's install surface (`.github/workflows/install-hermes-dashboard.yml`, `ops/nginx/hermes.conf`, `ops/systemd/torii-hermes-dashboard.service`, `ops/hermes-dashboard.md` runbook), and marked `docs/hermes-dashboard-auth.md` RETIRED with a pointer in `docs/hermes-two-voice.md`. **Unchanged:** the two-voice boundary, the headless `hermes-owner` brain, and the `/v1` openai-adapter spine ("launch Hermes from within Continuum" stays possible through the headless brain). New `src/shell-hermes-retired.test.js` pins the removal.
+
+**Tests.** Frontend 1846 → **1845** (−3 removed hermes-link, +2 retirement guard). Agent unchanged at **586**.
+
+**Version markers bumped.** 0.2.144 → 0.2.145-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [UPDATED — `docs/hermes-dashboard-auth.md` → RETIRED, `docs/hermes-two-voice.md` dashboard note]; strategy [unchanged — OWNER-UI-4 already enumerated].
+
 ## v0.2.144-alpha — hotfix: agent boot crash (2026-09-13)
 
 **What shipped.** v0.2.143-alpha took the live agent down with a 502: a `const { reply, actions }` destructure inside `/api/chat` shadowed the Fastify `reply` parameter (a SyntaxError) that shipped because `node --test` never loads the entry point. Renamed the binding (`replyText`). Added `agent/test/syntax-guard.test.js` — a `node --check` guard over `index.mjs` + `skills/*.mjs`, the two blind spots no test imports transitively — so a syntax regression can never again reach the deploy. Agent 585 → **586**.
