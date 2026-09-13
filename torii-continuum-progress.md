@@ -9,6 +9,14 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.136-alpha — cert-check fix (install false-negative on existing cert) (2026-09-13)
+
+**What shipped.** Live-running the idempotent install exposed a real flake: `/etc/letsencrypt/live` is mode `0700` (root-only), so the workflow's unprivileged `[[ -f ]]` cert checks returned false on a valid existing cert — certbot ran (`--keep-until-expiring` → "no action"), then the fallback check also false-negatived and the install exited 1. Both checks are now `sudo test -f`, and the challenge-only vhost is only built when the cert is genuinely absent (so a re-run no longer tears down the 443 block into a transient HTTPS outage). Re-ran the workflow green end-to-end against the live VPS. No agent/frontend change.
+
+**Version markers bumped.** `package.json`, `agent/package.json`, both `package-lock.json`: 0.2.135 → 0.2.136-alpha.
+
+**Update-All checklist.** Code + tests [n/a — ops only]; version markers [done]; continuity docs [done]; ADR [unchanged]; strategy [skipped].
+
 ## v0.2.135-alpha — Hermes dashboard subdomain + basic_auth (HERMES-DASHBOARD-2) (2026-09-13)
 
 **What shipped.** Retired the `/hermes/` path mount. Hermes's v0.21.x SPA ignores `X-Forwarded-Prefix` for its root-relative login form (`/auth/password-login`) and asset chunks (`/assets/`), and the June-2026 hardening makes any non-loopback `dashboard.public_url` require a Hermes auth provider that can't be disabled — so a path mount 404s on login and the Chat tab can't load. The dashboard now serves at the root of `hermes.chiefmonkey.art`, gated by Hermes's own `dashboard.basic_auth`, with the process still loopback-only (127.0.0.1:9119) and nginx a plain reverse proxy. Rewrote `install-hermes-dashboard.yml` to configure via `hermes config set` (dot-notation keys) + `hermes config path`/`env-path` (no hand-edited YAML, no internal `hash_password` module), generate credentials idempotently (password to a 0600 file, `HERMES_DASHBOARD_BASIC_AUTH_SECRET` reused on re-run), preflight DNS, issue the cert, and verify + rollback. Added `docs/hermes-dashboard-auth.md` (decision + rejected alternatives); updated `ops/hermes-dashboard.md`, `ops/nginx/hermes.conf`, `ops/systemd/torii-hermes-dashboard.service`, and the `docs/hermes-two-voice.md` section.
