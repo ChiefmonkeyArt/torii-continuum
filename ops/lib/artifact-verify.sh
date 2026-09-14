@@ -64,7 +64,10 @@ artifact_verify_manifest() {
 #   0 iff none of the forbidden secret/live-state paths exist in an extracted
 #   artifact tree. Defence-in-depth: the builder already refuses to package
 #   these, but the VPS re-checks independently before ever pointing a service
-#   at extracted content.
+#   at extracted content. SB-18: broadened beyond the six named paths — any
+#   secret-/backup-shaped file outside node_modules (fresh registry content,
+#   separately checksummed) is also refused, so a copy-all-then-prune builder
+#   cannot smuggle a .env.production, private key or editor backup through.
 artifact_verify_no_secrets() {
   local dir="${1:?}"
   local forbidden=(
@@ -82,6 +85,16 @@ artifact_verify_no_secrets() {
       return 1
     fi
   done
+  local hit
+  hit="$(find "$dir" -type f -not -path '*/node_modules/*' \
+      \( -name '.env.production' -o -name '.env.staging' \
+         -o -name '*.pem' -o -name '*.key' -o -name '*.p12' -o -name '*.pfx' \
+         -o -name 'id_rsa' -o -name 'id_rsa.*' -o -name 'id_ed25519*' -o -name 'id_ecdsa*' \
+         -o -name '*.bak' -o -name '*.orig' -o -name '*~' \) -print -quit 2>/dev/null || true)"
+  if [[ -n "$hit" ]]; then
+    echo "artifact_verify_no_secrets: secret/backup-shaped file in artifact: ${hit}" >&2
+    return 1
+  fi
   return 0
 }
 
@@ -109,6 +122,38 @@ artifact_verify_contents() {
   return 0
 }
 
+# ── artifact_verify_component_hashes <manifest> <extracted-dir> ───────────────
+#   0 iff the three component digests the builder recorded in the manifest match
+#   a fresh recomputation from the extracted tree using the SAME relative-path
+#   method the builder used. This is the deep self-check the manifest promises
+#   but the verifier previously never performed (SB-18): it catches a modified
+#   component inside an otherwise checksum-valid tarball.
+artifact_verify_component_hashes() {
+  local manifest="${1:?}" root="${2:?}"
+  [[ -f "$manifest" ]] || { echo "artifact_verify_component_hashes: manifest missing: $manifest" >&2; return 1; }
+
+  local exp_dist exp_src exp_deps
+  exp_dist="$(node -e 'try{const m=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write((m.components&&m.components.dist_sha256)||"");}catch(e){process.stdout.write("");}' "$manifest" 2>/dev/null || true)"
+  exp_src="$(node -e 'try{const m=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write((m.components&&m.components.agent_src_sha256)||"");}catch(e){process.stdout.write("");}' "$manifest" 2>/dev/null || true)"
+  exp_deps="$(node -e 'try{const m=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write((m.components&&m.components.agent_node_modules_sha256)||"");}catch(e){process.stdout.write("");}' "$manifest" 2>/dev/null || true)"
+
+  [[ -n "$exp_dist" && -n "$exp_src" && -n "$exp_deps" ]] \
+    || { echo "artifact_verify_component_hashes: manifest missing component digests (malformed manifest)" >&2; return 1; }
+
+  local got_dist got_src got_deps bad=0
+  got_dist="$(cd "${root}/dist" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
+  got_src="$(cd "${root}/agent" && find . -type f -not -path './node_modules/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
+  got_deps="$(cd "${root}/agent/node_modules" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
+
+  [[ "$got_dist" == "$exp_dist" ]] \
+    || { echo "artifact_verify_component_hashes: dist digest mismatch (manifest != recomputed)" >&2; bad=1; }
+  [[ "$got_src" == "$exp_src" ]] \
+    || { echo "artifact_verify_component_hashes: agent source digest mismatch (manifest != recomputed)" >&2; bad=1; }
+  [[ "$got_deps" == "$exp_deps" ]] \
+    || { echo "artifact_verify_component_hashes: agent node_modules digest mismatch (manifest != recomputed)" >&2; bad=1; }
+  [[ "$bad" -eq 0 ]]
+}
+
 # ── artifact_verify_all <tarball> <sha256-file> <manifest> <expected-tag> <extracted-dir> ──
 #   Convenience wrapper: runs every gate above in the order the deployer needs
 #   (checksum before extraction is even trusted, then content/manifest/secrets
@@ -121,6 +166,7 @@ artifact_verify_all() {
   artifact_verify_checksum "$tarball" "$sumfile" || { echo "artifact_verify_all: checksum gate FAILED" >&2; return 1; }
   artifact_verify_manifest "$manifest" "$tag" || { echo "artifact_verify_all: manifest gate FAILED" >&2; return 1; }
   artifact_verify_contents "$extracted" || { echo "artifact_verify_all: contents gate FAILED" >&2; return 1; }
+  artifact_verify_component_hashes "$manifest" "$extracted" || { echo "artifact_verify_all: component-digest gate FAILED" >&2; return 1; }
   artifact_verify_no_secrets "$extracted" || { echo "artifact_verify_all: secrets gate FAILED" >&2; return 1; }
   echo "artifact_verify_all: OK ($tag)"
   return 0
@@ -136,9 +182,10 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     manifest)         artifact_verify_manifest "$@" ;;
     no-secrets)       artifact_verify_no_secrets "$@" ;;
     contents)         artifact_verify_contents "$@" ;;
+    component-hashes) artifact_verify_component_hashes "$@" ;;
     all)              artifact_verify_all "$@" ;;
     *)
-      echo "usage: artifact-verify.sh {tag-valid|checksum|manifest|no-secrets|contents|all} ..." >&2
+      echo "usage: artifact-verify.sh {tag-valid|checksum|manifest|no-secrets|contents|component-hashes|all} ..." >&2
       exit 2 ;;
   esac
 fi
