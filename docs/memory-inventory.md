@@ -1,6 +1,6 @@
 # Memory inventory consolidation (audit A09)
 
-**Status:** Accepted — read-path unified in v0.2.150-alpha; write-path collapse follows.
+**Status:** Accepted — read-path, write-path collapse, and export boundary all landed (v0.2.150 + v0.2.151).
 **Scope:** `torii-continuum` agent memory storage lifecycles.
 
 ## Context
@@ -59,30 +59,30 @@ unified list:
 
 - **scoped store** items for every class (`memstore.listAllForOwner`) — this is
   the missing half: approved scoped memory now appears for unlock; and
-- **flat** identity/intents/panic directories (`character`, `intents`, `panic`),
-  plus the legacy `semantic`/`procedural` flat directories for read-back
-  compatibility until the write path is collapsed.
+- **flat** identity/intents/panic directories (`character`, `intents`, `panic`)
+  only — the flat `semantic`/`procedural` dirs are no longer read, because new
+  facts/skills now land in the scoped store.
 
-Each entry carries the shape the browser's `decryptEntries` already expects:
+Each entry carries the shape the browser's `decryptEntries` expects:
 `{ kind, d_tag, ciphertext }` (scoped entries additionally carry `class`,
 `scope`, `sha256`, `integrity_ok`).
 
-## Staged follow-up
+`POST /api/memory/store` now routes facts (`30094`) and skills (`30095`) into
+the scoped store (`memstore.put`, `_global` project, genesis `bot_id`), so new
+facts/skills land in exactly one place; identity root (`30092`), destructive
+intents (`30096`) and the panic key (`30097`) stay flat.
 
-1. **Write-path collapse (next).** Route `POST /api/memory/store` for `semantic`
-   (30094) and `procedural` (30095) into the scoped store (default `_global`
-   project, per the A07 reserved-scope work) so new facts/skills land in exactly
-   one place; keep 30092/30096/30097 flat. Then remove the flat
-   `memory/semantic` and `memory/procedural` enumeration (and later the dirs).
-2. **Export boundary.** Portability export already reads the scoped store
-   (`buildBundle` → `listAllForOwner`). Confirm identity/intents are **named as
-   intentionally excluded** from export (they are identity/safety, not portable
-   memory), rather than silently omitted.
-3. **Scope-aware unlock cache.** The RAM cache keys `${kind}:${dTag}` (flat). If
-   an operator later stores the same kind+d-tag under two projects, the flat
-   prompt cache would shadow one. Resolve by making the unlock key scope-aware
-   (`${kind}:${project}:${dTag}`) when the scoped store is the only source —
-   deferred because the operator's own agent is flat in practice today.
+Portability `buildBundle` now returns an `excluded` list naming identity,
+intents, and panic as **intentionally** not portable, rather than silently
+omitting them.
+
+## Remaining follow-up
+
+**Scope-aware unlock cache.** The RAM cache keys `${kind}:${dTag}` (flat). If
+an operator later stores the same kind+d-tag under two projects, the flat
+prompt cache would shadow one. Resolve by making the unlock key scope-aware
+(`${kind}:${project}:${dTag}`) when the scoped store is the only source —
+deferred because the operator's own agent is flat in practice today.
 
 ## Regression requirements
 
