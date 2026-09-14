@@ -154,6 +154,31 @@ else
   sk "generate: node + agent node_modules unavailable (covered by agent/test/npc-nsec.test.js)"
 fi
 
+# --- 4b. SB-04: supplied NPC_NSEC is reused (not run as a command), one identity ---
+# The old code wrote `${NPC_NSEC:+NPC_NSEC="$NPC_NSEC"}` as an expanded command
+# word, so a supplied nsec became `command not found` (leaking the value into
+# stderr) and each `--generate` field re-minted a DIFFERENT nsec. Regression:
+# a supplied nsec must round-trip (nsec_hex == supplied) and never leak.
+if command -v node >/dev/null 2>&1 && [ -d "$AGENT_DIR/node_modules/nostr-tools" ]; then
+  known_hex="$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')"
+  gen2="$(AGENT_DIR="$AGENT_DIR" NPC_NSEC="$known_hex" bash "${INSTALLER}" --generate 2>&1)"
+  out_hex="$(printf '%s' "$gen2" | sed -n 's/^nsec_hex=//p')"
+  [ "$out_hex" = "$known_hex" ] \
+    && ok "SB-04: supplied NPC_NSEC reused (nsec_hex round-trips)" \
+    || bad "SB-04: supplied NPC_NSEC not reused (got [$out_hex] want [$known_hex])"
+  if printf '%s' "$gen2" | grep -q 'command not found'; then
+    bad "SB-04: NPC_NSEC leaked into a command-not-found error"
+  else
+    ok "SB-04: no command-not-found leak"
+  fi
+  # all three fields present and npub/bech32 non-empty (one consistent identity).
+  if printf '%s' "$gen2" | grep -q '^npub=npub1' && printf '%s' "$gen2" | grep -q '^nsec_bech32=nsec1'; then
+    ok "SB-04: npub + nsec_bech32 derive from the single identity"
+  else
+    bad "SB-04: npub/nsec_bech32 missing or malformed"
+  fi
+fi
+
 # --- 5. Missing required inputs fail-closed --------------------------------
 err="$(bash "${INSTALLER}" --render-env 2>&1)"
 rc=$?

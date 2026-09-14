@@ -80,6 +80,22 @@ cp "$exi_s/config.yaml" "$exi_a/config.yaml"   # ansible layout already populate
   && ok "detect: app/.git + agent config wins over standalone => existing-ansible" \
   || bad "detect existing-ansible precedence"
 
+# SB-02: an ARTIFACT-installed app dir has dist/ + agent/ + VERSION but NO .git.
+# It must be classified as existing-ansible (never re-adopted over a stale
+# standalone), NOT partial-adoption. This is the exact regression the bug caused.
+art_app="${WORK}/artifact/app"; art_a="${WORK}/artifact/agent"; art_s="${WORK}/artifact/standalone"
+make_standalone "$art_s"                      # stale original standalone still present
+mkdir -p "$art_a" "$art_app/dist"
+echo 'v0.2.174-alpha' > "$art_app/VERSION"     # artifact-only marker (no .git)
+cp "$art_s/config.yaml" "$art_a/config.yaml"   # running install already has state
+[[ "$(layout_detect "$art_app" "$art_a" "$art_s")" == "mode=existing-ansible" ]] \
+  && ok "SB-02: artifact install (VERSION, no .git) => existing-ansible (not partial)" \
+  || bad "SB-02: artifact install misdetected (got [$(layout_detect "$art_app" "$art_a" "$art_s")])"
+# The authoritative source must be the RUNNING agent dir, not the stale standalone.
+[[ "$(authoritative_state_dir existing-ansible "$art_a" "$art_s")" == "$art_a" ]] \
+  && ok "SB-02: authoritative source is the running agent dir, not stale standalone" \
+  || bad "SB-02: wrong authoritative source for artifact install"
+
 # standalone with ONLY memory/ (no config), app has no .git, agent empty => adopt
 adopt2_app="${WORK}/adopt2/app"; adopt2_s="${WORK}/adopt2/standalone"; adopt2_a="${WORK}/adopt2/agent"
 mkdir -p "$adopt2_s/memory" "$adopt2_a" "$adopt2_app"
