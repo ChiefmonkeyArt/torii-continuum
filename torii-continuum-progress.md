@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.148-alpha — audit A13/A14/A15: NPC delivery contracts + public-work bounds (2026-09-14)
+
+**What shipped.** The reliability-contracts wave for the public greeter. **A13** — `routstr-discovery.mjs` no longer wraps the kind-38421 filter in `[{...}]`; it now passes the bare filter object `SimplePool.subscribeMany` actually expects (the same shape `npc-bridge.mjs` already documented), so live relay announcements stop being silently rejected. **A14** — `sendReply` no longer maps `pool.publish([url], wrap)` per URL and `allSettled`-over-the-outer-arrays (which fulfilled immediately and counted every relay as accepted); it publishes once to the relay set and settles the returned promise array, so rejections are observed and the fan-out count is real. **A15** — public-mode work is bounded: `createRateLimiter` now caps its per-sender bucket map (`maxBuckets` + stale-window eviction), inbound plaintext is truncated to `maxInputChars`, an in-memory `replayTtlMs` dedupe drops a re-delivered/re-wrapped gossip (`rumor.id`) so it isn't inferred+replied twice, and a drop-when-full semaphore (`maxConcurrent`) bounds concurrent handleEvent jobs. The two-voice boundary and fail-closed allowlist are untouched.
+
+**Tests.** Agent 566 → **572** (+6: bare-filter shape, promise-array flatten, bucket cap, input cap, replay dedupe, concurrency bound). Frontend unchanged at **1848**.
+
+**Version markers bumped.** 0.2.147 → 0.2.148-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [unchanged — no architecture change, bounds are additive]; strategy [unchanged]; ops [unchanged — installer/env unchanged].
+
 ## v0.2.147-alpha — OWNER-UI close-out: retire the `/v1` adapter + `hermes-owner` brain (2026-09-14)
 
 **What shipped.** The headless `hermes-owner` brain and the loopback `/v1`

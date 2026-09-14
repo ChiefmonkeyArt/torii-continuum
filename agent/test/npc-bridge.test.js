@@ -165,6 +165,16 @@ test('createRateLimiter rejects empty/invalid sender and sanitises bad limits', 
   assert.equal(rl.check('e'.repeat(64)).allowed, true); // defaults still allow
 });
 
+test('createRateLimiter bounds its bucket map with maxBuckets (audit A15)', () => {
+  // In public mode every distinct sender mints a bucket; the map must not grow
+  // without bound. Cap to 10 and flood 500 distinct identities.
+  const rl = createRateLimiter({ maxBuckets: 10, windowMs: 60_000, maxPerWindow: 6 });
+  for (let i = 0; i < 500; i++) {
+    rl.check(i.toString(16).padStart(64, '0'));
+  }
+  assert.ok(rl.size() <= 10, `bucket map capped (got ${rl.size()})`);
+});
+
 test('buildRumor is kind-14, greeter pubkey, p-tag to sender, content plaintext', () => {
   const r = buildRumor({ greeterHex: GREETER, senderHex: 'b'.repeat(64), plaintext: 'hi', createdAt: 1 });
   assert.equal(r.kind, 14);
@@ -243,7 +253,7 @@ function buildInbound({ senderSk, senderHex, greeterHex, plaintext }) {
   return { wrap, seal, rumor };
 }
 
-function makeBridge({ inbound, sealOverride, rumorOverride, chat, signerCb, rateLimit, public: isPublic, allowlist, getNoticeboard }) {
+function makeBridge({ inbound, sealOverride, rumorOverride, chat, signerCb, rateLimit, public: isPublic, allowlist, getNoticeboard, relayUrls = ['wss://r'], publishImpl, log = silentLog, maxConcurrent, maxInputChars, replayTtlMs }) {
   const calls = { decrypt: 0, chat: 0, encrypt: 0, sign: 0, publish: 0, wrap: 0 };
   const senderHex = inbound.seal.pubkey; // the real sender
   const chatFn = chat ?? (async () => { calls.chat++; return { ok: true, content: 'reply' }; });
@@ -263,12 +273,12 @@ function makeBridge({ inbound, sealOverride, rumorOverride, chat, signerCb, rate
     },
   };
   const bridge = createNpcBridge({
-    cfg: { relayUrls: ['wss://r'], allowlist: allowlist ?? new Set([senderHex]), soul: 'SOUL', model: 'm', public: isPublic, rateLimit },
+    cfg: { relayUrls, allowlist: allowlist ?? new Set([senderHex]), soul: 'SOUL', model: 'm', public: isPublic, rateLimit, maxConcurrent, maxInputChars, replayTtlMs },
     greeterHex: GREETER,
-    log: silentLog,
+    log,
     pool: {
       subscribeMany: () => ({ close() {} }),
-      publish: async () => { calls.publish++; return 'ok'; },
+      publish: publishImpl ?? (async () => { calls.publish++; return 'ok'; }),
     },
     signer,
     chat: chatFn,
@@ -484,4 +494,73 @@ test('a throwing signer does not crash handleEvent', async () => {
   });
   await bridgeThrows.handleEvent(inbound.wrap); // must resolve, not reject
   assert.ok(true);
+});
+
+// ─── Audit A14/A15: delivery contracts + public-work bounds ──────────────────
+
+test('publish promise array is flattened; a rejected relay is not counted (A14)', async () => {
+  const senderSk = generateSecretKey();
+  const senderHex = getPublicKey(senderSk);
+  const inbound = buildInbound({ senderSk, senderHex, greeterHex: GREETER, plaintext: 'hi' });
+  const infoLines = [];
+  const rejectP = Promise.reject(new Error('relay down'));
+  rejectP.catch(() => {}); // pre-handled so it isn't flagged as an unhandled rejection
+  const { bridge } = makeBridge({
+    inbound,
+    relayUrls: ['wss://a', 'wss://b'],
+    publishImpl: async () => [Promise.resolve('a'), rejectP],
+    log: { info: (m) => infoLines.push(m), warn() {}, error() {} },
+  });
+  await bridge.handleEvent(inbound.wrap);
+  const replied = infoLines.find((l) => l.includes('relays)'));
+  assert.ok(replied, 'reply fan-out logged');
+  assert.ok(replied.includes('1/2'), `accepted count reflects rejection: ${replied}`);
+});
+
+test('inbound plaintext is capped at maxInputChars before inference (A15)', async () => {
+  const senderSk = generateSecretKey();
+  const senderHex = getPublicKey(senderSk);
+  const inbound = buildInbound({ senderSk, senderHex, greeterHex: GREETER, plaintext: 'x'.repeat(5000) });
+  let sentLen = -1;
+  const { bridge } = makeBridge({
+    inbound,
+    maxInputChars: 100,
+    chat: async ({ messages }) => { sentLen = messages[1].content.length; return { ok: true, content: 'r' }; },
+  });
+  await bridge.handleEvent(inbound.wrap);
+  assert.equal(sentLen, 100, 'prompt truncated to the cap');
+});
+
+test('the same rumor.id within the TTL is processed only once (A15 replay dedupe)', async () => {
+  const senderSk = generateSecretKey();
+  const senderHex = getPublicKey(senderSk);
+  const inbound = buildInbound({ senderSk, senderHex, greeterHex: GREETER, plaintext: 'hi' });
+  const rumorOverride = JSON.stringify({ ...inbound.rumor, id: 'ab'.repeat(32) });
+  const { bridge, calls } = makeBridge({ inbound, rumorOverride, replayTtlMs: 60_000 });
+  await bridge.handleEvent(inbound.wrap);
+  await bridge.handleEvent(inbound.wrap); // identical re-delivered wrap
+  assert.equal(calls.chat, 1, 'inference ran once');
+  assert.equal(calls.publish, 1, 'only one reply published');
+});
+
+test('dispatch drops messages beyond the global concurrency bound (A15)', async () => {
+  const senderSk = generateSecretKey();
+  const senderHex = getPublicKey(senderSk);
+  const inbound = buildInbound({ senderSk, senderHex, greeterHex: GREETER, plaintext: 'hi' });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let chatCalls = 0;
+  const { bridge } = makeBridge({
+    inbound,
+    maxConcurrent: 1,
+    chat: async () => { chatCalls++; await gate; return { ok: true, content: 'r' }; },
+  });
+  const p1 = bridge.dispatch(inbound.wrap); // takes the only slot, blocks on chat
+  const p2 = bridge.dispatch(inbound.wrap); // dropped: slot full
+  await p2;
+  assert.equal(bridge._activeJobs(), 1, 'only one job admitted; the second was dropped');
+  release();
+  await p1;
+  assert.equal(chatCalls, 1, 'the admitted job reached inference exactly once');
+  assert.equal(bridge._activeJobs(), 0, 'slot released after completion');
 });
