@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.161-alpha — audit A25: session-secret rotation safety hold (2026-09-14)
+
+**What shipped.** Finding **A25** is closed. The encrypted-at-rest store (`lib/secretstore.mjs`) is now keyed by a DEDICATED `secretstore_key` (HKDF from that value, not `session_secret`), so rotating the login/session secret no longer destroys the saved NWC connection and Routstr key. Legacy installs that have no dedicated key fall back to `session_secret` for backward compatibility (and remain rotation-unsafe until they opt in). `config.mjs` validates the dedicated key when present (>=64 chars, no placeholder); `config.example.yaml` documents it. The distinct `/api/health/secrets` endpoint remains the honest post-rotation truth check.
+
+**Tests.** Agent 611 → **613** (+2: dedicated key survives rotation; legacy coupling still destroys records). Frontend unchanged at **1850**.
+
+**Version markers bumped.** 0.2.160 → 0.2.161-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; config example [done]; ADR [not applicable — the memory-authority ADR covers A17's model, this is a config-level key separation documented inline]; ops [unchanged]; Suite rotation-helper [follow-up, separate repo].
+
 ## v0.2.160-alpha — audit A17: memory session-lifetime authority model (2026-09-14)
 
 **What shipped.** Finding **A17** (memory signature/session-lifetime claims) is closed. The verified admin session (Nostr-signer login) is now the explicit single authority for memory, encoded in `createMemoryCache` and documented in `docs/memory-authority.md`. The plaintext RAM cache is LEASED for `session_ttl_sec` and auto-drops when the lease lapses (injectable clock), on lock/panic, and on shutdown — plaintext no longer outlives the session. The misleading "cache zeroed" wording is replaced with the accurate "references dropped; immutable JS strings are not cryptographically zeroized" caveat.

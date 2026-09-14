@@ -73,6 +73,16 @@ export function loadConfig(path) {
   if (cfg.session_secret && cfg.session_secret.includes('REPLACE')) {
     errors.push('session_secret is still the example placeholder — generate a real one');
   }
+  // A25: secretstore_key is optional (legacy falls back to session_secret), but
+  // when present it MUST be a real high-entropy secret — never a placeholder or
+  // a short value, since it is the at-rest master key for saved credentials.
+  if (cfg.secretstore_key != null && cfg.secretstore_key !== '') {
+    if (typeof cfg.secretstore_key !== 'string' || cfg.secretstore_key.length < 64) {
+      errors.push('secretstore_key must be at least 64 characters (high entropy) when set — or omit it to reuse session_secret (legacy)');
+    } else if (cfg.secretstore_key.includes('REPLACE')) {
+      errors.push('secretstore_key is still the example placeholder — generate a real one or remove it');
+    }
+  }
   if (!cfg.server?.host || !cfg.server?.port) {
     errors.push('server.host and server.port must both be set');
   }
