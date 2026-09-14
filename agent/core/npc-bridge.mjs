@@ -36,6 +36,7 @@ import {
 } from 'nostr-tools/pure';
 import { getConversationKey, encrypt as nip44Encrypt } from 'nostr-tools/nip44';
 import { nip19 } from 'nostr-tools';
+import { normalizeNoticesRead } from './noticeboard.mjs';
 
 const KIND_RUMOR = 14;    // inner private direct message
 const KIND_SEAL = 13;     // NIP-44-encrypted rumor, signed by the sender
@@ -216,28 +217,65 @@ export { NOTICEBOARD_KIND, NOTICEBOARD_D, NOTICE_KINDS, MAX_NOTICES } from './no
 export function parseNoticeboard(content) {
   const obj = safeParse(content);
   if (!obj || !Array.isArray(obj.notices)) return null;
-  return obj.notices;
+  // A16: run the reader through the SAME field bounds + kind vocabulary as the
+  // writer, so a signed board can never smuggle unbounded title/body/price/url
+  // or non-finite dates into the greeter's system context.
+  return normalizeNoticesRead(obj.notices);
 }
 
 /**
  * Render notices into a compact block for the greeter's system context.
- * Empty/missing returns '' so nothing is injected.
+ * Empty/missing returns '' so nothing is injected. Bounded, carries the body,
+ * url and start/end (not just title), and labels a notice's time status so the
+ * "current auctions + sales" framing is not a lie for expired/future entries.
+ * `now` is injectable (unix seconds) for tests.
  * @param {Array|null} notices
+ * @param {{now?:number}} [opts]
  * @returns {string}
  */
-export function formatNotices(notices) {
+export function formatNotices(notices, { now = Math.floor(Date.now() / 1000) } = {}) {
   if (!Array.isArray(notices) || notices.length === 0) return '';
   const lines = [];
   for (const n of notices) {
     if (!n || typeof n !== 'object') continue;
-    const title = String(n.title || n.body || '').trim();
-    if (!title) continue;
-    const kind = String(n.kind || 'notice');
-    const price = (n.price_sats != null && n.price_sats !== '') ? ` — ${n.price_sats} sats` : '';
-    lines.push(`- [${kind}] ${title}${price}`);
+    const title = String(n.title ?? '').trim().slice(0, 120);
+    const body = String(n.body ?? '').trim().slice(0, 500);
+    if (!title && !body) continue;
+    const kind = String(n.kind || 'notice').slice(0, 48);
+
+    const meta = [];
+    const price = Number(n.price_sats);
+    if (Number.isFinite(price) && price >= 0) meta.push(`${Math.floor(price)} sats`);
+    const status = noticeTimeStatus(n, now);
+    if (status) meta.push(status);
+    // Dates in ISO date form (no time) so a player sees the window without a
+    // timezone guess; a non-finite timestamp is already dropped by the parser.
+    if (Number.isFinite(n.starts_at)) meta.push(`from ${new Date(n.starts_at * 1000).toISOString().slice(0, 10)}`);
+    if (Number.isFinite(n.ends_at)) meta.push(`until ${new Date(n.ends_at * 1000).toISOString().slice(0, 10)}`);
+
+    const head = `- [${kind}] ${title || body.slice(0, 80)}`;
+    const metaStr = meta.length ? ` — ${meta.join(' · ')}` : '';
+    lines.push(`${head}${metaStr}`);
+    if (title && body) lines.push(`  ${body}`);
+    if (typeof n.url === 'string' && n.url.trim()) lines.push(`  ${n.url.trim().slice(0, 500)}`);
   }
   if (!lines.length) return '';
-  return `## World notices (current auctions, sales, and events)\n${lines.join('\n')}`;
+  return `## World notices (auctions, sales, and events)\n${lines.join('\n')}`;
+}
+
+/**
+ * Time status label for one notice. Returns null when the window is unbounded
+ * (no useful status), else 'ongoing' / 'ended' / 'upcoming'. Derived only from
+ * finite `starts_at`/`ends_at` against an injectable clock.
+ */
+function noticeTimeStatus(n, now) {
+  const start = Number.isFinite(n.starts_at) ? n.starts_at : null;
+  const end = Number.isFinite(n.ends_at) ? n.ends_at : null;
+  if (start == null && end == null) return null;
+  if (end != null && now > end) return 'ended';
+  if (start != null && now < start) return 'upcoming';
+  if (start != null || end != null) return 'ongoing';
+  return null;
 }
 
 /**
@@ -249,12 +287,24 @@ export function formatNotices(notices) {
  */
 export function createNoticeboardCache({ ttlMs = 60_000, now = Date.now } = {}) {
   let state = { value: undefined, fetchedAt: -Infinity };
+  // A16: coalesce a burst of cold calls onto ONE in-flight fetch instead of
+  // stampeding the relay with one fetch per concurrent question.
+  let inflight = null;
   return {
     async get(fetchFresh) {
       if (now() - state.fetchedAt < ttlMs) return state.value;
-      state.value = await fetchFresh();
-      state.fetchedAt = now();
-      return state.value;
+      if (!inflight) {
+        inflight = fetchFresh()
+          .then((v) => {
+            state.value = v;
+            state.fetchedAt = now();
+            return v;
+          })
+          .finally(() => {
+            inflight = null;
+          });
+      }
+      return inflight;
     },
   };
 }

@@ -90,7 +90,9 @@ test('noticeboard settled decisions are locked in', () => {
 });
 
 test('parseNoticeboard returns notices on valid content, null otherwise', () => {
-  assert.deepEqual(parseNoticeboard('{"version":1,"notices":[{"title":"a"}]}'), [{ title: 'a' }]);
+  // A16: the reader normalizes through the same field bounds as the writer, so a
+  // minimal title now also carries its resolved `kind`.
+  assert.deepEqual(parseNoticeboard('{"version":1,"notices":[{"title":"a"}]}'), [{ kind: 'notice', title: 'a' }]);
   assert.equal(parseNoticeboard('not json'), null);
   assert.equal(parseNoticeboard('{"notices":"nope"}'), null);
   assert.equal(parseNoticeboard(''), null);
@@ -104,7 +106,7 @@ test('formatNotices renders a compact block or empty, skipping junk', () => {
     { kind: 'auction', title: 'Sticker pack', price_sats: 21 },
     { kind: 'sale', title: 'Skin' },
   ]);
-  assert.equal(out, '## World notices (current auctions, sales, and events)\n- [auction] Sticker pack — 21 sats\n- [sale] Skin');
+  assert.equal(out, '## World notices (auctions, sales, and events)\n- [auction] Sticker pack — 21 sats\n- [sale] Skin');
 });
 
 test('createNoticeboardCache reuses within TTL and re-fetches after (injected clock)', async () => {
@@ -117,6 +119,78 @@ test('createNoticeboardCache reuses within TTL and re-fetches after (injected cl
   t = 1000;                                            // TTL elapsed
   assert.equal(await cache.get(fetchFresh), 'v2');     // re-fetched
   assert.equal(fetches, 2);
+});
+
+// ─── A16 regressions (noticeboard schema + cache) ────────────────────────────
+
+test('A16: reader bounds every field and drops non-finite dates/price', () => {
+  const parsed = parseNoticeboard(JSON.stringify({
+    notices: [
+      {
+        kind: 'auction',
+        title: 'x'.repeat(5000),
+        body: 'y'.repeat(5000),
+        price_sats: 'not-a-number',
+        url: 'https://e.test/' + 'u'.repeat(5000),
+        starts_at: 'garbage',
+        ends_at: 1234,
+      },
+    ],
+  }));
+  assert.equal(parsed.length, 1);
+  const n = parsed[0];
+  assert.equal(n.kind, 'auction');
+  assert.equal(n.title.length, 120);          // title capped
+  assert.equal(n.body.length, 500);           // body capped
+  assert.equal(n.price_sats, undefined);      // non-finite price dropped
+  assert.equal(n.url.length, 500);            // url capped
+  assert.equal(n.starts_at, undefined);       // non-finite date dropped
+  assert.equal(n.ends_at, 1234);              // finite date kept
+});
+
+test('A16: parseNoticeboard normalizes unknown kind to notice and skips junk entries', () => {
+  const parsed = parseNoticeboard(JSON.stringify({
+    notices: [
+      { kind: 'totally-not-a-kind', title: 'ok' },
+      null,
+      { title: '' },
+      { title: 'kept' },
+    ],
+  }));
+  assert.deepEqual(parsed, [
+    { kind: 'notice', title: 'ok' },
+    { kind: 'notice', title: 'kept' },
+  ]);
+});
+
+test('A16: formatNotices labels time status and carries body/url/dates', () => {
+  const now = 2000;
+  const out = formatNotices([
+    { kind: 'auction', title: 'Live', body: 'full detail', url: 'https://e.test', starts_at: 1000, ends_at: 3000, price_sats: 5 },
+    { kind: 'sale', title: 'Gone', ends_at: 1500 },
+    { kind: 'event', title: 'Later', starts_at: 9999 },
+  ], { now });
+  assert.match(out, /ongoing/);
+  assert.match(out, /ended/);
+  assert.match(out, /upcoming/);
+  assert.match(out, /full detail/);       // body present
+  assert.match(out, /https:\/\/e\.test/); // url present
+  assert.match(out, /until 1970-01-01/);  // finite date rendered
+});
+
+test('A16: cache coalesces a burst of cold calls onto one fetch', async () => {
+  let fetches = 0;
+  const cache = createNoticeboardCache({ ttlMs: 1000, now: () => 0 });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const fetchFresh = () => { fetches++; return gate.then(() => 'board'); };
+  const p1 = cache.get(fetchFresh);
+  const p2 = cache.get(fetchFresh);   // same cold window → coalesced
+  const p3 = cache.get(fetchFresh);
+  assert.equal(fetches, 1);           // one fetch for the burst
+  release();
+  await Promise.all([p1, p2, p3]);
+  assert.equal(fetches, 1);
 });
 
 // ─── Rate limiter (NAP-BRIDGE-5) ─────────────────────────────────────────────

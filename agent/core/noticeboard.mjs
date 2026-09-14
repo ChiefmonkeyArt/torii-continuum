@@ -16,6 +16,8 @@ import { NOTICEBOARD_KIND, NOTICEBOARD_D, NOTICE_KINDS, MAX_NOTICES } from './no
 const MAX_TITLE = 120;
 const MAX_BODY = 500;
 const MAX_URL = 500;
+// Shared field bounds so reader and writer can never drift (A16).
+export { MAX_TITLE, MAX_BODY, MAX_URL };
 
 /**
  * Validate + normalise a raw notices list into the canonical shape, or null when
@@ -57,11 +59,61 @@ export function normalizeNotices(input) {
     if (body) notice.body = body;
     if (price_sats !== undefined) notice.price_sats = price_sats;
     if (url) notice.url = url;
-    if (raw.starts_at != null && raw.starts_at !== '') notice.starts_at = Math.floor(Number(raw.starts_at));
-    if (raw.ends_at != null && raw.ends_at !== '') notice.ends_at = Math.floor(Number(raw.ends_at));
+    // A16: dates must be finite whole seconds — a NaN/garbage timestamp is a
+    // malformed board, rejected rather than signed with a poisoned field.
+    for (const field of ['starts_at', 'ends_at']) {
+      if (raw[field] != null && raw[field] !== '') {
+        const v = Number(raw[field]);
+        if (!Number.isFinite(v)) return null;
+        notice[field] = Math.floor(v);
+      }
+    }
 
     out.push(notice);
     if (out.length > MAX_NOTICES) return null;
+  }
+  return out;
+}
+
+/**
+ * Reader-side normalisation for the GREETER path (A16). Shares the exact field
+ * bounds and kind vocabulary with the writer (`normalizeNotices`) but is
+ * resilient instead of strict: a partially-bad signed board still renders its
+ * well-formed notices, and every field is bounded so nothing unbounded reaches
+ * the model's system context. Malformed entries are skipped, never fatal.
+ *
+ * @param {*} input  parsed `content` object (untrusted owner-authored input)
+ * @returns {Array}
+ */
+export function normalizeNoticesRead(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object') continue;
+    const title = String(raw.title ?? '').trim().slice(0, MAX_TITLE);
+    const body = String(raw.body ?? '').trim().slice(0, MAX_BODY);
+    if (!title && !body) continue;
+
+    const kind = NOTICE_KINDS.has(String(raw.kind ?? '')) ? String(raw.kind) : 'notice';
+    const notice = { kind };
+    if (title) notice.title = title;
+    if (body) notice.body = body;
+
+    if (raw.price_sats != null && raw.price_sats !== '') {
+      const p = Number(raw.price_sats);
+      if (Number.isFinite(p) && p >= 0) notice.price_sats = Math.floor(p);
+    }
+    const url = String(raw.url ?? '').trim().slice(0, MAX_URL);
+    if (url) notice.url = url;
+    for (const field of ['starts_at', 'ends_at']) {
+      if (raw[field] != null && raw[field] !== '') {
+        const v = Number(raw[field]);
+        if (Number.isFinite(v)) notice[field] = Math.floor(v);
+      }
+    }
+
+    out.push(notice);
+    if (out.length >= MAX_NOTICES) break;
   }
   return out;
 }
