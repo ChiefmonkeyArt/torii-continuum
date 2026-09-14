@@ -382,7 +382,8 @@ test('routstrPay refuses when no wallet is connected', async () => {
   const dir = tmp();
   try {
     const { onboarding } = build(dir);
-    const r = await onboarding.routstrPay({ invoice: 'lnbc1...', confirm: true });
+    await onboarding.routstrQuote({ amountSats: 100 });
+    const r = await onboarding.routstrPay({ confirm: true });
     assert.equal(r.code, 409);
     assert.match(r.body.error, /no wallet/);
   } finally {
@@ -395,7 +396,8 @@ test('routstrPay refuses when the connected wallet cannot pay_invoice', async ()
   try {
     const { onboarding } = build(dir, { connectNwc: fakeConnect({ methods: ['get_info'] }) });
     await onboarding.walletConnect({ nwcUri: NWC_URI });
-    const r = await onboarding.routstrPay({ invoice: 'lnbc1...', confirm: true });
+    await onboarding.routstrQuote({ amountSats: 100 });
+    const r = await onboarding.routstrPay({ confirm: true });
     assert.equal(r.code, 409);
     assert.match(r.body.error, /cannot pay/);
   } finally {
@@ -498,7 +500,8 @@ test('routstrRecover is non-terminal (202) while the invoice is still pending', 
       recoverInvoice: async () => ({ ok: false, recoverable: true, status: 'pending', reason: 'invoice not yet settled' }),
     });
     const { onboarding } = build(dir, { provider });
-    const r = await onboarding.routstrRecover({ bolt11: 'lnbc_fake' });
+    await onboarding.routstrQuote({ amountSats: 100 });
+    const r = await onboarding.routstrRecover({});
     assert.equal(r.code, 202);
     assert.equal(r.body.recoverable, true);
     assert.equal(r.body.status, 'pending');
@@ -625,6 +628,58 @@ test('routstrExportKey returns the full key ONLY on explicit confirm, and audits
     // Redacted status never exposes the key even after an export.
     const status = await onboarding.routstrStatus();
     assert.ok(!JSON.stringify(status.body).includes('sk-livekey999999'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── audit A18: funding confirmation is bound to the stored quote ───────────
+
+test('A18: routstrPay rejects a caller-supplied invoice that mismatches the pending quote', async () => {
+  const dir = tmp();
+  try {
+    const { onboarding } = build(dir);
+    await onboarding.walletConnect({ nwcUri: NWC_URI });
+    await onboarding.routstrQuote({ amountSats: 100 }); // stashes bolt11 'lnbc_fake'
+    const r = await onboarding.routstrPay({ invoice: 'lnbc_attacker', confirm: true });
+    assert.equal(r.code, 400);
+    assert.match(r.body.error, /does not match the pending quote/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('A18: routstrPay rejects a caller-supplied quote_id that mismatches the pending quote', async () => {
+  const dir = tmp();
+  try {
+    const { onboarding } = build(dir);
+    await onboarding.walletConnect({ nwcUri: NWC_URI });
+    await onboarding.routstrQuote({ amountSats: 100 }); // stashes quote_id 'inv_fake'
+    const r = await onboarding.routstrPay({ quoteId: 'attacker_quote', confirm: true });
+    assert.equal(r.code, 400);
+    assert.match(r.body.error, /does not match the pending quote/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('A18: routstrPay keeps the recovery envelope when key verification/store fails', async () => {
+  const dir = tmp();
+  try {
+    const provider = fakeProvider({
+      verifyKey: async () => ({ ok: false, reason: 'provider rejected key' }),
+    });
+    const { onboarding } = build(dir, { provider });
+    await onboarding.walletConnect({ nwcUri: NWC_URI });
+    await onboarding.routstrQuote({ amountSats: 100 });
+    const r = await onboarding.routstrPay({ confirm: true });
+    assert.equal(r.code, 200);
+    assert.equal(r.body.key_stored, false);
+    assert.equal(r.body.recoverable, true);
+    // The recovery envelope must NOT have been dropped just because store failed.
+    const st = await onboarding.recoveryState();
+    assert.equal(st.body.claimable, true, 'verify/store failure must leave the quote claimable');
+    assert.equal(st.body.pending.exists, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

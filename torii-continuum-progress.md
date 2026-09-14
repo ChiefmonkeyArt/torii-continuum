@@ -9,6 +9,21 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.153-alpha — audit A18: funding confirmation bound to the stored quote (2026-09-14)
+
+**What shipped.** Finding **A18** (pay flow could pay a caller-supplied invoice while the server held amount metadata for a different quote; recovery was dropped before key verification) is closed:
+
+- `routstrPay`/`routstrRecover` now bind to the server's OWN stashed pending quote — a caller-supplied `invoice`/`quoteId`/`bolt11` that does not match the stashed quote is rejected (400), so the confirmed amount/quote tuple can't be split.
+- `routstrQuote` stashes `payment_hash` alongside `quote_id`/`bolt11`/`amount_sats`/`expires_at` (immutable quote tuple).
+- The `routstr_pending` recovery envelope is now removed **only after** `storeVerifiedKey` reports `ok` — a verify/store hiccup leaves the quote claimable for `routstrRecover` instead of destroying the recover path.
+- `routstrPay`/`routstrRecover` serialize on a shared `routstr-pay` mutex (reuses the A12 `agent/lib/mutex.mjs` primitive).
+
+**Tests.** Agent 587 → **590** (+3: mismatched invoice, mismatched quote_id, verify/store failure preserves the recoverable envelope). Frontend unchanged at **1850**.
+
+**Version markers bumped.** 0.2.152 → 0.2.153-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [N/A — behavior-fix]; strategy [unchanged]; ops [unchanged].
+
 ## v0.2.152-alpha — audit A12: atomic rename is not a concurrency lock (2026-09-14)
 
 **What shipped.** Finding **A12** (three read-then-write races mistaken for locks) is closed with a shared resource-keyed serializer (`agent/lib/mutex.mjs`) plus a create-if-absent CAS at the genesis file boundary:

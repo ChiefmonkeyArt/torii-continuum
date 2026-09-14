@@ -25,6 +25,7 @@
  */
 
 import { parseNwcUri, redactNwc } from './nwc.mjs';
+import { createKeyedMutex } from '../lib/mutex.mjs';
 
 const NWC_SECRET = 'nwc';
 const ROUTSTR_SECRET = 'routstr_key';
@@ -43,6 +44,9 @@ export function createOnboarding(deps = {}) {
   if (!secretStore) throw new Error('createOnboarding: secretStore required');
   if (!routstrProvider) throw new Error('createOnboarding: routstrProvider required');
   if (typeof connectNwc !== 'function') throw new Error('createOnboarding: connectNwc required');
+  // A18: serialize the pay/recover critical section so two concurrent pay calls
+  // cannot both read the same pending quote and race the pending-envelope removal.
+  const mutex = createKeyedMutex();
 
   // Display balance in whole sats, migrating legacy envelopes on read. Before
   // v0.2.38-alpha the Routstr provider returned its msat balance under
@@ -401,6 +405,10 @@ export function createOnboarding(deps = {}) {
       bolt11: quote.invoice,
       amount_sats: quote.amount_sats,
       purpose: quote.purpose,
+      // A18: stash the payment hash too so pay can confirm it is settling the SAME
+      // invoice this envelope was created for (immutable quote tuple), not a
+      // caller-supplied bolt11 woven in with our amount metadata.
+      payment_hash: quote.payment_hash ?? null,
       expires_at: quote.expires_at,
       created_at: new Date().toISOString(),
     }));
@@ -432,12 +440,28 @@ export function createOnboarding(deps = {}) {
     if (confirm !== true) {
       return { code: 400, body: { ok: false, error: 'explicit confirmation required', code: 'confirmation_required' } };
     }
-    // Fall back to the stashed pending quote so the browser need only send the
-    // confirm flag.
+    // A18: the entire pay + claim critical section serializes so two concurrent
+    // pay calls cannot both read the same pending quote and both pay/remove it.
+    return mutex.run('routstr-pay', async () => {
+    // Bind to the server's own pending quote. The browser normally sends only
+    // `confirm`; if it DOES pass an invoice/quote_id they must MATCH the stashed
+    // quote — we never pay a caller-supplied bolt11 while holding amount metadata
+    // for a different invoice (A18).
     const pending = await loadEnvelope(ROUTSTR_PENDING);
-    const bolt11 = (typeof invoice === 'string' && invoice.trim()) || pending?.bolt11 || null;
-    const qid = (typeof quoteId === 'string' && quoteId) || pending?.quote_id || null;
-    const fundedSats = pending?.amount_sats ?? null;
+    if (!pending || pending.error) {
+      return { code: 409, body: { ok: false, error: pending?.error === 'unreadable' ? 'pending quote unreadable' : 'no pending funding quote; request a new invoice' } };
+    }
+    const suppliedInvoice = typeof invoice === 'string' ? invoice.trim() : '';
+    const suppliedQuoteId = typeof quoteId === 'string' ? quoteId.trim() : '';
+    if (suppliedInvoice && suppliedInvoice !== pending.bolt11) {
+      return { code: 400, body: { ok: false, error: 'supplied invoice does not match the pending quote' } };
+    }
+    if (suppliedQuoteId && suppliedQuoteId !== pending.quote_id) {
+      return { code: 400, body: { ok: false, error: 'supplied quote_id does not match the pending quote' } };
+    }
+    const bolt11 = pending.bolt11;
+    const qid = pending.quote_id;
+    const fundedSats = pending.amount_sats ?? null;
     if (!bolt11) return { code: 400, body: { ok: false, error: 'invoice (bolt11) required' } };
 
     const env = await loadEnvelope(NWC_SECRET);
@@ -476,8 +500,10 @@ export function createOnboarding(deps = {}) {
       const claimed = await routstrProvider.pollInvoice({ quoteId: qid });
       if (claimed.ok && claimed.key) {
         const stored = await storeVerifiedKey(claimed.key, 'funded_session', { fundedSats });
-        await secretStore.remove(ROUTSTR_PENDING);
         if (stored.ok) {
+          // A18: only drop the recovery envelope AFTER the key is verified AND
+          // durably stored. A verify/store hiccup must leave it for recover.
+          await secretStore.remove(ROUTSTR_PENDING);
           return {
             code: 200,
             body: {
@@ -490,7 +516,8 @@ export function createOnboarding(deps = {}) {
             },
           };
         }
-        // Key claimed but verify/store hiccuped — still recoverable.
+        // Key claimed but verify/store hiccuped — still recoverable, and the
+        // pending envelope is intentionally left in place for routstrRecover.
         return {
           code: 200,
           body: { ok: true, preimage: paid.preimage || null, key_stored: false, recoverable: true, reason: stored.reason, bolt11 },
@@ -510,6 +537,7 @@ export function createOnboarding(deps = {}) {
       };
     }
     return { code: 200, body: { ok: true, preimage: paid.preimage || null, key_stored: false, recoverable: true, reason: 'no quote id to claim key', bolt11 } };
+    });
   }
 
   // Claim (or re-claim) the minted key for an already-paid invoice via
@@ -517,17 +545,29 @@ export function createOnboarding(deps = {}) {
   // reported recoverable:true. Idempotent: safe to call repeatedly until the
   // provider's watcher has credited and issued the key.
   async function routstrRecover({ bolt11 } = {}) {
+    // A18: recover shares the pay mutex so it cannot race a concurrent pay on the
+    // same pending envelope.
+    return mutex.run('routstr-pay', async () => {
     const pending = await loadEnvelope(ROUTSTR_PENDING);
-    const inv = (typeof bolt11 === 'string' && bolt11.trim()) || pending?.bolt11 || null;
-    const fundedSats = pending?.amount_sats ?? null;
+    if (!pending || pending.error) {
+      return { code: 409, body: { ok: false, error: pending?.error === 'unreadable' ? 'pending quote unreadable' : 'no pending funding quote to recover' } };
+    }
+    // Bind to the server's own quote; reject a mismatched caller-supplied bolt11.
+    const supplied = typeof bolt11 === 'string' ? bolt11.trim() : '';
+    if (supplied && supplied !== pending.bolt11) {
+      return { code: 400, body: { ok: false, error: 'supplied invoice does not match the pending quote' } };
+    }
+    const inv = pending.bolt11;
+    const fundedSats = pending.amount_sats ?? null;
     if (!inv) return { code: 400, body: { ok: false, error: 'bolt11 required' } };
 
     const rec = await routstrProvider.recoverInvoice({ bolt11: inv });
     if (rec.blocked) return { code: 501, body: { ok: false, blocked: true, reason: rec.reason } };
     if (rec.ok && rec.key) {
       const stored = await storeVerifiedKey(rec.key, 'funded_session', { fundedSats });
-      await secretStore.remove(ROUTSTR_PENDING);
       if (!stored.ok) return { code: 502, body: { ok: false, error: stored.reason } };
+      // A18: only clear the recovery envelope after verified AND durably stored.
+      await secretStore.remove(ROUTSTR_PENDING);
       return {
         code: 200,
         body: {
@@ -541,6 +581,7 @@ export function createOnboarding(deps = {}) {
     }
     // Not settled yet — honest, non-terminal.
     return { code: 202, body: { ok: false, recoverable: true, status: rec.status || 'pending', reason: rec.reason || 'invoice not yet settled' } };
+    });
   }
 
   // ── Recovery / resume (v0.2.37-alpha) ──────────────────────────────────
