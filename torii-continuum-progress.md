@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.168-alpha — FE-01 historical preview archival (2026-09-14)
+
+**What shipped.** `onboarding-v0.1.0`–`v0.1.20` and `releases/` (485 files / 381,496,875 bytes) are removed from the working tree and recorded in `preview-assets/archive-manifest.tsv` (per-file SHA-256 + bytes) + `preview-assets/ARCHIVE.md` (recovery via Git history; last-pre-archival commit `a8ecdc6`). The current `onboarding-v0.1.21/` — hard-referenced by `ops/torii-final-cutover.sh` — is untouched, and the README now points to the archive index. The release artifact already excludes `preview-assets/`, so the deployed app is byte-identical; this is a working-tree/checkout cleanup, not an app change.
+
+**Tests.** Active test count drops **1871 → 1120** — the 751 removed tests are the old copied preview suites (`.12`–`.20`), beyond the archive boundary; this is the over-count FE-15 already flagged, not a loss of active-SPA coverage (all active SPA + `.21` onboarding + ops tests remain green). `npm run build` unchanged (202.21 kB JS).
+
+**Version markers bumped.** 0.2.167 → 0.2.168-alpha (all four).
+
+**Update-All checklist.** Code [n/a — archive only]; version markers [done, all four]; continuity docs [done]; ops/ADR [n/a]; deploy workflow [n/a]; Space mirror [updated after merge].
+
 ## v0.2.167-alpha — FE-04 route-scope teardown (2026-09-14)
 
 **What shipped.** Three route-lifetime fixes: (1) the board's `refresh()` now repaints only while `currentRoute()` is `/projects/:slug/board` AND the slug matches, so a late imported-source response can no longer stamp the board back over the screen the operator navigated to; (2) `importState` and the hanging `mountEl`/`currentSlug` refs are cleared on `continuum:session-changed`, so a previous owner's imported GitHub issues/Markdown can never render into the next owner's board; (3) the Routstr balance + usage polls self-terminate the moment the operator leaves `/routstr` or `/demo/routstr`, with a post-await re-check so an in-flight balance can't mutate the store off-route.

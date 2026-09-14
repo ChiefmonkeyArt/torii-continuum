@@ -8,8 +8,13 @@ Each mockup lives under `onboarding-vX.Y.Z/` and is self-contained (its own
 published a matching tarball under `releases/`; since v0.1.12 the version
 directory itself is the shippable artifact and is copied directly.
 
-Current preview: **v0.1.21-preview** (`onboarding-v0.1.21/`). Earlier
-versions (`onboarding-v0.1.0/` … `onboarding-v0.1.20/`) are kept for reference.
+Current preview: **v0.1.21-preview** (`onboarding-v0.1.21/`).
+
+Earlier versions (`onboarding-v0.1.0/` … `onboarding-v0.1.20/`) and the
+`releases/` tarballs have been **archived out of the working tree** to keep
+checkouts lean (see [ARCHIVE.md](./ARCHIVE.md)). They remain recoverable from Git
+history; `archive-manifest.tsv` records per-file SHA-256 so a restored file can be
+verified.
 
 ## Deploy a preview to chiefmonkey.art
 
