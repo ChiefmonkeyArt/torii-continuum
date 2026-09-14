@@ -9,6 +9,20 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.154-alpha — audit A21: storage location/ignore/retention drift (2026-09-14)
+
+**What shipped.** Finding **A21** (three storage-lifecycle drifts) is closed:
+
+- **Secret root.** `createSecretStore` is now pinned to `memory/secrets` under `AGENT_ROOT` in `index.mjs`, so launching from a different working directory can no longer silently relocate the encrypted NWC/Routstr secret blobs.
+- **Ignore rules.** `agent/.gitignore` now excludes `memory/secrets/` (operator secrets), `memory/owners/` (scoped sealed memory + consent pending + quarantine), and `memory/procedural/` — so runtime ciphertext/credentials can never be accidentally committed.
+- **Retention actually runs.** `memstore.sweepRetention()` enumerates every owner/bot/project scope and reaps past-window items (conversation 7d, episodic 365d; semantic/procedural/project stay permanent), invoked once at agent boot.
+
+**Tests.** Agent 590 → **592** (+2: `sweepRetention` reaps conversation-but-keeps-semantic; gitignore path-coverage guard). Frontend unchanged at **1850**.
+
+**Version markers bumped.** 0.2.153 → 0.2.154-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [N/A — behavior-fix]; strategy [unchanged]; ops [unchanged — the systemd WritePaths already scopes to memory/, no change needed].
+
 ## v0.2.153-alpha — audit A18: funding confirmation bound to the stored quote (2026-09-14)
 
 **What shipped.** Finding **A18** (pay flow could pay a caller-supplied invoice while the server held amount metadata for a different quote; recovery was dropped before key verification) is closed:

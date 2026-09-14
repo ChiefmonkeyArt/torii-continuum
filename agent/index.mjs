@@ -267,7 +267,9 @@ async function resolveBotId(ownerNpub) {
 // operator secrets the agent must USE (NWC URI, Routstr sk- key), plus the
 // pinned Routstr provider adapter. The live NIP-47 transport is built per-call
 // so the onboarding logic stays testable with an injected client.
-const secretStore = createSecretStore(cfg, { log: app.log });
+//   A21: the secrets dir is pinned to AGENT_ROOT so launching from a different
+//   working directory can never silently relocate the encrypted secret blobs.
+const secretStore = createSecretStore(cfg, { dir: join(AGENT_ROOT, 'memory', 'secrets'), log: app.log });
 const routstrProvider = createRoutstrProvider(cfg, { log: app.log });
 const projectStore = createProjectStore({ secretStore, log: app.log });
 void projectStore.load().catch((e) => app.log.warn(`[projectstore] boot load failed: ${e.message}`));
@@ -1593,6 +1595,19 @@ app.post(
 
 const port = cfg.server.port;
 const host = cfg.server.host;
+
+// A21: run the retention sweep once at boot so retention-bounded classes are
+// actually reaped in production (conversation 7d / episodic 365d — semantic/
+// procedural/project are permanent). Non-fatal by design: a sweep failure must
+// never block startup.
+try {
+  const sweep = await memstore.sweepRetention();
+  if (sweep.ok && sweep.reaped.length) {
+    app.log.info(`retention swept ${sweep.reaped.length} memory item(s)`);
+  }
+} catch (e) {
+  app.log.warn(`[memstore] boot retention sweep failed: ${e.message}`);
+}
 
 try {
   await app.listen({ port, host });
