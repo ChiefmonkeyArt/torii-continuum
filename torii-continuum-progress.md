@@ -9,6 +9,18 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.174-alpha — Suite SB-02/04/26 ops hardening (nap identity, adopt stale state, legacy cutover pin) (2026-09-14)
+
+**What shipped.** Three open Suite SB findings remediated in the Continuum ops layer.
+
+- **SB-04 — nap-bridge identity generation.** The old `nsec_json()`/`nsec_field()` helpers wrote a supplied `NPC_NSEC` as an *expanded command word* (`${NPC_NSEC:+NPC_NSEC="$NPC_NSEC"}`), so a provided nsec was executed as a command name and leaked into stderr; `--generate` re-minted a *different* nsec per field because each field ran in its own command substitution. New `resolve_identity()` runs the `npc-nsec.mjs` helper once with a real env assignment, validates `nsec_hex`/`npub`/`nsec_bech32` in a single node pass, caches all three, and fails closed.
+- **SB-02 — adopt stale state.** `layout_detect` treated `.git` as the sole managed-release proof, so an artifact-installed Continuum (`dist/`+`agent/`+`VERSION`, no `.git`) was misread as `partial-adoption` and the stale standalone state dir was preferred as authoritative over the running install. Now the artifact-only `VERSION` marker is recognised alongside `.git` as a verified managed release.
+- **SB-26 — legacy final-cutover pin.** The version-frozen one-off cutover (base v0.1.4 + Continuum v0.2.67-alpha) silently downgrades a modern install and its rollback restores a config pin, not code. It now fails closed unless `FORCE_LEGACY_CUTOVER=1`, pointing to the Suite installer.
+
+**Tests.** Regression asserts for each (SB-04 round-trip/leak/identity; SB-02 artifact `existing-ansible` + authoritative source; SB-26 consent-guard asserts). All **15 `ops/test/*.sh` suites green**. Agent 619 / frontend 1123.
+
+**Version markers bumped.** 0.2.173 → 0.2.174-alpha (all four). Deployed live (VPS == tag == main HEAD).
+
 ## v0.2.173-alpha — A09 scope-aware unlock cache key (2026-09-14)
 
 **What shipped.** The A09 memory-inventory follow-up (scope-aware unlock cache). `createMemoryCache` in `agent/lib/crypto.mjs` now keys scoped entries `${kind}:${project}:${dTag}` instead of the flat `${kind}:${dTag}`, so the same kind+d-tag stored under two projects no longer shadows one in the RAM prompt cache; flat identity/intents/panic (no scope) keep the legacy flat key. `unlock()` stores a per-entry `scope`; `get(kind, dTag, scope)` is scope-aware. The `/api/memory/unlock` + `/api/memory/activate` normalizers and the frontend `decryptEntries` carry the scoped entry's project forward. Regression tests: new `agent/test/memory-cache-scope.test.js` (shadowing, flat-vs-scoped isolation, within-scope dedupe) + two new `memory-activation.test.js` cases. `docs/memory-inventory.md` marks the follow-up resolved.
