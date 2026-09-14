@@ -199,9 +199,30 @@
         - not (continuum_artifact_mount_ok | bool)
         - not (continuum_deploy_allow_source_fallback | bool)
 
+    - name: Ensure the self-contained helper bundle directory exists
+      ansible.builtin.file:
+        path: "{{ continuum_helper_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: continuum_artifact_mount_ok | bool
+
+    - name: Transfer the pinned adopt + artifact-verify helpers to the target
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../lib/{{ item }}"
+        dest: "{{ continuum_helper_dir }}/"
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - continuum-adopt.sh
+        - artifact-verify.sh
+      when: continuum_artifact_mount_ok | bool
+
     - name: Verify the pre-staged release artifact (checksum + manifest + tag + contents + no-secrets)
-      ansible.builtin.script: >-
-        {{ continuum_adopt_lib }} artifact-verify
+      ansible.builtin.command: >-
+        {{ continuum_helper_dir }}/continuum-adopt.sh artifact-verify
         {{ continuum_artifact_path | quote }}
         {{ continuum_version | quote }}
       register: continuum_artifact_verify

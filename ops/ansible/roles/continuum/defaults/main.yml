@@ -154,15 +154,24 @@ continuum_deploy_mode: "artifact"
 continuum_deploy_allow_source_fallback: false
 
 # Local path to a pre-downloaded, pre-verified release artifact tarball
-# (usually staged by ops/deploy-unattended.sh, which owns the network
-# download + first-pass checksum/manifest verification before ever invoking
-# Ansible). When continuum_deploy_mode == 'artifact' and this is empty, the
-# role performs the download+verify itself using continuum_repo's GitHub
-# Releases API — supported for direct `ansible-playbook` runs (e.g. manual
-# ops, tests) that don't go through the wrapper.
+# (staged by ops/deploy-unattended.sh, which owns the network download +
+# first-pass checksum/manifest verification before ever invoking Ansible).
+# The role itself never downloads: when continuum_deploy_mode == 'artifact'
+# and this is empty, artifact_verify_cli fails closed and no artifact is
+# promoted unless continuum_deploy_allow_source_fallback=true. Pre-stage the
+# tarball at this path (and its sibling .sha256 / .manifest.json) before a
+# direct `ansible-playbook` run that sets this value.
 continuum_artifact_path: ""
 
 # GitHub API base used only for the artifact-mode release lookup when
 # continuum_artifact_path is not pre-supplied. Pinned to the public API host;
 # never templated from user input.
 continuum_github_api: "https://api.github.com"
+
+# Root-owned target dir the role stages the self-contained helper bundle
+# into (continuum-adopt.sh + artifact-verify.sh) before artifact verification.
+# `ansible.builtin.script` transfers only a single file, so artifact-verify
+# previously failed with "verifier library missing" when continuum-adopt.sh
+# resolved its sibling (artifact-verify.sh) beside its own transferred path.
+# Staging both here and invoking by this path makes verification self-contained.
+continuum_helper_dir: "/opt/torii/continuum/lib"
