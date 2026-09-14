@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.166-alpha — FE-08 noticeboard approval integrity (2026-09-14)
+
+**What shipped.** The review/sign surface no longer signs a malformed or generic (non-noticeboard) draft. A new `src/lib/noticeboard-validate.js` mirrors the agent's `noticeboard-contract` invariant (kind 30078, one `d="noticeboard"` replaceable tag, finite `created_at`, parseable non-empty well-formed notices array) and gates BOTH the review panel (no “Sign & publish” button on an invalid draft; the reason is shown inline, `Discard` still available) and `signAndPublish` (rechecks immediately before requesting a signature). `signAndPublish` now reconciles the signer's return through the shared `reconcileSignedEvent` adapter (used by auth/memory) and re-validates the reconciled event before it reaches the relay; a failed draft-discard after a successful publish is surfaced rather than swallowed; and each notice's outbound URL is shown in review so a link cannot be signed unseen.
+
+**Tests.** Added `src/lib/noticeboard-validate.test.js` (8 tests). Frontend 1863 → **1871**.
+
+**Version markers bumped.** 0.2.165 → 0.2.166-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done, all four]; continuity docs [done]; ops/ADR [n/a — no server/ops change]; deploy workflow [n/a]; Space mirror [updated after merge].
+
 ## v0.2.165-alpha — FE-05 concurrent top-up double-complete + FE-09 seed removal (2026-09-14)
 
 **What shipped.**

@@ -14,6 +14,8 @@
 import { h, clear, timeAgo } from './util.js';
 import { noticeboardDraft, pendingDrafts, pendingDraft, discardDraft } from '../data/agent.js';
 import { publishEvent } from '../lib/relay-publish.js';
+import { validateNoticeboardEvent } from '../lib/noticeboard-validate.js';
+import { reconcileSignedEvent } from '../signer-compat.js';
 import { setChatContext } from '../chat.js';
 
 const KINDS = ['notice', 'auction', 'sale', 'event', 'announcement'];
@@ -153,28 +155,45 @@ function showReview({ file, event, relay }) {
   // event and the published event matches what Nakama later reads.
   const signable = { kind: event.kind, content: event.content, created_at: event.created_at, tags: event.tags };
 
+  // FE-08: gate the signature on a validated noticeboard event. A generic draft
+  // off the pending shelf, or one whose content fails to parse into a well-formed
+  // notices array, must not reach the signer.
+  const valid = validateNoticeboardEvent(signable);
+
   let notices = [];
+  let malformed = false;
   try {
     const parsed = JSON.parse(event.content);
     if (Array.isArray(parsed.notices)) notices = parsed.notices;
-  } catch (_e) { /* malformed content is a server bug; show raw below */ }
+    else malformed = true;
+  } catch (_e) { malformed = true; }
 
   const list = notices.length
     ? h('ul', { style: 'list-style:none; padding:0; margin: 10px 0;' }, notices.map((n) => h('li', { style: 'padding: 8px 0; border-top: 1px solid var(--border, rgba(0,0,0,0.08));' }, [
       badge(n.kind), h('strong', { text: n.title }),
       n.price_sats != null ? h('span', { class: 'muted', text: ` · ${n.price_sats} sats` }) : null,
       n.body ? h('div', { class: 'muted', style: 'font-size: 12.5px; margin-top: 2px;', text: n.body }) : null,
+      // FE-08: show the outbound destination before the operator signs, so a
+      // URL can never be smuggled into a signed board unseen.
+      n.url ? h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px; text-decoration: underline;', text: `→ ${n.url}` }) : null,
     ])))
     : h('div', { class: 'muted', text: '(no notices)' });
 
+  const actions = [];
+  if (valid.ok) {
+    actions.push(h('button', { class: 'primary', onClick: () => signAndPublish(file, signable, relay) }, ['Sign & publish']));
+  } else {
+    // Malformed/unexpected draft: no signature button, and the reason is shown
+    // inline. `discard` is still offered so the operator can clear the shelf.
+    actions.push(h('div', { class: 'error', style: 'font-size: 12.5px; padding: 8px; border-radius: 4px;', text: `Refusing to sign — ${valid.reason}` }));
+  }
+  actions.push(h('button', { class: 'ghost', onClick: () => discard(file, null) }, ['Discard draft']));
+
   reviewEl.appendChild(h('div', { class: 'card', style: 'margin-top: 4px;' }, [
     h('div', { class: 'card-title', text: 'Review & sign' }),
-    h('div', { class: 'muted', style: 'font-size: 12px;', text: `Will publish to ${relay} · kind ${event.kind} · replaces any live board` }),
+    h('div', { class: 'muted', style: 'font-size: 12px;', text: `Will publish to ${relay} · kind ${event.kind} · d="${(event.tags || []).find((t) => Array.isArray(t) && t[0] === 'd')?.[1] || ''}" · replaces any live board` }),
     list,
-    h('div', { style: 'display:flex; gap:8px; margin-top: 8px;' }, [
-      h('button', { class: 'primary', onClick: () => signAndPublish(file, signable, relay) }, ['Sign & publish']),
-      h('button', { class: 'ghost', onClick: () => discard(file, null) }, ['Discard draft']),
-    ]),
+    h('div', { style: 'display:flex; gap:8px; margin-top: 8px; flex-wrap: wrap; align-items: center;' }, actions),
   ]));
 }
 
@@ -185,24 +204,55 @@ function badge(kind) {
 }
 
 async function signAndPublish(file, signable, relay) {
+  // FE-08: re-validate immediately before signing. The draft could have been
+  // edited on the shelf since review, so this is the real gate — never ask for
+  // a signature on a malformed or generic event.
+  const pre = validateNoticeboardEvent(signable);
+  if (!pre.ok) {
+    setStatus('error', `Refusing to sign — ${pre.reason}`);
+    return;
+  }
   if (typeof window === 'undefined' || !window.nostr?.signEvent) {
     setStatus('error', 'No NIP-07 signer available. Install a Nostr signer extension (e.g. a Plebeian-compatible signer) to sign in-browser.');
     return;
   }
   setStatus('busy', 'Signing in your browser…');
-  let signed;
+  let returned;
   try {
-    signed = await window.nostr.signEvent(signable);
+    returned = await window.nostr.signEvent(signable);
   } catch (e) {
     setStatus('error', `Signing cancelled or failed: ${e?.message || e}`);
+    return;
+  }
+  // FE-08: reconcile the signer's return with what we asked to sign (shared
+  // signer-result adapter used by auth/memory), then re-verify the reconciled
+  // event is still a valid noticeboard before it reaches the relay.
+  const reconciled = reconcileSignedEvent(signable, returned);
+  if (!reconciled.ok) {
+    setStatus('error', reconciled.kind === 'unsigned' ? 'The signer returned no signature — nothing was signed.' : 'The signer returned an empty result.');
+    return;
+  }
+  const signed = reconciled.event;
+  const post = validateNoticeboardEvent(signed);
+  if (!post.ok) {
+    setStatus('error', `The signed event is not a valid noticeboard (${post.reason}) — not published, draft kept.`);
     return;
   }
   setStatus('busy', `Publishing to ${relay}…`);
   try {
     const res = await publishEvent(relay, signed);
     clear(statusEl);
+    // FE-08: a failed discard after a successful publish is surfaced, not
+    // silently swallowed — the board went out but the draft may still sit on
+    // the shelf waiting for signature.
+    if (file) {
+      const d = await discardDraft(file);
+      if (!d.ok) {
+        setStatus('ok', `Published, but the draft could not be discarded (${d.reason || 'unknown'}) — remove it under “Waiting for signature”.`);
+        return;
+      }
+    }
     setStatus('ok', `Published. Nakama will show the new board within its cache window.`);
-    if (file) await discardDraft(file);
     clear(reviewEl);
   } catch (e) {
     setStatus('error', `Publish failed — draft kept: ${e?.reason || e}`);
