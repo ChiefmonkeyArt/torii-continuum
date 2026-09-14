@@ -98,14 +98,14 @@ Unattended upgrades on the sovereign VPS now default to a **CI-built, checksum-v
 
 CONT-AGENT-1 is the current active slice. Later slices are named and reserved to keep scope honest.
 
-### Two-voice Hermes architecture (HERMES-OWNER-1 wired v0.2.108-alpha; HERMES-NPC-1 wired v0.2.109-alpha)
+### Two-voice architecture (owner = Continuum agent; NPC = greeter)
 
-Continuum splits its agentic surface into **two isolated Hermes voices**:
+Continuum keeps **two isolated agentic voices**: the owner voice and the public greeter.
 
-- **`hermes-owner`** — private project engine, full tool access, Continuum-router primary with local `qwen3:4b` fallback. Runs as an unprivileged Unix user (`hermes-owner`, HOME `0700`, `umask 077`, profile `.env` `0600`).
+- **Owner voice** — the **Continuum agent itself** (`/api/chat` → `chat.mjs` → `model-router`, Routstr/Cashu spine, full tools, character + memory applied in-process). No separate brain.
 - **`hermes-npc`** — public in-world NPC greeter for Kami mode / Torii Quest, chat only, no tools, local-only inference, no secrets on disk, structurally unable to reach owner secrets. Provisioned by `ops/install-hermes-npc.sh` (separate `hermes-npc` user, `npc` profile, greeter `SOUL.md`). It is reachable over Nostr via the isolated **nap-bridge** gateway (NAP-BRIDGE-1): `agent/npc-gateway.mjs` + `ops/install-nap-bridge.sh` sign as the greeter with a **local per-install ephemeral nsec** (NAP-BRIDGE-3 — no NIP-46 bunker, no `nostrconnect://` approval; a throwaway funds-free identity minted at install), gate DMs on a **fail-closed npub allowlist**, and infer locally. DMs are **NIP-17 kind-1059 gift-wrap + NIP-44** (NAP-BRIDGE-2): rumor (14) → seal (13, greeter-signed) → wrap (1059, local ephemeral key). See `docs/nap-bridge-1.md`.
 
-Unix users are the primary trust boundary; Docker is optional hardening only, never the identity boundary. The Fastify router in `agent/index.mjs` is not either voice — it is the shared inference spine the owner voice sits behind, via the OpenAI-compatible `/v1` surface (`agent/core/openai-adapter.mjs`): loopback-only, fail-closed local bearer, no persona, delegates to `model-router.chat()` unchanged. Shared Ollama (127.0.0.1:11434) is the one deliberately-shared surface for stateless inference. See `docs/hermes-two-voice.md` for the full ADR and boundary rules.
+Unix users are the primary trust boundary; Docker is optional hardening only, never the identity boundary. The owner voice lives in the Continuum agent's own process; `hermes-npc` is a separate unprivileged user that cannot reach owner secrets, tools, or the paid path. Shared Ollama (127.0.0.1:11434) is the one deliberately-shared surface for stateless inference. The former `hermes-owner` brain and the loopback `/v1` OpenAI adapter (`agent/core/openai-adapter.mjs`) are **retired** — the owner chats through the agent directly. See `docs/hermes-two-voice.md` for the ADR and boundary rules.
 
 ### Owner-console consolidation (OWNER-UI-1..5, planned 2026-09-13)
 
@@ -116,7 +116,7 @@ The owner voice's interface moves from the bolted-on third-party Hermes dashboar
 - **OWNER-UI-1 — server-side encrypted session layer.** Backend `/api/sessions` (list/create/delete/rename) + encrypted-at-rest persistence + a session list/delete UI. Replaces client-only localStorage thread buckets.
 - **OWNER-UI-2 — server-backed shared store.** Replace browser `localStorage` (`src/data/store.js`) with a server-side store the agent and UI both read/write, encrypted at rest.
 - **OWNER-UI-3 — agent write bridge.** The owner AI creates/updates milestones + todos through the agent, and the project panels update live (single shared store).
-- **OWNER-UI-4 — fold the owner persona.** Continuum's console becomes the owner interface; retire the Hermes owner dashboard (keep hermes-owner as a headless backend only if needed).
+- **OWNER-UI-4 — fold the owner persona.** Continuum's console becomes the owner interface; retire the Hermes owner dashboard and, later, the headless `hermes-owner` brain + `/v1` adapter (done v0.2.147-alpha).
 - **OWNER-UI-5 — chat polish.** Perplexity-like owner chat: less chrome, cleaner message flow.
 
 ### CONT-AGENT-1 — v1 skeleton (active)

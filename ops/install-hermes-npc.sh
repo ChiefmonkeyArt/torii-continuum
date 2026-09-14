@@ -3,16 +3,17 @@
 # Torii Continuum — HERMES-NPC-1 (isolated public greeter)
 #
 # Idempotently provision the public greeter voice on a Debian/Ubuntu VPS:
-#   1. reuse the shared 'ollama' local-only backend (127.0.0.1:11434) + llama3.2:1b
+#   1. set up the shared 'ollama' local-only backend (127.0.0.1:11434) + llama3.2:1b
 #   2. 'hermes-npc' user + vanilla Nous Research Hermes, 'npc' profile
 #   3. Inference = local Ollama ONLY. No Continuum router, no router token, no
 #      paid path, no fallback ladder. The greeter cannot spend the owner's
-#      Cashu float because it is never pointed at the /v1 surface that does.
+#      Cashu float because it is never pointed at the paid inference spine.
 #
-# This is the SECOND voice of the two-voice architecture. The primary trust
-# boundary is the Unix user: hermes-npc has its own HOME (0700, umask 077) and
-# shares nothing with hermes-owner — not memory, not keys, not project access.
-# Public prompts are therefore structurally unable to reach owner secrets.
+# This is the isolated public voice of the two-voice architecture (the owner
+# voice is the Continuum agent itself). The primary trust boundary is the Unix
+# user: hermes-npc has its own HOME (0700, umask 077) and shares nothing with
+# the agent — not memory, not keys, not project access. Public prompts are
+# therefore structurally unable to reach owner secrets.
 #
 # Usage (run as root):
 #   sudo ./ops/install-hermes-npc.sh              # provision (idempotent)
@@ -24,8 +25,8 @@
 #   - hermes-npc HOME 0700, umask 077; no sudo, no login.
 #   - No secrets on disk: local Ollama needs no API key, so there is no .env,
 #     no bearer, nothing to exfiltrate.
-#   - Ollama binds 127.0.0.1 only (provisioned by install-hermes-owner.sh);
-#     this installer reuses it and never rebinds it to a public interface.
+#   - Ollama binds 127.0.0.1 only (this installer provisions it); it is never
+#     rebound to a public interface.
 #   - No tools are configured: the profile declares no MCP servers, no
 #     toolset, no skills beyond the bare Hermes default. Chat only.
 #
