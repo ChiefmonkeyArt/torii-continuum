@@ -9,6 +9,21 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.163-alpha — frontend FE-02/03/06/07 session-lifetime + consent batch (2026-09-14)
+
+**What shipped.** Four audit findings closed as one behavior-preserving batch:
+
+- **FE-03** (`src/data/agent.js`) — `req()` snapshots the token + auth epoch before each request; a 401 now clears the session only when the failed request still belongs to the current session (same epoch, same token). An old request's 401 can no longer wipe a session freshly rotated/refreshed while it was in flight.
+- **FE-06** (`src/data/agent.js`, `.env.production.example`) — `agentUrl()` returns `null` (no transport / offline demo) vs a string (configured; empty `''` = valid root mount). Explicit-empty `VITE_AGENT_URL` is now a configured root instead of being conflated with offline; `req()`/`logout()` use a null check. The env example documents omit-vs-empty.
+- **FE-02** (`src/chat.js`) — `send()` snapshots `getStoredToken()` before awaiting the agent and drops a reply that lands after a sign-out/owner change, so a previous owner's reply is never repersisted into `continuum.chat.threads`.
+- **FE-07** (`src/views/memory.js`) — activation consent now honestly states at-rest encryption, browser decryption, transient session-scoped plaintext hand-back, and re-lock, replacing the false “the agent never sees plaintext” promise.
+
+**Tests.** Frontend 1850 → **1859** (+9: FE-03 session-integrity ×3, FE-06 root-mount ×2, FE-02 chat-integrity ×4; one memory-structure assertion updated to the corrected copy). Agent unchanged at 616.
+
+**Version markers bumped.** 0.2.162 → 0.2.163-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; env example [done]; ADR [not applicable — behavior-preserving bug fixes]; ops [unchanged].
+
 ## v0.2.162-alpha — audit A22: router monolith / CORS DELETE omission (2026-09-14)
 
 **What shipped.** The confirmed defect in finding **A22** is fixed: the production CORS `methods` list now includes PUT and DELETE, so a cross-origin `DELETE /api/pending/:file` preflight is answered with a DELETE allow (previously the browser refused the request). The composition root is also now a testable seam — `index.mjs` exports `buildApp(cfg)` that constructs + registers the full app WITHOUT listening, and the server (sweep + listen + graceful shutdown) moved into an `isMain` guard. `buildapp-cors.test.js` drives the REAL app via `app.inject()` instead of copied inline routes: CORS preflight allows DELETE+PUT, the DELETE route is genuinely wired (401, not 404), and a built app has no bound port.

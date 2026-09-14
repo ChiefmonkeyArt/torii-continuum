@@ -130,9 +130,9 @@ describe('memory view — first-run activation gate (MEMORY-ACTIVATION-1)', () =
     expect(src).toMatch(/class:\s*'primary'/);
   });
 
-  it('explains owner-control, browser-encryption, and the signature requirement', () => {
+  it('explains owner-control, at-rest encryption, and the signature requirement', () => {
     expect(src).toMatch(/Owner-controlled/i);
-    expect(src).toMatch(/Encrypted in this browser/i);
+    expect(src).toMatch(/Encrypted at rest/i);
     expect(src).toMatch(/signature/i);
   });
 
