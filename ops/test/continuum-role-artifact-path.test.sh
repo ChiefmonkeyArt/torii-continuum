@@ -85,6 +85,33 @@ grep -qF "artifact_verify_cli()" "$ADOPT_LIB" \
 grep -qF "artifact-verify) artifact_verify_cli" "$ADOPT_LIB" \
   && ok "continuum-adopt.sh CLI dispatcher routes 'artifact-verify'" || bad "continuum-adopt.sh dispatcher missing 'artifact-verify' route"
 
+echo "== SB-11: artifact verification is self-contained (no single-file transfer) =="
+# The `script` module transfers only ONE file, so invoking artifact-verify
+# through it left artifact-verify.sh (a sibling via BASH_SOURCE) missing on the
+# target — reproduced as "verifier library missing". The role must stage a
+# bundle and invoke by remote path, and artifact verification must NOT use
+# `ansible.builtin.script` for the verify step.
+grep -qE '^continuum_helper_dir:' "$DEFAULTS" \
+  && ok "continuum_helper_dir default is defined" || bad "continuum_helper_dir default missing"
+awk '/Transfer the pinned adopt/,/Verify the pre-staged release artifact/' "$TASKS" \
+  | grep -qF 'artifact-verify.sh' \
+  && ok "role transfers artifact-verify.sh alongside continuum-adopt.sh" || bad "artifact-verify.sh is not transferred to the target"
+awk '/Transfer the pinned adopt/,/Verify the pre-staged release artifact/' "$TASKS" \
+  | grep -qF 'continuum-adopt.sh' \
+  && ok "role transfers continuum-adopt.sh into the helper bundle" || bad "continuum-adopt.sh is not transferred to the target"
+awk '/name: Verify the pre-staged release artifact/,/register: continuum_artifact_verify/' "$TASKS" \
+  | grep -qF 'ansible.builtin.command' \
+  && ok "artifact verify invokes the staged bundle via command (not script)" || bad "artifact verify still uses single-file script transfer"
+awk '/name: Verify the pre-staged release artifact/,/register: continuum_artifact_verify/' "$TASKS" \
+  | grep -qF '{{ continuum_helper_dir }}/continuum-adopt.sh artifact-verify' \
+  && ok "artifact verify calls the helper by its staged remote path" || bad "artifact verify does not reference continuum_helper_dir"
+# The defaults must no longer claim the role performs the download itself.
+if grep -qF 'the role performs the download' "$DEFAULTS"; then
+  bad "defaults still claim the role downloads the artifact (unimplemented contract)"
+else
+  ok "defaults no longer claim the role downloads — download is owned by the wrapper"
+fi
+
 echo "== site.yml: narrowed but present fact gathering =="
 grep -qE '^\s*gather_facts:\s*true' "$SITE" \
   && ok "gather_facts remains enabled (assert tasks still need distribution facts)" || bad "gather_facts was disabled entirely — pre_tasks assert would break"
