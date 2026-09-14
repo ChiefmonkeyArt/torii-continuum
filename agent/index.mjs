@@ -263,6 +263,17 @@ async function resolveBotId(ownerNpub) {
   return null;
 }
 
+// A23: resolve the covenant the caller's bot actually lives under — its birth pin
+// (constitution.version) plus its owner-acknowledged upgrade, if any. Falls back
+// to null (current covenant) when there is no manifest or the read fails, so a
+// legacy/fresh bot continues to render the current working-values header.
+async function resolveConstitutionVersions(ownerNpub) {
+  const g = await genesis.read(ownerNpub).catch(() => null);
+  const con = g?.manifest?.constitution;
+  if (!con) return null;
+  return { pinnedVersion: con.version, acknowledgedVersion: con.acknowledged_version };
+}
+
 // Onboarding stack (v0.2.35-alpha) — encrypted-at-rest secret store for the
 // operator secrets the agent must USE (NWC URI, Routstr sk- key), plus the
 // pinned Routstr provider adapter. The live NIP-47 transport is built per-call
@@ -799,7 +810,10 @@ app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
   if (trimmed.length === 0) return reply.code(400).send({ error: 'empty message' });
   if (trimmed.length > 4000) return reply.code(400).send({ error: 'message too long (max 4000)' });
 
-  const result = await chatSkill.handle({ message: trimmed, context });
+  // A23: pass the caller's effective constitution version so the working-values
+  // header reflects what actually binds this bot, not merely the latest release.
+  const constitution = await resolveConstitutionVersions(req.session.npub);
+  const result = await chatSkill.handle({ message: trimmed, context, constitution });
   if (!result.ok) {
     // Structured + already-sanitised upstream failure. `code` is a stable token
     // (see agent/lib/provider-errors.mjs) so the SPA can branch without parsing
@@ -1304,8 +1318,9 @@ app.post('/api/memory/scoped/delete', { preHandler: requireAdmin }, async (req, 
 });
 
 // ── MEMORY-1: working-values provenance (what constrains the live prompt) ────
-app.get('/api/memory/working-values', { preHandler: requireAdmin }, async () => {
-  const { provenance } = buildWorkingValues();
+app.get('/api/memory/working-values', { preHandler: requireAdmin }, async (req, reply) => {
+  const constitution = await resolveConstitutionVersions(req.session.npub);
+  const { provenance } = buildWorkingValues(constitution);
   return { ok: true, ...provenance };
 });
 

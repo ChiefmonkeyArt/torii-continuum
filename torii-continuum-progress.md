@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.158-alpha — audit A23: effective constitution version in working values (2026-09-14)
+
+**What shipped.** Finding **A23** (runtime working values ignored the acknowledged constitution) is closed. `buildWorkingValues` now resolves the EFFECTIVE covenant — acknowledged version, else birth pin, else current — and renders the header from that version's frozen body, plus the CURRENT safety floor (which binds regardless of version). An unrecognised birth pin fails closed to the current covenant and is flagged. The `/api/chat` and `/api/memory/working-values` routes now resolve the caller's `constitution.version`/`acknowledged_version` from their genesis manifest and pass it through, so a bot declining non-floor upgrades is no longer told the latest header is binding.
+
+**Tests.** Agent 602 → **605** (+3: older unacknowledged bot + floor, acknowledged-latest, unknown pin). Frontend unchanged at **1850**.
+
+**Version markers bumped.** 0.2.157 → 0.2.158-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [N/A]; strategy [unchanged]; ops [unchanged].
+
 ## v0.2.157-alpha — audit A24: safe diagnostics (2026-09-14)
 
 **What shipped.** Finding **A24** (debug logging of upstream content) is closed. `debugProbe` no longer echoes the first 200 chars of the upstream body; it now records only `status`, `cf-ray`, refund-header presence, `content-type`, byte length and a SHA-256 fingerprint, plus the token prefix (never the full token). Truncation is not redaction, so no provider/generated/user content reaches the logger even under `ROUTSTR_DEBUG=1`.

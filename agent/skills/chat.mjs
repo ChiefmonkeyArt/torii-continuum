@@ -77,7 +77,7 @@ function cap(text, max = MAX_FRAGMENT_CHARS) {
  * @param {import('../lib/reflect.mjs').createReflector extends (...a:any) => infer R ? R : never} deps.reflector
  */
 export function createChatSkill(router, log, { memory, reflector } = {}) {
-  async function handle({ message, context }) {
+  async function handle({ message, context, constitution }) {
     // Code-side guards (procedural, kind 30095 with guard === "code-only")
     // run BEFORE we spend a satoshi on the model.
     if (memory) {
@@ -89,7 +89,7 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
     }
 
     // Compose the system prompt from the layer stack.
-    const systemPrompt = composeSystemPrompt({ memory, context });
+    const systemPrompt = composeSystemPrompt({ memory, context, constitution });
 
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -102,7 +102,7 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
     // Record which working-values covenant constrained this turn (version +
     // digest + rendered-header hash) so prompt provenance is auditable without
     // logging the prompt body. The constitution is public, versioned data.
-    const { provenance } = buildWorkingValues();
+    const { provenance } = buildWorkingValues(constitution);
     log.info(`[chat] prompt tokens: ${promptTokens} · working-values ${provenance.constitution_version}/${provenance.code_of_practice_version} hdr=${provenance.header_sha256.slice(0, 12)}`);
 
     const started = Date.now();
@@ -153,7 +153,7 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
 /**
  * Build the four-layer system prompt. Exported for tests.
  */
-export function composeSystemPrompt({ memory, context }) {
+export function composeSystemPrompt({ memory, context, constitution }) {
   const ctxLine = context?.label
     ? `The operator is currently on the "${context.label}" page (${context.where || 'unknown'}).`
     : '';
@@ -163,7 +163,7 @@ export function composeSystemPrompt({ memory, context }) {
   // covenant that outranks everything below it, so a poisoned memory fragment
   // can never silently override it. Deterministic + versioned; provenance is
   // logged by handle() for prompt diagnostics without exposing anything secret.
-  const { header: workingValues } = buildWorkingValues();
+  const { header: workingValues } = buildWorkingValues(constitution);
   const parts = [workingValues, SKILL_INSTRUCTIONS, STORE_ACTIONS_INSTRUCTIONS];
 
   if (memory) {
