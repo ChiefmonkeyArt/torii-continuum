@@ -4,7 +4,7 @@
  *
  * Invariants enforced (fail fast, refuse to boot if violated):
  *   1. admin_npub must be a valid "npub1" string OR empty (first-touch claim)
- *   2. session_secret must be >=64 hex chars (32 bytes)
+ *   2. session_secret must be >=64 chars (high entropy; used as opaque key material)
  *   3. server.host + server.port must be set
  *   4. routstr.endpoint must be https WHEN set (provider discovery makes it optional)
  *
@@ -47,6 +47,10 @@ export function loadConfig(path) {
     console.error(REQUIRED_MSG + `YAML parse failed: ${e.message}`);
     process.exit(1);
   }
+  // A20: an empty document / `null` root parses to null/undefined — normalize to
+  // an empty object so the invariant checks below report clear validation errors
+  // instead of a TypeError dereferencing null.
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) cfg = {};
 
   // Validate invariants
   const errors = [];
@@ -64,7 +68,7 @@ export function loadConfig(path) {
     }
   }
   if (!cfg.session_secret || typeof cfg.session_secret !== 'string' || cfg.session_secret.length < 64) {
-    errors.push('session_secret must be >=64 hex chars (32 bytes). Generate: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+    errors.push('session_secret must be at least 64 characters (high entropy). Generate: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
   }
   if (cfg.session_secret && cfg.session_secret.includes('REPLACE')) {
     errors.push('session_secret is still the example placeholder — generate a real one');
@@ -150,6 +154,9 @@ export function loadConfig(path) {
   // to both the Cashu mint-quote and the NWC-issued invoice paths so neither can
   // request an unbounded invoice from a stolen session.
   cfg.cashu.max_mint_sats ??= 100_000;
+  // A20: routstr is optional in config (only routstr.endpoint is checked with
+  // optional chaining above); normalize a missing block before dereferencing it.
+  cfg.routstr ??= {};
   cfg.routstr.limits ??= { max_tokens_out: 2048, max_sats_per_request: 50 };
   cfg.routstr.fallback ??= { enabled: false };
   // Routstr Core v0.1.0 (RIP-03): models are no longer hard-required — a
@@ -310,5 +317,13 @@ export function persistAdminNpub(configPath, npub) {
     fsyncSync(fd);
   } finally {
     closeSync(fd);
+  }
+
+  // A20: verify the write landed intact. We cannot use temp+rename (the sandbox
+  // grants write to config.yaml but not its parent dir), so a read-back is the
+  // only honest detector of a torn truncate→write. A mismatch surfaces loudly
+  // instead of silently persisting a partial config.
+  if (readFileSync(configPath, 'utf8') !== next) {
+    throw new Error('persistAdminNpub: post-write read-back mismatch (config may be torn)');
   }
 }

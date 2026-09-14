@@ -9,6 +9,21 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.155-alpha — audit A20: config normalization + persistence contracts (2026-09-14)
+
+**What shipped.** Finding **A20** (contradictory config contracts) is closed:
+
+- **Null/empty YAML root** is normalized to `{}` before validation, so a `null` document reports clean invariant errors instead of a null-dereference `TypeError`.
+- **Missing `routstr` block** is normalized (`cfg.routstr ??= {}`) before `limits`/`fallback`/`provider` are dereferenced — a minimal config with no `routstr:` now loads.
+- **session_secret validation** no longer advertises a hex format it never enforced (the message now requires "at least 64 characters", matching the HKDF-over-UTF-8 derivation).
+- **persistAdminNpub** adds a post-write read-back verify, so a torn truncate→write is surfaced loudly rather than silently persisting a partial config (temp+rename stays impossible under the single-file write sandbox).
+
+**Tests.** Agent 592 → **595** (+3: null root, missing routstr, non-hex secret message). Frontend unchanged at **1850**.
+
+**Version markers bumped.** 0.2.154 → 0.2.155-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [N/A — behavior-fix]; strategy [unchanged]; ops [unchanged].
+
 ## v0.2.154-alpha — audit A21: storage location/ignore/retention drift (2026-09-14)
 
 **What shipped.** Finding **A21** (three storage-lifecycle drifts) is closed:

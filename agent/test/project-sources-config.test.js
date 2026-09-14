@@ -198,3 +198,53 @@ test('defaults are applied and result is frozen (in-process)', () => {
     assert.equal(cfg.rate_limit.wallet_health_per_min, 6);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ── audit A20: config normalization + persistence contracts ────────────────
+
+test('A20: a null/empty YAML root reports validation errors, not a TypeError', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'torii-null-cfg-'));
+  const path = join(dir, 'config.yaml');
+  writeFileSync(path, 'null\n', { mode: 0o600 });
+  try {
+    const r = loadInChild(path);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /session_secret must be at least 64 characters/);
+    assert.ok(!/TypeError/.test(r.stderr), 'must not surface a null-dereference TypeError');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('A20: a config with NO routstr block still loads (routstr is optional)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'torii-noroutstr-'));
+  const path = join(dir, 'config.yaml');
+  // Minimal valid config minus any routstr: block.
+  writeFileSync(path, [
+    'admin_npub: ""',
+    'session_secret: "' + 'a'.repeat(64) + '"',
+    'server:',
+    '  host: "127.0.0.1"',
+    '  port: 8787',
+  ].join('\n') + '\n', { mode: 0o600 });
+  try {
+    const out = loadInChild(path);
+    assert.equal(out.code, 0, out.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('A20: session_secret validation does not claim hex it never enforced', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'torii-sec-'));
+  const path = join(dir, 'config.yaml');
+  writeFileSync(path, [
+    'admin_npub: ""',
+    'session_secret: "short"',
+    'server:',
+    '  host: "127.0.0.1"',
+    '  port: 8787',
+  ].join('\n') + '\n', { mode: 0o600 });
+  try {
+    const r = loadInChild(path);
+    assert.equal(r.code, 1);
+    // No false "hex" claim; the enforced contract is minimum length.
+    assert.match(r.stderr, /at least 64 characters/);
+    assert.ok(!/hex chars/.test(r.stderr));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
