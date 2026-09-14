@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.164-alpha — FE-14: deploy known-hosts pinning (2026-09-14)
+
+**What shipped.** The deploy workflow no longer blindly pipes `ssh-keyscan` into `known_hosts` (which only proved the key was consistent with the SAME untrusted scan, not its identity). It now verifies the live VPS ed25519 host key against a pre-established `VPS_DEPLOY_HOST_KEY` fingerprint — an independently-provisioned repo secret — and fails closed before any remote command on mismatch. Secret set; box rotation is a deliberate secret edit. Updated the secrets comment in the workflow; `ops/deploy-bootstrap.sh` already advised out-of-band verification, so no change there.
+
+**Tests.** No unit tests (workflow-only change); YAML validated. Agent 616 / frontend 1859 unchanged.
+
+**Version markers bumped.** 0.2.163 → 0.2.164-alpha (all four).
+
+**Update-All checklist.** Code/tests [n/a — workflow]; version markers [done]; continuity docs [done]; ops [already aligned]; ADR [n/a]; deploy workflow secret [provisioned].
+
 ## v0.2.163-alpha — frontend FE-02/03/06/07 session-lifetime + consent batch (2026-09-14)
 
 **What shipped.** Four audit findings closed as one behavior-preserving batch:

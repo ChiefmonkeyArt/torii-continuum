@@ -6,11 +6,16 @@ name: Deploy to VPS
 # rolls forward, an older tag rolls back.
 #
 # SECRETS (repo secrets, encrypted at rest, never printed by this workflow):
-#   VPS_DEPLOY_SSH_KEY  ed25519 private key, matches ~ubuntu/.ssh/authorized_keys
-#                       entry commented `torii-deploy-agent` on the VPS.
-#   VPS_DEPLOY_HOST     `ubuntu@chiefmonkey.art` (host is a secret so the target
-#                       is never hardcoded in the repo — rotating the operator
-#                       or the box is a secret edit, not a code change).
+#   VPS_DEPLOY_SSH_KEY   ed25519 private key, matches ~ubuntu/.ssh/authorized_keys
+#                        entry commented `torii-deploy-agent` on the VPS.
+#   VPS_DEPLOY_HOST      `ubuntu@chiefmonkey.art` (host is a secret so the target
+#                        is never hardcoded in the repo — rotating the operator
+#                        or the box is a secret edit, not a code change).
+#   VPS_DEPLOY_HOST_KEY  the EXPECTED ed25519 host-key fingerprint (e.g.
+#                        `SHA256:...`), independently verified by the operator.
+#                        The live scan must match this before any remote command
+#                        runs (FE-14 — a keyscan-to-known_hosts only proves the
+#                        key is consistent with itself, not its identity).
 
 on:
   workflow_dispatch:
@@ -62,6 +67,7 @@ jobs:
         env:
           SSH_KEY: ${{ secrets.VPS_DEPLOY_SSH_KEY }}
           SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+          VPS_DEPLOY_HOST_KEY: ${{ secrets.VPS_DEPLOY_HOST_KEY }}
         run: |
           set -euo pipefail
           if [[ -z "${SSH_KEY:-}" || -z "${SSH_HOST:-}" ]]; then
@@ -76,10 +82,31 @@ jobs:
           umask 077
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519_torii
           chmod 600 ~/.ssh/id_ed25519_torii
-          # Pin the VPS host key from a live scan into known_hosts. Prevents
-          # trust-on-first-use MITM without hardcoding a fingerprint we'd
-          # have to bump when the box is rebuilt.
+
+          # FE-14: verify the VPS host key against a PRE-ESTABLISHED trust anchor
+          # before trusting it. Blindly piping `ssh-keyscan` into known_hosts only
+          # pins the key to ITSELF (consistency with the same untrusted scan) — it
+          # does not detect an intercepted FIRST connection. The EXPECTED ed25519
+          # fingerprint lives in VPS_DEPLOY_HOST_KEY (verified independently by the
+          # operator); the live scan must match it or the deploy fails before any
+          # remote command runs. Rotating the box is a deliberate secret edit, not
+          # an accidental fingerprint churn.
+          if [[ -z "${VPS_DEPLOY_HOST_KEY:-}" ]]; then
+            echo "::error::VPS_DEPLOY_HOST_KEY secret is not set (expected SSH host-key fingerprint)"
+            exit 1
+          fi
           host_only="${SSH_HOST#*@}"
+          scan_file="$(mktemp)"
+          ssh-keyscan -T 10 -t ed25519 "$host_only" > "$scan_file" 2>/dev/null || true
+          live_fp="$(ssh-keygen -lf "$scan_file" -E sha256 2>/dev/null | awk 'NF >= 2 {print $2}' | head -n1)"
+          rm -f "$scan_file"
+          expected_fp="${VPS_DEPLOY_HOST_KEY}"
+          [[ "$expected_fp" == SHA256:* ]] || expected_fp="SHA256:${expected_fp}"
+          if [[ -z "$live_fp" || "$live_fp" != "$expected_fp" ]]; then
+            echo "::error::VPS host key mismatch: expected $expected_fp, got ${live_fp:-<none>}"
+            exit 1
+          fi
+          # The live key matched the pinned anchor — now safe to trust for this run.
           ssh-keyscan -T 10 -t ed25519 "$host_only" >> ~/.ssh/known_hosts 2>/dev/null
           chmod 600 ~/.ssh/known_hosts
 
