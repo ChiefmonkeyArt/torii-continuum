@@ -15,7 +15,8 @@
  *            each via nip44.decrypt(admin_pubkey, ciphertext) → POSTs plaintext
  *            bundle back to agent via /api/memory/unlock. Agent holds plaintext
  *            in this module's RAM cache, keyed by session token. On session
- *            expiry / SIGINT, cache is zeroed.
+ *            lease expiry / SIGINT / panic, the cache reference is dropped
+ *            (best-effort; immutable JS strings are not cryptographically zeroized).
  *
  * The agent NEVER sees a raw private key, and NEVER derives one. All NIP-44
  * work happens on the operator's device. This module is the RAM-only cache +
@@ -52,14 +53,31 @@ import { createHash, randomBytes } from 'node:crypto';
 /**
  * Create the sealed-at-rest RAM cache.
  *
+ * MEMORY-AUTHORITY-1 (audit A17): the verified admin session (Nostr-signer login)
+ * is the SINGLE authority for the plaintext RAM cache. Both /api/memory/unlock and
+ * the hardened /api/memory/activate write this same cache; activation is the
+ * first-run, owner-signed consent ceremony, not a separate memory protocol. The
+ * plaintext here is leased for a deliberate duration (opts.ttlSec) and dropped
+ * when the lease lapses or the operator revokes (lock/panic/shutdown) — it is not
+ * retained indefinitely after the originating session ends.
+ *
  * @param {object} log  fastify logger
- * @returns {object}    { unlock, get, list, clear, snapshot, isUnlocked }
+ * @param {{ttlSec?:number, now?:()=>number}} [opts] lease duration + injectable clock
+ * @returns {object}    { unlock, get, list, clear, snapshot, isUnlocked, unlockedForNpub }
  */
-export function createMemoryCache(log) {
+export function createMemoryCache(log, { ttlSec = 86400, now = () => Math.floor(Date.now() / 1000) } = {}) {
   /** @type {Map<string, MemoryEntry>} */
   let cache = new Map(); // key = `${kind}:${dTag}` (latest replaces older)
   let unlockedAt = null;
   let unlockedFor = null; // npub the cache is unlocked for
+
+  // Drop the lease when it lapses, so plaintext cannot outlive the session window.
+  // Best-effort: replacing the Map releases references to the (immutable) JS
+  // strings, but does NOT guarantee cryptographic zeroization of those strings.
+  function ensureFresh() {
+    if (unlockedAt == null) return;
+    if (now() - unlockedAt >= ttlSec) clear('session-lease-expired');
+  }
 
   /**
    * Called by /api/memory/unlock after the browser has decrypted every .enc
@@ -91,7 +109,7 @@ export function createMemoryCache(log) {
       });
     }
     cache = next;
-    unlockedAt = Math.floor(Date.now() / 1000);
+    unlockedAt = now();
     unlockedFor = npub;
     log.info(`[crypto] memory cache unlocked: ${cache.size} entries for ${npub.slice(0, 12)}...`);
     return { count: cache.size, unlockedAt };
@@ -101,6 +119,7 @@ export function createMemoryCache(log) {
    * Get one entry by kind + d-tag.
    */
   function get(kind, dTag) {
+    ensureFresh();
     return cache.get(`${kind}:${dTag}`) || null;
   }
 
@@ -108,6 +127,7 @@ export function createMemoryCache(log) {
    * List all entries of a kind. Optional filter on d-tag prefix.
    */
   function list(kind, dTagPrefix = null) {
+    ensureFresh();
     const out = [];
     for (const [key, entry] of cache) {
       if (!key.startsWith(`${kind}:`)) continue;
@@ -120,10 +140,14 @@ export function createMemoryCache(log) {
   }
 
   /**
-   * Wipe the RAM cache. Called on:
-   *   - session token expiry
+   * Drop the RAM cache (best-effort). Called on:
+   *   - session lease expiry (plaintext is leased, not retained forever)
    *   - SIGINT / SIGTERM
    *   - operator-triggered panic (via /api/memory/panic)
+   *
+   * NOTE: replacing the Map releases references to the cached strings; it does
+   * NOT guarantee cryptographic zeroization. Immutable JS strings are not
+   * overwritable in place, and the heap may retain copies until GC.
    */
   function clear(reason = 'unspecified') {
     const n = cache.size;
@@ -137,6 +161,7 @@ export function createMemoryCache(log) {
    * Non-sensitive status snapshot for /api/memory (never returns plaintext).
    */
   function snapshot() {
+    ensureFresh();
     const byKind = {};
     for (const entry of cache.values()) {
       byKind[entry.kind] = (byKind[entry.kind] || 0) + 1;
@@ -150,10 +175,12 @@ export function createMemoryCache(log) {
   }
 
   function isUnlocked() {
+    ensureFresh();
     return cache.size > 0;
   }
 
   function unlockedForNpub() {
+    ensureFresh();
     return unlockedFor;
   }
 

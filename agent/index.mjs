@@ -191,7 +191,9 @@ const ollama = createOllama(cfg, app.log);
 const router = createModelRouter({ routstr, ollama, cfg, log: app.log });
 
 // Character + memory stack (CONT-CHARACTER-1)
-const memoryCache = createMemoryCache(app.log);
+// A17: the plaintext RAM cache is leased for the session lifetime (session_ttl_sec)
+// and auto-drops when the lease lapses — plaintext does not outlive the session.
+const memoryCache = createMemoryCache(app.log, { ttlSec: cfg.session_ttl_sec });
 const memory = createMemoryLoader({ cache: memoryCache, agentRoot: AGENT_ROOT, log: app.log });
 const reflector = createReflector({ agentRoot: AGENT_ROOT, cache: memoryCache, log: app.log });
 await memory.loadCharacter();
