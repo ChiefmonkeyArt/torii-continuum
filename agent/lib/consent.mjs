@@ -43,6 +43,7 @@ import { join, resolve, sep } from 'node:path';
 import { ownerHexFromNpub } from '../core/genesis.mjs';
 import { canonicalize } from './constitution.mjs';
 import { validBotId, validProjectSlug, classForKind, CLASSES } from './memstore.mjs';
+import { createKeyedMutex } from './mutex.mjs';
 
 const HEX64_RE = /^[0-9a-f]{64}$/;
 const HEX32ID_RE = /^[a-f0-9]{32}$/;
@@ -88,6 +89,10 @@ export function createConsent(deps = {}) {
   const audit = deps.audit || null;
   const log = deps.log || { info() {}, warn() {}, error() {} };
   const now = typeof deps.now === 'function' ? deps.now : () => Math.floor(Date.now() / 1000);
+  // A12: approve/reject both read-check-write the same proposal file (and approve
+  // awaits a memstore put in between); serialize per proposal so a concurrent
+  // approve-vs-reject cannot both consume the nonce / both win the status write.
+  const mutex = createKeyedMutex();
 
   const ownersRoot = join(memoryRoot, 'owners');
 
@@ -265,6 +270,7 @@ export function createConsent(deps = {}) {
   async function approve(params = {}) {
     const scope = scopeOf(params.ownerNpub, params.botId);
     if (!scope.ok) return { ok: false, code: 'scope', reason: scope.reason };
+    return mutex.run(`${scope.ownerHex}:${scope.botId}:${params.id}`, async () => {
     const p = await readProposal(scope.ownerHex, scope.botId, params.id);
     if (!p) return { ok: false, code: 'not_found', reason: 'proposal not found' };
     if (p.owner_hex !== scope.ownerHex) return { ok: false, code: 'forbidden', reason: 'cross-owner denied' };
@@ -314,6 +320,7 @@ export function createConsent(deps = {}) {
     }
     log.info(`[consent] approved ${p.id.slice(0, 12)} → stored ${stored.id.slice(0, 12)}`);
     return { ok: true, stored: p.stored, status: p.status };
+    });
   }
 
   /**
@@ -324,6 +331,7 @@ export function createConsent(deps = {}) {
   async function reject(params = {}) {
     const scope = scopeOf(params.ownerNpub, params.botId);
     if (!scope.ok) return { ok: false, code: 'scope', reason: scope.reason };
+    return mutex.run(`${scope.ownerHex}:${scope.botId}:${params.id}`, async () => {
     const p = await readProposal(scope.ownerHex, scope.botId, params.id);
     if (!p) return { ok: false, code: 'not_found', reason: 'proposal not found' };
     if (p.owner_hex !== scope.ownerHex) return { ok: false, code: 'forbidden', reason: 'cross-owner denied' };
@@ -346,6 +354,7 @@ export function createConsent(deps = {}) {
     }
     log.info(`[consent] rejected ${p.id.slice(0, 12)} (pending file removed)`);
     return { ok: true, status: STATUS.REJECTED };
+    });
   }
 
   /**

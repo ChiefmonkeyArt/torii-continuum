@@ -27,9 +27,10 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, link, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { nip19 } from 'nostr-tools';
+import { createKeyedMutex } from '../lib/mutex.mjs';
 import {
   getConstitution,
   getConstitutionByVersion,
@@ -110,6 +111,9 @@ export function createGenesis(deps = {}) {
   const audit = deps.audit || null;
   const log = deps.log || { info() {}, warn() {}, error() {} };
   const now = typeof deps.now === 'function' ? deps.now : () => Math.floor(Date.now() / 1000);
+  // A12: serialize create (and, below, the CAS write) per owner so concurrent
+  // create calls cannot both pass the existence check and fork two identities.
+  const mutex = createKeyedMutex();
 
   const baseDir = join(agentRoot, 'memory', 'genesis');
 
@@ -142,12 +146,42 @@ export function createGenesis(deps = {}) {
   async function writeManifest(ownerHex, manifest) {
     // Atomic: temp file in the owner dir, then rename over the target, so a
     // crash mid-write never leaves a torn manifest that a later read would
-    // treat as corrupt (and refuse).
+    // treat as corrupt (and refuse). Overwrite semantics — used by create-after-
+    // a-race-loss and by acknowledgeConstitution (which updates the SAME owner's
+    // manifest in place).
     const dir = ownerDir(ownerHex);
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const tmp = join(dir, `.manifest.${randomBytes(8).toString('hex')}.tmp`);
     await writeFile(tmp, JSON.stringify(manifest, null, 2), { mode: 0o600 });
     await rename(tmp, manifestPath(ownerHex));
+  }
+
+  /**
+   * Create-if-absent write (audit A12). Only the FIRST genesis create uses this:
+   * it claims the final path atomically via a hard link, which fails with EEXIST
+   * if a concurrent creator already won — so a duplicate create can never fork a
+   * second identity. `acknowledgeConstitution` deliberately uses overwrite
+   * (`writeManifest`), never this.
+   */
+  async function writeManifestOnce(ownerHex, manifest) {
+    const dir = ownerDir(ownerHex);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const tmp = join(dir, `.manifest.${randomBytes(8).toString('hex')}.tmp`);
+    await writeFile(tmp, JSON.stringify(manifest, null, 2), { mode: 0o600 });
+    try {
+      // link() is the atomic create-if-absent primitive: EEXIST means a winner
+      // already claimed the manifest (no overwrite, no fork).
+      await link(tmp, manifestPath(ownerHex));
+      await unlink(tmp).catch(() => {});
+    } catch (e) {
+      if (e && e.code === 'EEXIST') {
+        await unlink(tmp).catch(() => {});
+        throw Object.assign(new Error('manifest already exists'), { code: 'EEXIST' });
+      }
+      // Hard links unsupported on this filesystem → fall back to plain atomic
+      // rename; the resource mutex in create() still serializes same-process races.
+      await rename(tmp, manifestPath(ownerHex));
+    }
   }
 
   /**
@@ -308,81 +342,94 @@ export function createGenesis(deps = {}) {
     const intent = validateString(params.creativeIntent, { field: 'creative_intent', max: CREATIVE_INTENT_MAX });
     if (!intent.ok) return { ok: false, code: 'validation', reason: intent.reason };
 
-    // Idempotency: an existing manifest for this owner is returned as-is. We do
-    // NOT overwrite with the new (possibly different) display fields — genesis
-    // happens once, and a retry must never fork a second identity.
-    const existing = await readRaw(ownerHex);
-    if (existing) {
-      log.info(`[genesis] idempotent read for owner ${ownerHex.slice(0, 12)} (bot ${String(existing.bot_id).slice(0, 8)})`);
-      return { ok: true, created: false, manifest: existing };
-    }
-
-    const constitution = getConstitution();
-    const ts = now();
-    const iso = new Date(ts * 1000).toISOString();
-
-    const manifest = {
-      schema: MANIFEST_SCHEMA,
-      manifest_version: MANIFEST_VERSION,
-      bot_id: randomBytes(16).toString('hex'),
-      owner: {
-        npub: ownerNpub,
-        pubkey_hex: ownerHex,
-      },
-      display_name: name.value,
-      archetype: archetype.value || null,
-      creative_intent: intent.value || null,
-      constitution: {
-        schema: constitution.body.schema,
-        version: constitution.version,
-        digest: constitution.digest,
-      },
-      policy: {
-        command_mode: COMMAND_MODE,
-        owner_bound: true,
-        default_deny: true,
-        consent_required_for: ['external_action', 'paid_inference', 'memory_write', 'publishing', 'training'],
-      },
-      provenance: {
-        genesis_agent_version: typeof params.agentVersion === 'string' ? params.agentVersion : null,
-        constitution_provenance: 'lib/constitution.mjs',
-        stage: 'genesis-1',
-        lora: 'not-started',
-        rag: 'not-started',
-      },
-      // Reserved for safe forward-compatible extension without a schema bump.
-      extensions: {},
-      created_at: ts,
-      created_at_iso: iso,
-      updated_at: ts,
-    };
-    manifest.manifest_digest = manifestDigest(manifest);
-
-    // O_EXCL on the final path is not used because rename is the atomicity
-    // primitive; the pre-write existence check above plus the single-writer
-    // process make a duplicate-create race a no-op.
-    await writeManifest(ownerHex, manifest);
-
-    log.info(`[genesis] created bot ${manifest.bot_id.slice(0, 8)} for owner ${ownerHex.slice(0, 12)} (constitution ${constitution.version})`);
-
-    if (audit && typeof audit.append === 'function') {
-      try {
-        await audit.append('genesis.create', {
-          bot_id: manifest.bot_id,
-          owner_pubkey_prefix: ownerHex.slice(0, 12),
-          constitution_version: constitution.version,
-          constitution_digest: constitution.digest,
-          manifest_digest: manifest.manifest_digest,
-          command_mode: COMMAND_MODE,
-        });
-      } catch (e) {
-        // A failed audit append must not roll back a successful genesis, but it
-        // must be loud — the manifest exists; the ledger just missed a line.
-        log.error(`[genesis] audit append failed after create: ${e.message}`);
+    // A12: the existence check + write must be one exclusive critical section per
+    // owner. Without this, two concurrent creates both pass the read and rename over
+    // each other, forking a second identity (the `link` CAS in writeManifest then
+    // turns the loser into an idempotent re-read).
+    return mutex.run(ownerHex, async () => {
+      // Idempotency: an existing manifest for this owner is returned as-is. We do
+      // NOT overwrite with the new (possibly different) display fields — genesis
+      // happens once, and a retry must never fork a second identity.
+      const existing = await readRaw(ownerHex);
+      if (existing) {
+        log.info(`[genesis] idempotent read for owner ${ownerHex.slice(0, 12)} (bot ${String(existing.bot_id).slice(0, 8)})`);
+        return { ok: true, created: false, manifest: existing };
       }
-    }
 
-    return { ok: true, created: true, manifest };
+      const constitution = getConstitution();
+      const ts = now();
+      const iso = new Date(ts * 1000).toISOString();
+
+      const manifest = {
+        schema: MANIFEST_SCHEMA,
+        manifest_version: MANIFEST_VERSION,
+        bot_id: randomBytes(16).toString('hex'),
+        owner: {
+          npub: ownerNpub,
+          pubkey_hex: ownerHex,
+        },
+        display_name: name.value,
+        archetype: archetype.value || null,
+        creative_intent: intent.value || null,
+        constitution: {
+          schema: constitution.body.schema,
+          version: constitution.version,
+          digest: constitution.digest,
+        },
+        policy: {
+          command_mode: COMMAND_MODE,
+          owner_bound: true,
+          default_deny: true,
+          consent_required_for: ['external_action', 'paid_inference', 'memory_write', 'publishing', 'training'],
+        },
+        provenance: {
+          genesis_agent_version: typeof params.agentVersion === 'string' ? params.agentVersion : null,
+          constitution_provenance: 'lib/constitution.mjs',
+          stage: 'genesis-1',
+          lora: 'not-started',
+          rag: 'not-started',
+        },
+        // Reserved for safe forward-compatible extension without a schema bump.
+        extensions: {},
+        created_at: ts,
+        created_at_iso: iso,
+        updated_at: ts,
+      };
+      manifest.manifest_digest = manifestDigest(manifest);
+
+      try {
+        await writeManifestOnce(ownerHex, manifest);
+      } catch (e) {
+        if (e && e.code === 'EEXIST') {
+          // Lost a cross-process (or fallback-path) race at the file boundary —
+          // re-read the winner and report created:false rather than forking.
+          const winner = await readRaw(ownerHex);
+          if (winner) return { ok: true, created: false, manifest: winner };
+        }
+        throw e;
+      }
+
+      log.info(`[genesis] created bot ${manifest.bot_id.slice(0, 8)} for owner ${ownerHex.slice(0, 12)} (constitution ${constitution.version})`);
+
+      if (audit && typeof audit.append === 'function') {
+        try {
+          await audit.append('genesis.create', {
+            bot_id: manifest.bot_id,
+            owner_pubkey_prefix: ownerHex.slice(0, 12),
+            constitution_version: constitution.version,
+            constitution_digest: constitution.digest,
+            manifest_digest: manifest.manifest_digest,
+            command_mode: COMMAND_MODE,
+          });
+        } catch (e) {
+          // A failed audit append must not roll back a successful genesis, but it
+          // must be loud — the manifest exists; the ledger just missed a line.
+          log.error(`[genesis] audit append failed after create: ${e.message}`);
+        }
+      }
+
+      return { ok: true, created: true, manifest };
+    });
   }
 
   return { create, read, acknowledgeConstitution, _baseDir: baseDir, _manifestPath: manifestPath };

@@ -447,3 +447,27 @@ test('the safety floor binds an un-acknowledged bot regardless of birth version'
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('A12: concurrent creates fork exactly one identity and both callers reconcile', async () => {
+  const root = tmpRoot();
+  try {
+    const { genesis } = harness(root);
+    // Two same-owner creates racing against the same empty namespace: exactly one
+    // must mint; the other must observe the winner (created:false) rather than
+    // silently overwriting it with a second bot_id.
+    const [r1, r2] = await Promise.all([
+      genesis.create({ ownerNpub: NPUB_A, displayName: 'First' }),
+      genesis.create({ ownerNpub: NPUB_A, displayName: 'Second' }),
+    ]);
+    const winners = [r1, r2].filter((r) => r.created === true);
+    assert.equal(winners.length, 1, 'exactly one create must win');
+    const ids = [r1.manifest?.bot_id, r2.manifest?.bot_id].filter(Boolean);
+    assert.equal(new Set(ids).size, 1, 'both callers must agree on a single bot_id');
+    assert.equal(winners[0].manifest.bot_id, ids[0]);
+    const readBack = await genesis.read(NPUB_A);
+    assert.equal(readBack.exists, true);
+    assert.equal(readBack.manifest.bot_id, ids[0]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

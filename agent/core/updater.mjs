@@ -24,6 +24,7 @@
 
 import { isValidSemver, isNewer } from './semver.mjs';
 import { randomBytes } from 'node:crypto';
+import { createKeyedMutex } from '../lib/mutex.mjs';
 
 // Mirrors ops/deploy-unattended.sh CONTINUUM_TAG_RE exactly: a v-prefixed semver
 // with an optional pre-release of [0-9A-Za-z.-]. The `v` prefix is REQUIRED here
@@ -80,6 +81,9 @@ export function createUpdater(opts = {}) {
   const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
   const fs = opts.fs || fsPromisesLazy();
   const allowlist = Array.isArray(opts.allowlist) ? opts.allowlist : [];
+  // A12: request + cancel both read-then-write the single spool file; serialize
+  // them so a concurrent request/cancel/request cannot clobber a pending entry.
+  const mutex = createKeyedMutex();
 
   async function readRequest() {
     let raw;
@@ -126,43 +130,48 @@ export function createUpdater(opts = {}) {
     const authz = authorizeUpdate({ tag, currentVersion, latestKnown, allowlist });
     if (!authz.ok) return authz;
 
-    // Concurrency lock: one queued request at a time. A second POST while one is
-    // pending is rejected rather than clobbering the first.
-    const existing = await readRequest();
-    if (existing) {
-      return {
-        ok: false,
-        code: 'pending',
-        reason: 'an update is already queued; cancel it before requesting another',
-        current: existing.corrupt ? null : existing.tag || null,
-      };
-    }
+    // A12: the read-then-write is a single exclusive critical section, so two
+    // concurrent requests (or a request racing a cancel) cannot both pass the
+    // pending check and clobber the spool.
+    return mutex.run('spool', async () => {
+      const existing = await readRequest();
+      if (existing) {
+        return {
+          ok: false,
+          code: 'pending',
+          reason: 'an update is already queued; cancel it before requesting another',
+          current: existing.corrupt ? null : existing.tag || null,
+        };
+      }
 
-    const payload = {
-      tag,
-      from_version: currentVersion || null,
-      requested_at: new Date(now()).toISOString(),
-      requested_by: typeof requestedBy === 'string' ? requestedBy : null,
-      nonce: randomBytes(8).toString('hex'),
-      schema: 1,
-    };
-    const tmp = `${requestPath}.tmp-${payload.nonce}`;
-    // Atomic publish: write a temp file then rename over the spool path so the
-    // root applier never reads a half-written request.
-    await fs.writeFile(tmp, JSON.stringify(payload, null, 2) + '\n', { mode: 0o600 });
-    await fs.rename(tmp, requestPath);
-    return { ok: true, status: 'queued', tag, requested_at: payload.requested_at };
+      const payload = {
+        tag,
+        from_version: currentVersion || null,
+        requested_at: new Date(now()).toISOString(),
+        requested_by: typeof requestedBy === 'string' ? requestedBy : null,
+        nonce: randomBytes(8).toString('hex'),
+        schema: 1,
+      };
+      const tmp = `${requestPath}.tmp-${payload.nonce}`;
+      // Atomic publish: write a temp file then rename over the spool path so the
+      // root applier never reads a half-written request.
+      await fs.writeFile(tmp, JSON.stringify(payload, null, 2) + '\n', { mode: 0o600 });
+      await fs.rename(tmp, requestPath);
+      return { ok: true, status: 'queued', tag, requested_at: payload.requested_at };
+    });
   }
 
   /** Cancel a queued request (admin). No-op when nothing is pending. */
   async function cancel() {
-    try {
-      await fs.unlink(requestPath);
-      return { ok: true, cancelled: true };
-    } catch (e) {
-      if (e && e.code === 'ENOENT') return { ok: true, cancelled: false };
-      throw e;
-    }
+    return mutex.run('spool', async () => {
+      try {
+        await fs.unlink(requestPath);
+        return { ok: true, cancelled: true };
+      } catch (e) {
+        if (e && e.code === 'ENOENT') return { ok: true, cancelled: false };
+        throw e;
+      }
+    });
   }
 
   return { request, status, cancel, readRequest };

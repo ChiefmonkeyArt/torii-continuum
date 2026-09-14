@@ -9,6 +9,20 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.152-alpha — audit A12: atomic rename is not a concurrency lock (2026-09-14)
+
+**What shipped.** Finding **A12** (three read-then-write races mistaken for locks) is closed with a shared resource-keyed serializer (`agent/lib/mutex.mjs`) plus a create-if-absent CAS at the genesis file boundary:
+
+- **genesis `create`** — the existence-check + write now run inside `mutex.run(ownerHex, …)` and claim the manifest via a hard-link `writeManifestOnce` (EEXIST ⇒ a winner already claimed it, so the loser re-reads and returns `created:false`). `acknowledgeConstitution` keeps the in-place overwrite path deliberately.
+- **updater `request`/`cancel`** — both serialize on the single spool key, so two concurrent requests (or a request racing a cancel) can no longer clobber the pending file.
+- **consent `approve`/`reject`** — serialize per proposal, so a concurrent approve-vs-reject cannot both consume the nonce / both win the status write.
+
+**Tests.** Agent 579 → **587** (+8: 4 `mutex` unit tests, 1 genesis concurrent-create, 2 updater concurrency, 1 consent approve-vs-reject). Frontend unchanged at **1850**.
+
+**Version markers bumped.** 0.2.151 → 0.2.152-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [N/A — behavior-fix, no architecture decision change]; strategy [unchanged]; ops [unchanged].
+
 ## v0.2.151-alpha — audit A09: write-path collapse + export boundary (2026-09-14)
 
 **What shipped.** The two staged follow-ups that complete finding **A09**. **Write-path collapse:** `POST /api/memory/store` now routes facts (30094) and skills (30095) into the scoped store (`memstore.put` with the `_global` reserved project and the genesis `bot_id`), so new facts/skills land in exactly one place; identity root (30092), destructive intents (30096), and the panic key (30097) still go to the flat kind dirs. The `ciphertexts` activation enumeration now reads the flat **identity/intents/panic** dirs only (not the flat `semantic`/`procedural` dirs, which are superseded). **Export boundary:** `buildBundle` now returns an `excluded` list naming identity/intents/panic as intentionally not portable, rather than silently omitting them.
