@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.162-alpha — audit A22: router monolith / CORS DELETE omission (2026-09-14)
+
+**What shipped.** The confirmed defect in finding **A22** is fixed: the production CORS `methods` list now includes PUT and DELETE, so a cross-origin `DELETE /api/pending/:file` preflight is answered with a DELETE allow (previously the browser refused the request). The composition root is also now a testable seam — `index.mjs` exports `buildApp(cfg)` that constructs + registers the full app WITHOUT listening, and the server (sweep + listen + graceful shutdown) moved into an `isMain` guard. `buildapp-cors.test.js` drives the REAL app via `app.inject()` instead of copied inline routes: CORS preflight allows DELETE+PUT, the DELETE route is genuinely wired (401, not 404), and a built app has no bound port.
+
+**Tests.** Agent 613 → **616** (+3). Frontend unchanged at **1850**.
+
+**Version markers bumped.** 0.2.161 → 0.2.162-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [not applicable — no decision, structural testability change]; ops [unchanged]. Deferred as explicit follow-up (not part of the defect): cohesive domain plugins + shared provider/relay doubles / deadline / persistence primitives.
+
 ## v0.2.161-alpha — audit A25: session-secret rotation safety hold (2026-09-14)
 
 **What shipped.** Finding **A25** is closed. The encrypted-at-rest store (`lib/secretstore.mjs`) is now keyed by a DEDICATED `secretstore_key` (HKDF from that value, not `session_secret`), so rotating the login/session secret no longer destroys the saved NWC connection and Routstr key. Legacy installs that have no dedicated key fall back to `session_secret` for backward compatibility (and remain rotation-unsafe until they opt in). `config.mjs` validates the dedicated key when present (>=64 chars, no placeholder); `config.example.yaml` documents it. The distinct `/api/health/secrets` endpoint remains the honest post-rotation truth check.
