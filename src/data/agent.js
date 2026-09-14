@@ -62,13 +62,19 @@ function hasOnboardingSession() {
 }
 
 function agentUrl() {
-  // Priority: window override > build env > same-origin runtime fallback > empty
-  if (typeof window !== 'undefined' && window.__CONTINUUM_AGENT_URL__) {
-    return String(window.__CONTINUUM_AGENT_URL__).replace(/\/$/, '');
+  // Priority: window override > build env > same-origin runtime fallback > null.
+  // Returns NULL when no agent transport is configured (agent-less demo), and a
+  // STRING (possibly the empty prefix '' for a root mount) when configured. FE-06:
+  // an empty same-origin prefix is a VALID configuration, not "offline".
+  if (typeof window !== 'undefined' && window.__CONTINUUM_AGENT_URL__ != null) {
+    return String(window.__CONTINUUM_AGENT_URL__).replace(/\/+$/, '');
   }
   try {
-    if (import.meta.env?.VITE_AGENT_URL) {
-      return String(import.meta.env.VITE_AGENT_URL).replace(/\/$/, '');
+    // `!= null` (not truthiness) is the point: VITE_AGENT_URL="" (an explicit
+    // empty value, root mount) must resolve to '' here, while an absent
+    // VITE_AGENT_URL (undefined) falls through to the null/offline branch.
+    if (import.meta.env && import.meta.env.VITE_AGENT_URL != null) {
+      return String(import.meta.env.VITE_AGENT_URL).replace(/\/+$/, '');
     }
   } catch (_e) {}
   // Defensive runtime fallback: if the build shipped without VITE_AGENT_URL but
@@ -78,11 +84,11 @@ function agentUrl() {
   if (typeof window !== 'undefined' && window.location && hasOnboardingSession()) {
     return deriveSameOriginBase(window.location.pathname);
   }
-  return '';
+  return null;
 }
 
 export function isAgentConfigured() {
-  return agentUrl().length > 0;
+  return agentUrl() !== null;
 }
 
 export function getStoredToken() {
@@ -258,7 +264,9 @@ const DEFAULT_CLIENT_TIMEOUT_MS = 30000;
 
 async function req(method, path, body, { timeoutMs = DEFAULT_CLIENT_TIMEOUT_MS } = {}) {
   const base = agentUrl();
-  if (!base) return { ok: false, reason: 'offline', offline: true };
+  // Null means "no agent transport" (offline demo). An empty-string base is a
+  // valid root mount and must NOT be short-circuited as offline (FE-06).
+  if (base === null) return { ok: false, reason: 'offline', offline: true };
 
   // Only declare a JSON content-type when we actually send a JSON body. The
   // /api/auth/challenge call is bodyless; Fastify v5 rejects an empty body
@@ -268,6 +276,11 @@ async function req(method, path, body, { timeoutMs = DEFAULT_CLIENT_TIMEOUT_MS }
   // client's postJson so the two agent clients cannot drift apart again.
   const hasBody = body !== undefined && body !== null;
   const headers = hasBody ? { 'Content-Type': 'application/json' } : {};
+  // FE-03: snapshot the auth epoch AND the token this request is issued with.
+  // A 401 that returns later must only clear the session if this request still
+  // belongs to the CURRENT session; otherwise an old request's 401 (issued under
+  // a superseded token) would wipe a session that was just refreshed/rotated.
+  const epoch = authEpochNow();
   const tok = getStoredToken();
   if (tok) headers.Authorization = `Bearer ${tok}`;
 
@@ -308,8 +321,12 @@ async function req(method, path, body, { timeoutMs = DEFAULT_CLIENT_TIMEOUT_MS }
   if (timedOut) return clientTimeout();
 
   if (!res.ok) {
-    // 401 → session expired, clear it so UI drops back to logged-out
-    if (res.status === 401) clearStoredToken();
+    // 401 → session expired. FE-03: only clear it if this request still belongs
+    // to the CURRENT session — same epoch, same token. A 401 from an old request
+    // (issued under a superseded epoch/token) must not erase a newer session.
+    if (res.status === 401 && epoch === authEpochNow() && tok && tok === getStoredToken()) {
+      clearStoredToken();
+    }
     // Propagate the agent's structured `code` when present so callers can branch
     // on a stable token instead of pattern-matching the human reason string.
     return {
@@ -396,7 +413,7 @@ export function logout() {
   // a failure is non-fatal — the cookie also expires in step with the token.
   try {
     const base = agentUrl();
-    if (base && typeof fetch === 'function') {
+    if (base !== null && typeof fetch === 'function') {
       fetch(`${base}/api/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
     }
   } catch (_e) {}

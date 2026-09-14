@@ -15,7 +15,7 @@
  * the current project/page.
  */
 
-import { chat as agentChat, isAgentConfigured, listSessions, readSession, saveSession } from './data/agent.js';
+import { chat as agentChat, isAgentConfigured, getStoredToken, listSessions, readSession, saveSession } from './data/agent.js';
 import { hydrateFromServer } from './data/store.js';
 import { isSessionLive } from './auth.js';
 import { currentRoute } from './router.js';
@@ -351,6 +351,10 @@ async function send() {
   // after the user has navigated to another page still lands in the right
   // conversation rather than the newly-active one.
   const turnKey = activeKey;
+  // FE-02: snapshot the session identity so a reply that returns after a sign-out
+  // or owner change is dropped rather than written into a different owner's
+  // thread. The token is the complete identity (HMAC-bound to the npub).
+  const turnToken = getStoredToken();
   push('user', text);
   inputEl.value = '';
   autosize();
@@ -360,6 +364,11 @@ async function send() {
   renderLog();
   const reply = await getReply(text, buildContext());
   thinking = false;
+  // The operator signed out (or a different owner signed in) while the agent was
+  // answering. The reply belongs to a superseded session — drop it. The
+  // session-changed handler already reset in-memory threads, so re-pushing here
+  // would resurrect a previous owner's conversation in a shared browser.
+  if (turnToken !== getStoredToken()) return;
   if (reply && typeof reply === 'object') pushTo(turnKey, 'ai', reply.text, reply.action);
   else pushTo(turnKey, 'ai', reply);
 }

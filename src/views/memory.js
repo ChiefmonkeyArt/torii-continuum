@@ -205,7 +205,7 @@ function activationCard(body) {
       h('p', { style: 'margin: 0 0 8px;', text: 'Your bot’s durable memory is locked. Activation turns it on for you and only you:' }),
       h('ul', { style: 'margin: 0 0 4px; padding-left: 20px; display: flex; flex-direction: column; gap: 4px;' }, [
         h('li', { text: 'Owner-controlled — memory is bound to your key and no one else can unlock it.' }),
-        h('li', { text: 'Encrypted in this browser before anything is persisted — the agent never sees plaintext or your key.' }),
+        h('li', { text: 'Encrypted at rest, sealed to your key — activating decrypts these entries in your browser and hands them to the agent for this session; they re-lock when the session ends.' }),
         h('li', { text: 'Requires your signature — you authorize activation by signing a one-time challenge in your own Nostr signer.' }),
       ]),
     ]),
@@ -392,7 +392,7 @@ function storedCard(body) {
   }
 
   wrap.appendChild(h('h2', { class: 'page-title', style: 'font-size: 17px; margin: 0 0 4px;', text: 'Stored memory' }));
-  wrap.appendChild(h('div', { class: 'muted', style: 'font-size: 12.5px; margin-bottom: 8px;', text: 'Metadata only — ciphertext never leaves the agent except via an explicit, signed export. Deletion removes the local encrypted file and writes a tombstone.' }));
+  wrap.appendChild(h('div', { class: 'muted', style: 'font-size: 12.5px; margin-bottom: 8px;', text: 'Encrypted at rest and sealed to your key — plaintext is held in the agentʼs memory only for your active session after you authorize activation, and re-locks when it ends. Deletion removes the local encrypted file and writes a tombstone.' }));
   wrap.appendChild(h('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap;' }, [projectInput, loadBtn, verifyBtn]));
   wrap.appendChild(status);
   wrap.appendChild(listEl);
