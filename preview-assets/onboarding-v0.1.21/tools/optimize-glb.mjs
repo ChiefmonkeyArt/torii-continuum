@@ -35,7 +35,7 @@ import {
 import draco3d from 'draco3dgltf';
 import sharp from 'sharp';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, statSync, realpathSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
@@ -49,6 +49,17 @@ if (!srcPath) {
   process.exit(1);
 }
 const outPath = process.argv[3] || join(__dirname, '..', 'assets', 'chiefmonkey-onboarding.glb');
+
+// FE-16: refuse to overwrite input with output. Normalize through symlinks where
+// a path already exists so a symlink alias of the source is also caught, rather
+// than silently rewriting the asset this tool is meant to transform.
+{
+  const canonical = (p) => (existsSync(p) ? realpathSync(p) : resolve(p));
+  if (canonical(srcPath) === canonical(outPath)) {
+    console.error('error: source and output resolve to the same file — refusing to overwrite the input asset.');
+    process.exit(1);
+  }
+}
 
 function clipDuration(anim) {
   let dur = 0;
@@ -78,6 +89,12 @@ async function main() {
   const root = doc.getRoot();
 
   const before = inventory(root);
+
+  // FE-16: capture original provenance up front, before any transform/write, so
+  // the manifest describes the true source even if a later step touched the same
+  // bytes (previously source size/hash were measured after the output write).
+  const srcBytes = statSync(srcPath).size;
+  const sourceSha256 = createHash('sha256').update(readFileSync(srcPath)).digest('hex');
 
   // ── Drop forbidden clips (single source of truth: runtime filter) ──
   const dropped = [];
@@ -135,14 +152,13 @@ async function main() {
   // ── Report ──
   const outDoc = await io.read(outPath);
   const after = inventory(outDoc.getRoot());
-  const srcBytes = statSync(srcPath).size;
   const outBytes = statSync(outPath).size;
   const sha256 = createHash('sha256').update(readFileSync(outPath)).digest('hex');
 
   const manifest = {
-    asset: 'chiefmonkey-onboarding.glb',
+    asset: outPath.split('/').pop(),
     generated_from: srcPath.split('/').pop(),
-    source_sha256: createHash('sha256').update(readFileSync(srcPath)).digest('hex'),
+    source_sha256: sourceSha256,
     sha256,
     bytes_original: srcBytes,
     bytes_optimized: outBytes,

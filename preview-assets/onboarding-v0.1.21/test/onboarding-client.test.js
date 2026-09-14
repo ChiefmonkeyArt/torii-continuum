@@ -667,8 +667,10 @@ describe('reload wiring + preload cache guardrails', () => {
 
   it('character.js routes both stall and error through the retry policy', () => {
     expect(character).toContain('nextLoadAttempt');
-    expect(character).toContain("handleFailure('stall')");
-    expect(character).toContain("handleFailure('error')");
+    // FE-13: handleFailure now threads the load generation so a stale result is
+    // dropped — assert the wired form, not the pre-generation one.
+    expect(character).toContain("handleFailure('stall', gen)");
+    expect(character).toContain("handleFailure('error', gen)");
   });
 
   it('same-origin GLB/wasm preloads carry NO crossorigin (v0.1.11 fix kept)', () => {

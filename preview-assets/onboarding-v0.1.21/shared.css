@@ -43,9 +43,9 @@
   --neon: hsl(320 100% 68%);
 
   /* type */
-  --font-display: 'Cabinet Grotesk', ui-sans-serif, system-ui, sans-serif;
-  --font-body: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-display: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
 
   /* motion */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
