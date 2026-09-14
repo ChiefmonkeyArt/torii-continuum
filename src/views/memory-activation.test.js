@@ -105,6 +105,23 @@ describe('decryptEntries', () => {
     expect(out[0].content).toEqual({ fact: 'lives in X', why: 'stated' });
   });
 
+  it('carries a scoped entry project forward as scope (A09 scope-aware cache key)', async () => {
+    const list = [{
+      kind: 30094, d_tag: 'home-city', ciphertext: 'ct',
+      scope: { owner_hex: 'ab', bot_id: 'genesis', project: 'basho' },
+    }];
+    const decrypt = async () => JSON.stringify({ fact: 'lives in Kyoto' });
+    const out = await decryptEntries(list, 'pk', decrypt);
+    expect(out[0].scope).toBe('basho');
+  });
+
+  it('does not invent a scope for a flat (identity/intents/panic) entry', async () => {
+    const list = [{ kind: 30092, ciphertext: 'ct', source: 'flat' }];
+    const decrypt = async () => JSON.stringify({ name: 'Torii' });
+    const out = await decryptEntries(list, 'pk', decrypt);
+    expect(out[0].scope).toBeUndefined();
+  });
+
   it('lets a full event d-tag win over entry metadata d-tag', async () => {
     const event = { kind: 30094, tags: [['d', 'from-event']], content: '{}' };
     const list = [{ kind: 30094, d_tag: 'from-metadata', ciphertext: 'ct' }];

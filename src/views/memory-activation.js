@@ -91,6 +91,10 @@ export async function decryptEntries(list, pubkey, decrypt) {
     // payload is a plain fact object, not a full event), so carry it forward
     // here. A full event's own 'd' tag (below) still wins when present.
     if (e.d_tag) entry.d_tag = e.d_tag;
+    // A09 follow-up (scope-aware): carry a scoped-store entry's project forward
+    // so the RAM cache keys `${kind}:${scope}:${dTag}` and the same kind+d-tag
+    // under two projects no longer shadow each other.
+    if (e.scope && typeof e.scope.project === 'string') entry.scope = e.scope.project;
     if (parsed && Array.isArray(parsed.tags) && parsed.kind != null) {
       const dTag = parsed.tags.find((t) => Array.isArray(t) && t[0] === 'd');
       if (dTag && dTag[1]) entry.d_tag = dTag[1];
