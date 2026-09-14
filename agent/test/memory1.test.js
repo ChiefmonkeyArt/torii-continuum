@@ -430,6 +430,70 @@ test('portability: DEFAULT DENY — bundle signed by the wrong key is rejected',
   h.cleanup();
 });
 
+// ── audit A10: exact item-set binding ───────────────────────────────────────
+
+function clone(x) { return JSON.parse(JSON.stringify(x)); }
+
+test('portability: A10 — altered item kind (30094→other) is rejected', async () => {
+  const h = harness();
+  const bundle = signBundle(await seedAndExport(h), SK_A);
+  bundle.items[0].kind = (bundle.items[0].kind || 30094) + 1; // body kind no longer matches signed manifest
+  const v = h.portability.verifyBundle(bundle, { expectedOwnerHex: PK_A });
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /not bound by signed manifest/);
+  h.cleanup();
+});
+
+test('portability: A10 — altered bot scope is rejected', async () => {
+  const h = harness();
+  const bundle = signBundle(await seedAndExport(h), SK_A);
+  bundle.items[0].scope = { ...bundle.items[0].scope, bot_id: 'some-other-bot' };
+  const v = h.portability.verifyBundle(bundle, { expectedOwnerHex: PK_A });
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /not bound by signed manifest/);
+  h.cleanup();
+});
+
+test('portability: A10 — omitted body item is rejected', async () => {
+  const h = harness();
+  const bundle = signBundle(await seedAndExport(h), SK_A);
+  bundle.items = bundle.items.slice(0, 1); // drop one item, keep the signed manifest intact
+  const v = h.portability.verifyBundle(bundle, { expectedOwnerHex: PK_A });
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /item count mismatch/);
+  h.cleanup();
+});
+
+test('portability: A10 — duplicate body item is rejected', async () => {
+  const h = harness();
+  const bundle = signBundle(await seedAndExport(h), SK_A);
+  bundle.items[1] = clone(bundle.items[0]); // two items, same identity key — a duplicate
+  const v = h.portability.verifyBundle(bundle, { expectedOwnerHex: PK_A });
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /duplicate|not bound|missing/);
+  h.cleanup();
+});
+
+test('portability: A10 — extra (unlisted) body item is rejected', async () => {
+  const h = harness();
+  const bundle = signBundle(await seedAndExport(h), SK_A);
+  const extra = clone(bundle.items[0]);
+  extra.d_tag = 'not-in-manifest'; // new identity key absent from the signed manifest
+  bundle.items.push(extra);
+  const v = h.portability.verifyBundle(bundle, { expectedOwnerHex: PK_A });
+  assert.equal(v.ok, false);
+  h.cleanup();
+});
+
+test('portability: A10 — reordered valid item set still verifies', async () => {
+  const h = harness();
+  const bundle = signBundle(await seedAndExport(h), SK_A);
+  bundle.items.reverse(); // same exact set, different order
+  const v = h.portability.verifyBundle(bundle, { expectedOwnerHex: PK_A });
+  assert.equal(v.ok, true, v.reason);
+  h.cleanup();
+});
+
 test('portability: import QUARANTINES (never live) and dedupes; approve promotes', async () => {
   const h = harness();
   const bundle = signBundle(await seedAndExport(h), SK_A);
