@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.149-alpha — audit A10: bundle verification binds the exact imported item set (2026-09-14)
+
+**What shipped.** Closes audit finding **A10** (bundle verification did not bind the full imported item set). `agent/lib/portability.mjs` `verifyBundle` previously matched imported items against the signed manifest by `project/class/d-tag/ciphertext-hash` only — omitting **item kind** and **bot scope** — and required no bijection/count match; import then consumed `it.kind` from the unsigned body. A genuinely signed manifest therefore still verified after altering a body item kind (30094→30095), dropping all body items, or injecting a mismatched item. The fix introduces a canonical per-item identity key (`bot_id`, project, class, kind, d-tag, sha256) computed for **both** the signed manifest and the unsigned body, and requires an exact 1:1 set binding — rejecting count mismatch, duplicates (either side), extra/unlisted items, and any kind/bot-scope divergence. Verification stays default-deny; import still quarantines (never auto-activates).
+
+**Tests.** Agent 572 → **578** (+6: altered kind, altered bot scope, omission, duplicate, extra item, reordered-valid-set-still-verifies). Frontend unchanged at **1848**.
+
+**Version markers bumped.** 0.2.148 → 0.2.149-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [unchanged — no architecture change, verification hardening]; strategy [unchanged]; ops [unchanged].
+
 ## v0.2.148-alpha — audit A13/A14/A15: NPC delivery contracts + public-work bounds (2026-09-14)
 
 **What shipped.** The reliability-contracts wave for the public greeter. **A13** — `routstr-discovery.mjs` no longer wraps the kind-38421 filter in `[{...}]`; it now passes the bare filter object `SimplePool.subscribeMany` actually expects (the same shape `npc-bridge.mjs` already documented), so live relay announcements stop being silently rejected. **A14** — `sendReply` no longer maps `pool.publish([url], wrap)` per URL and `allSettled`-over-the-outer-arrays (which fulfilled immediately and counted every relay as accepted); it publishes once to the relay set and settles the returned promise array, so rejections are observed and the fan-out count is real. **A15** — public-mode work is bounded: `createRateLimiter` now caps its per-sender bucket map (`maxBuckets` + stale-window eviction), inbound plaintext is truncated to `maxInputChars`, an in-memory `replayTtlMs` dedupe drops a re-delivered/re-wrapped gossip (`rumor.id`) so it isn't inferred+replied twice, and a drop-when-full semaphore (`maxConcurrent`) bounds concurrent handleEvent jobs. The two-voice boundary and fail-closed allowlist are untouched.
