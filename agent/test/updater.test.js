@@ -204,3 +204,46 @@ test('corrupt spool surfaced and cancellable', async () => {
     cleanup();
   }
 });
+
+test('A12: concurrent requests resolve one winner, not two queued', async () => {
+  const { path, cleanup } = tmp();
+  try {
+    const u = createUpdater({ requestPath: path });
+    // Two truly concurrent requests (no await in between) must not both pass the
+    // pending check and clobber the spool — exactly one wins, the other sees it.
+    const [r1, r2] = await Promise.all([
+      u.request({ tag: 'v0.2.70-alpha', currentVersion: '0.2.69-alpha', latestKnown: 'v0.2.70-alpha' }),
+      u.request({ tag: 'v0.2.71-alpha', currentVersion: '0.2.69-alpha', latestKnown: 'v0.2.71-alpha' }),
+    ]);
+    const winners = [r1, r2].filter((r) => r.ok === true);
+    assert.equal(winners.length, 1, 'exactly one request must be queued');
+    const pending = [r1, r2].find((r) => r.ok === false);
+    assert.equal(pending.code, 'pending');
+    // The spool holds only the winner's tag.
+    const s = await u.status();
+    assert.equal(s.pending, true);
+    assert.equal(s.tag, winners[0].tag);
+  } finally {
+    cleanup();
+  }
+});
+
+test('A12: concurrent request vs cancel leaves a consistent spool', async () => {
+  const { path, cleanup } = tmp();
+  try {
+    const u = createUpdater({ requestPath: path });
+    const [r, c] = await Promise.all([
+      u.request({ tag: 'v0.2.70-alpha', currentVersion: '0.2.69-alpha', latestKnown: 'v0.2.70-alpha' }),
+      u.cancel(),
+    ]);
+    // Regardless of interleaving, the end state must be consistent: either the
+    // request queued (cancel no-oped) or it was cancelled before queuing.
+    const s = await u.status();
+    assert.equal(s.corrupt, undefined);
+    // No assertion on which won — only that the two operations did not tear state.
+    assert.ok(r.ok === true || s.pending === false);
+    assert.equal(c.ok, true);
+  } finally {
+    cleanup();
+  }
+});

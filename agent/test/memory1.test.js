@@ -622,3 +622,34 @@ test('fenceUntrusted wraps content in the untrusted-data boundary', () => {
   assert.match(out, /untrusted data/);
   assert.ok(out.includes('the sky is green'));
 });
+
+test('consent: A12 — concurrent approve vs reject resolve exactly one winner', async () => {
+  const h = harness();
+  const payload = { text: 'race' };
+  const { ciphertext, payloadSha256 } = seal(h.consent, payload);
+  const p = await h.consent.propose({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', kind: 30094, dTag: 'race', ciphertext, payloadSha256 });
+
+  const [a, re] = await Promise.all([
+    h.consent.approve({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id, expectPayloadSha256: payloadSha256, approvalNonce: p.proposal.approval_nonce }),
+    h.consent.reject({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id, approvalNonce: p.proposal.approval_nonce }),
+  ]);
+
+  // Exactly one operation wins; the other fails closed against the settled state.
+  const succeeded = [a, re].filter((r) => r.ok === true);
+  assert.equal(succeeded.length, 1, 'approve and reject must not both succeed');
+
+  // Durable state matches the winner exactly.
+  const stored = await h.memstore.list({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p' });
+  if (a.ok) {
+    assert.equal(stored.count, 1, 'approve won → exactly one promoted item');
+    assert.equal(re.code, 'approved', 'reject must observe the approval');
+  } else {
+    assert.equal(stored.count, 0, 'reject won → nothing promoted');
+    assert.equal(re.ok, true);
+    assert.equal(a.code, 'rejected', 'approve must observe the rejection');
+  }
+  // The pending ciphertext is gone either way.
+  const pv = await h.consent.get({ ownerNpub: NPUB_A, botId: BOT, id: p.proposal.id });
+  assert.equal(pv.proposal.ciphertext, undefined);
+  h.cleanup();
+});
