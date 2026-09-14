@@ -25,7 +25,9 @@
   - **A02/A03 wallet durability (proof-before-marker + atomic writes + mutation lock)** — DONE v0.2.133-alpha (PR #159).
   - **A25 session-secret rotation safety hold** — DONE v0.2.132-alpha (PR #158).
   - **A13/A14/A15 NPC delivery contracts + public-work bounds** — DONE v0.2.148-alpha (bare filter object, publish promise-array flatten, global concurrency semaphore, TTL bucket cap, input cap, replay dedupe).
-  - **A09/A10/A12/A16/A17/A18/A19/A20/A21/A22/A23/A24, FE-01…16, Quest F1–F9/F02–F12, Suite installer, exposed/unbounded work, Stages 2–5** — queued.
+  - **A10 bundle verification exact-set binding** — DONE v0.2.149-alpha (PR #183; `verifyBundle` now binds kind + bot scope + an exact 1:1 item set, rejecting count/duplicate/extra/omission; import still quarantines).
+  - **A09 unified owner/bot memory inventory (legacy kind-dirs ↔ scoped memstore)** — NEXT / IN DESIGN. Architectural, not a one-file fix: requires one inventory API with explicit classes (identity 30092, facts 30094, skills 30095, intents 30096 + scoped conversation/episodic/project) + migration adapters for the facts/skills overlap, while preserving identity/panic/intents semantics. Needs an ADR before implementation.
+  - **A12/A16/A17/A18/A19/A20/A21/A22/A23/A24, FE-01…16, Quest F1–F9/F02–F12, Suite installer, exposed/unbounded work, Stages 2–5** — queued.
 
 - **PERF-FIX-1 — audit append O(1) + queue recovery. DONE v0.2.127-alpha.** `agent/lib/audit.mjs` caches the recovered tail (last hash + sequence) instead of re-reading the whole log twice per append, and recovers the promise queue after a rejection so one failed append can't poison later appends. See `torii-continuum-progress.md`.
 
