@@ -172,14 +172,21 @@ printf '%s\n' "$TAG" > "${stage_root}/VERSION"
 
 # ── 5. Manifest — non-secret build provenance ────────────────────────────────
 commit_sha="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
-build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# SB-18: pin the manifest timestamp to the commit's own committer date so two
+# builds of the same commit are byte-identical (a fresh wall-clock timestamp
+# made the manifest differ every build). Fall back to epoch, never the clock.
+build_time="$(git -C "$REPO_DIR" show -s --format=%cI HEAD 2>/dev/null || echo 1970-01-01T00:00:00Z)"
 node_version="$(node --version)"
 npm_version="$(npm --version)"
 platform="$(uname -s)-$(uname -m)"
 
-dist_hash="$(find "${stage_root}/dist" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
-agent_src_hash="$(find "${stage_root}/agent" -type f -not -path '*/node_modules/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
-agent_deps_hash="$(find "${stage_root}/agent/node_modules" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
+# SB-18: hash each component over RELATIVE paths (cd into the component dir and
+# feed `find .` to sha256sum) so the digest is independent of the absolute
+# staging path (mktemp -d randomizes it) and identical across machines.
+# The verifier recomputes these with the SAME relative-path method.
+dist_hash="$(cd "${stage_root}/dist" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
+agent_src_hash="$(cd "${stage_root}/agent" && find . -type f -not -path './node_modules/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
+agent_deps_hash="$(cd "${stage_root}/agent/node_modules" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
 
 cat > "${stage_root}/MANIFEST.json" <<JSON
 {
