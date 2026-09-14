@@ -1,21 +1,22 @@
 /**
  * POST /api/auth/refresh route contract (CONT-AUTH-1).
  *
- * Builds a minimal inline Fastify app that wires the SAME createAuth index.mjs
- * uses, with the SAME handler body, then exercises it via app.inject (no live
- * socket, no net). What matters here is the shape the BROWSER sees, because the
- * session state machine routes on the code: only max_lifetime_reached sends the
- * owner back to their signer.
+ * A22 follow-up: instead of copying the route handler into a minimal inline
+ * app, this drives the REAL `buildApp(cfg, deps)` registration with a
+ * fixed-clock `auth` double injected through the deps seam, then exercises it
+ * via app.inject (no live socket, no network). What matters is the shape the
+ * BROWSER sees, because the session state machine routes on the code: only
+ * max_lifetime_reached sends the owner back to their signer.
  *
  * Run: node --test   (from agent/)
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import Fastify from 'fastify';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { nip19 } from 'nostr-tools';
 import { createAuth } from '../core/auth.mjs';
+import { buildApp } from '../index.mjs';
 
 const TTL = 3600;
 const MAX_LIFETIME = 86400;
@@ -24,33 +25,34 @@ function silentLog() {
   return { info() {}, warn() {}, error() {} };
 }
 
-async function buildApp({ start = 1_700_000_000 } = {}) {
+// Minimal offline config: no Cashu mints (no network), rate-limit disabled,
+// silent logs, unresolved-but-valid Routstr/Ollama so construction stays lazy.
+function cfg(adminNpub) {
+  return {
+    session_secret: 'b'.repeat(64),
+    session_ttl_sec: TTL,
+    session_max_lifetime_sec: MAX_LIFETIME,
+    admin_npub: adminNpub,
+    admin_bootstrap: false,
+    server: { host: '127.0.0.1', port: 0, cors_origins: ['http://localhost:5173'] },
+    rate_limit: { enabled: false, max_challenges: 1000 },
+    cashu: { mints: [] },
+    routstr: { endpoint: 'https://example.invalid' },
+    ollama: { enabled: false },
+    model_router: { strategy: 'routstr_first' },
+    logging: { level: 'silent' },
+    _config_path: null,
+  };
+}
+
+async function setupApp({ start = 1_700_000_000 } = {}) {
   let t = start;
   const sk = generateSecretKey();
   const pk = getPublicKey(sk);
-  const auth = createAuth(
-    {
-      session_secret: 'b'.repeat(64),
-      session_ttl_sec: TTL,
-      session_max_lifetime_sec: MAX_LIFETIME,
-      rate_limit: { max_challenges: 1000 },
-      admin_npub: nip19.npubEncode(pk),
-      admin_bootstrap: false,
-    },
-    { now: () => t, log: silentLog() },
-  );
-
-  const app = Fastify({ logger: false });
-  // Mirrors index.mjs exactly.
-  app.post('/api/auth/refresh', async (req, reply) => {
-    const header = req.headers?.authorization || '';
-    const tok = header.startsWith('Bearer ') ? header.slice(7) : '';
-    const result = auth.refreshSession(tok);
-    if (!result.ok) {
-      return reply.code(401).send({ ok: false, code: result.code, reason: result.reason });
-    }
-    return { ok: true, token: result.token, expires_at: result.expires_at };
-  });
+  const c = cfg(nip19.npubEncode(pk));
+  const auth = createAuth(c, { now: () => t, log: silentLog() });
+  // A22: drive the REAL route registrations with the fixed-clock auth injected.
+  const { app } = await buildApp(c, { auth });
 
   const { challenge } = auth.issueChallenge('203.0.113.7');
   const event = finalizeEvent(
@@ -72,7 +74,7 @@ function refresh(app, token) {
 }
 
 test('a valid session is renewed and the browser gets a usable token back', async () => {
-  const { app, auth, token, advance } = await buildApp();
+  const { app, auth, token, advance } = await setupApp();
   advance(60);
   const res = await refresh(app, token);
   assert.equal(res.statusCode, 200);
@@ -85,7 +87,7 @@ test('a valid session is renewed and the browser gets a usable token back', asyn
 });
 
 test('the response carries no secret material', async () => {
-  const { app, token, advance } = await buildApp();
+  const { app, token, advance } = await setupApp();
   advance(60);
   const raw = (await refresh(app, token)).payload;
   assert.ok(!raw.includes('b'.repeat(64)), 'session_secret must never be echoed');
@@ -94,7 +96,7 @@ test('the response carries no secret material', async () => {
 });
 
 test('a missing Authorization header is refused, not crashed', async () => {
-  const { app } = await buildApp();
+  const { app } = await setupApp();
   const res = await refresh(app, null);
   assert.equal(res.statusCode, 401);
   assert.equal(res.json().code, 'invalid_session');
@@ -102,7 +104,7 @@ test('a missing Authorization header is refused, not crashed', async () => {
 });
 
 test('a non-Bearer Authorization header is refused', async () => {
-  const { app, token } = await buildApp();
+  const { app, token } = await setupApp();
   const res = await app.inject({
     method: 'POST',
     url: '/api/auth/refresh',
@@ -114,7 +116,7 @@ test('a non-Bearer Authorization header is refused', async () => {
 });
 
 test('an expired session is refused as expired', async () => {
-  const { app, token, advance } = await buildApp();
+  const { app, token, advance } = await setupApp();
   advance(TTL + 1);
   const res = await refresh(app, token);
   assert.equal(res.statusCode, 401);
@@ -125,7 +127,7 @@ test('an expired session is refused as expired', async () => {
 test('reaching the cap reports the one code the browser treats as terminal', async () => {
   // Renew every half hour right up to the cap — the session must stay usable
   // the whole way, so the refusal is unambiguously the cap and not an expiry.
-  const { app, token, advance } = await buildApp();
+  const { app, token, advance } = await setupApp();
   let current = token;
   const steps = MAX_LIFETIME / 1800 - 1;
   for (let i = 0; i < steps; i++) {
@@ -143,7 +145,7 @@ test('reaching the cap reports the one code the browser treats as terminal', asy
 
 test('a renewed token is accepted by the very next renewal', async () => {
   // The chain has to actually work end to end, not just parse.
-  const { app, token, advance } = await buildApp();
+  const { app, token, advance } = await setupApp();
   let current = token;
   for (let i = 0; i < 5; i++) {
     advance(600);
@@ -155,7 +157,7 @@ test('a renewed token is accepted by the very next renewal', async () => {
 });
 
 test('a tampered token is refused with the non-terminal code', async () => {
-  const { app, token } = await buildApp();
+  const { app, token } = await setupApp();
   const parts = token.split('.');
   parts[4] = 'f'.repeat(64);
   const res = await refresh(app, parts.join('.'));

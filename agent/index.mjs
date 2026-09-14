@@ -75,7 +75,12 @@ try {
  * The function body is kept at column 0 to stay diff-minimal and avoid
  * corrupting whitespace-sensitive string/template literals (A22).
  */
-export async function buildApp(cfg) {
+export async function buildApp(cfg, deps = {}) {
+// A22 follow-up: `deps` is the injection seam for tests to drive the REAL route
+// registrations with fixed-clock / in-memory doubles (auth, releaseChecker,
+// updater) instead of copying inline routes. Each entry defaults to the
+// production construction, so the entrypoint behaviour is unchanged when deps
+// is omitted.
 // trustProxy is a LOOPBACK-ONLY allow-list, never `true`. nginx terminates TLS
 // and proxies from 127.0.0.1 (or ::1), so only a connection whose socket peer
 // is loopback may set req.ip from X-Forwarded-For. If the agent is ever exposed
@@ -165,7 +170,7 @@ app.setErrorHandler((err, req, reply) => {
 // First-touch admin bootstrap (v0.2.26-alpha): the persister is injected so
 // auth stays filesystem-agnostic + unit-testable. It writes the claimed npub
 // back into the same config.yaml the daemon booted from.
-const auth = createAuth(cfg, {
+const auth = deps.auth ?? createAuth(cfg, {
   log: app.log,
   persistAdmin: (npub) => persistAdminNpub(cfg._config_path, npub),
 });
@@ -183,13 +188,13 @@ const projectSources = createProjectSources(cfg, { log: app.log });
 // The updater spools an admin-vetted update request into the agent's ONLY
 // writable path (memory/); a separate root-side ops applier re-validates it and
 // rewrites the deploy pin. The agent itself never execs or touches root files.
-const releaseChecker = createReleaseChecker({
+const releaseChecker = deps.releaseChecker ?? createReleaseChecker({
   currentVersion: VERSION,
   owner: cfg.update?.repo_owner,
   repo: cfg.update?.repo_name,
 });
 const updateAllowlist = Array.isArray(cfg.update?.allowlist) ? cfg.update.allowlist : [];
-const updater = createUpdater({
+const updater = deps.updater ?? createUpdater({
   requestPath: join(AGENT_ROOT, 'memory', 'update-request.json'),
   allowlist: updateAllowlist,
 });
