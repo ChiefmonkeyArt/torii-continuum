@@ -59,6 +59,23 @@ function integrityRoot(items) {
 }
 
 /**
+ * Canonical identity key for one memory item (audit A10). Binds bot scope,
+ * project, class, kind, d-tag AND ciphertext hash, so the unsigned body items
+ * must match the signed manifest item-for-item — an altered kind, a different
+ * bot, or a missing/extra item no longer verifies.
+ */
+function itemKey(it, defaultBotId) {
+  return JSON.stringify([
+    it.scope?.bot_id || defaultBotId || null,
+    it.scope?.project ?? null,
+    it.class ?? null,
+    it.kind ?? null,
+    it.d_tag ?? null,
+    it.sha256 ?? null,
+  ]);
+}
+
+/**
  * Build the deterministic manifest for a set of items. `items` each have
  * { class, kind, d_tag, scope:{bot_id,project}, sha256 }.
  */
@@ -188,9 +205,24 @@ export function createPortability(deps = {}) {
     const recomputed = sha256Hex(canonicalize(withoutDigest(m)));
     if (recomputed !== m.manifest_digest) return { ok: false, reason: 'manifest digest mismatch (tampered)' };
 
-    // Per-item ciphertext hash + shape validation, and cross-check vs manifest.
-    const manifestByKey = new Map();
-    for (const mi of m.items || []) manifestByKey.set(`${mi.scope?.project}:${mi.class}:${mi.d_tag}:${mi.sha256}`, mi);
+    // Exact item-set binding (audit A10): the unsigned body items must map 1:1
+    // onto the signed manifest items — including kind and bot scope, not just
+    // project/class/d-tag/hash. Reject missing, extra, duplicate, or re-scoped
+    // items before anything in the unsigned body is consumed as truth.
+    const manifestItems = m.items || [];
+    if (!Number.isInteger(m.item_count) || m.item_count !== manifestItems.length) {
+      return { ok: false, reason: 'manifest item_count does not match listed items' };
+    }
+    if (bundle.items.length !== manifestItems.length) {
+      return { ok: false, reason: 'item count mismatch (bundle vs signed manifest)' };
+    }
+    const manifestKeys = new Set();
+    for (const mi of manifestItems) {
+      const mk = itemKey(mi, m.bot_id);
+      if (manifestKeys.has(mk)) return { ok: false, reason: 'manifest lists a duplicate item' };
+      manifestKeys.add(mk);
+    }
+    const bodyKeys = new Set();
     for (const it of bundle.items) {
       if (typeof it.ciphertext !== 'string' || it.ciphertext.length === 0) return { ok: false, reason: 'item missing ciphertext' };
       if (Buffer.byteLength(it.ciphertext, 'utf8') > MAX_ITEM_BYTES) return { ok: false, reason: 'item exceeds max size' };
@@ -200,9 +232,15 @@ export function createPortability(deps = {}) {
       if (proj != null && !validProjectSlug(proj)) return { ok: false, reason: 'item bad project scope' };
       const actual = sha256Hex(it.ciphertext);
       if (actual !== it.sha256) return { ok: false, reason: 'item ciphertext hash mismatch (corrupt/tampered)' };
-      if (!manifestByKey.has(`${proj}:${it.class}:${it.d_tag}:${it.sha256}`)) {
-        return { ok: false, reason: 'item not listed in manifest' };
-      }
+      const bk = itemKey({ class: it.class, kind: it.kind, d_tag: it.d_tag, scope: { bot_id: it.scope?.bot_id, project: proj }, sha256: it.sha256 }, m.bot_id);
+      if (bodyKeys.has(bk)) return { ok: false, reason: 'bundle lists a duplicate item' };
+      bodyKeys.add(bk);
+    }
+    for (const k of bodyKeys) {
+      if (!manifestKeys.has(k)) return { ok: false, reason: 'item not bound by signed manifest (kind/bot/scope mismatch)' };
+    }
+    for (const k of manifestKeys) {
+      if (!bodyKeys.has(k)) return { ok: false, reason: 'signed manifest item missing from bundle' };
     }
 
     // integrity_root must match the manifest item hashes.
