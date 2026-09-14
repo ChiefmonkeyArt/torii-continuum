@@ -9,6 +9,19 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.165-alpha — FE-05 concurrent top-up double-complete + FE-09 seed removal (2026-09-14)
+
+**What shipped.**
+
+- **FE-05** (`src/views/routstr.js`) — `topUpPollTick` now re-verifies it is still the current singleton (and not already completing) AFTER the async status await, before processing a `paid` result. Two overlapping ticks that both pass the pre-await guard and both observe `paid` now drain once and invoke `onPaid` exactly once; the loser returns `{ duplicate: true }`. New concurrency regression test drives two in-flight `topUpPollTick` calls through a deferred paid status and asserts `onPaid` fires once.
+- **FE-09** (`src/data/store.js`) — the normal store's first-run state is now EMPTY: no phantom projects, sessions, milestones, todos, files, or fabricated marketplace bounties (demo examples stay in `src/demo/demo-fixtures.js`). `initStore` now gates on the presence of a VALID persisted blob (a present `projects` array), not `projects.length > 0`, so global `members` and board `columns`/`cards` survive an operator who deleted every project. Retains the Routstr placeholder event only because the Routstr view renders structurally from it (the hardcoded model pricing is a deferred follow-up to agent-authoritative catalog data).
+
+**Tests.** Added `src/data/store-seed.test.js` (3 tests); updated `src/data/board.test.js` (persistence + isolation tests now create a real project instead of leaning on removed seeds). Frontend 1859 → **1863**.
+
+**Version markers bumped.** 0.2.164 → 0.2.165-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done, all four]; continuity docs [done]; ops/ADR [n/a — no server/ops change]; deploy workflow [n/a]; Space mirror [updated after merge].
+
 ## v0.2.164-alpha — FE-14: deploy known-hosts pinning (2026-09-14)
 
 **What shipped.** The deploy workflow no longer blindly pipes `ssh-keyscan` into `known_hosts` (which only proved the key was consistent with the SAME untrusted scan, not its identity). It now verifies the live VPS ed25519 host key against a pre-established `VPS_DEPLOY_HOST_KEY` fingerprint — an independently-provisioned repo secret — and fails closed before any remote command on mismatch. Secret set; box rotation is a deliberate secret edit. Updated the secrets comment in the workflow; `ops/deploy-bootstrap.sh` already advised out-of-band verification, so no change there.

@@ -8,7 +8,7 @@
  */
 
 import { KIND, makeEvent, newId, nowSec } from './schema.js';
-import { seedProjects, seedSessions, seedMilestones, seedTodos, seedFiles, seedMarketTasks, seedRoutstr } from './seed.js';
+import { seedRoutstr } from './seed.js';
 import { parseNpub } from '../lib/npub.js';
 import { getStore, putStore, isAgentConfigured, getStoredToken } from './agent.js';
 
@@ -80,8 +80,10 @@ export async function hydrateFromServer() {
     if (!Array.isArray(next.columns)) next.columns = [];
     if (!Array.isArray(next.cards)) next.cards = [];
     if (!Array.isArray(next.members)) next.members = [];
-    if (!Array.isArray(next.marketTasks) || next.marketTasks.length === 0) next.marketTasks = seedMarketTasks();
-    if (!next.routstr) next.routstr = seedRoutstr();
+    // FE-09: never fabricate marketplace bounties for a real profile. An empty/
+    // absent marketTasks list is honest (nothing to show), not an invitation to
+    // inject prototype seed data.
+    if (!Array.isArray(next.marketTasks)) next.marketTasks = [];
     state = next;
     notify();
   } catch (_e) { /* best-effort hydration */ }
@@ -89,7 +91,11 @@ export async function hydrateFromServer() {
 
 export function initStore() {
   const loaded = loadRaw();
-  if (loaded && Array.isArray(loaded.projects) && loaded.projects.length > 0) {
+  // FE-09: gate on the PRESENCE of a valid persisted blob, not on it having
+  // projects. Members (and board columns/cards) are global or slug-keyed and
+  // must survive even an operator who has deleted every project. First run
+  // (loadRaw() → null) still falls through to the empty seed.
+  if (loaded && Array.isArray(loaded.projects)) {
     state = { ...emptyState(), ...loaded };
     // Guarantee shape after schema evolution. Older persisted state predates
     // the Kanban board (kinds 30083/30084); coerce the arrays so board reads
@@ -98,10 +104,8 @@ export function initStore() {
     if (!Array.isArray(state.columns)) state.columns = [];
     if (!Array.isArray(state.cards)) state.cards = [];
     if (!Array.isArray(state.members)) state.members = [];
-    if (!Array.isArray(state.marketTasks) || state.marketTasks.length === 0) {
-      state.marketTasks = seedMarketTasks();
-    }
-    if (!state.routstr) state.routstr = seedRoutstr();
+    // FE-09: don't fabricate marketplace bounties for an existing store either.
+    if (!Array.isArray(state.marketTasks)) state.marketTasks = [];
   } else {
     state = seedInitialState();
     persist();
@@ -119,13 +123,13 @@ export function initStore() {
 }
 
 function seedInitialState() {
+  // FE-09: a fresh REAL profile starts EMPTY — no phantom projects, sessions,
+  // milestones, todos, or files, and no fake marketplace bounties. (The demo
+  // build gets its explicitly-labelled examples from src/demo/demo-fixtures.js,
+  // not from this store.) Routstr keeps a placeholder event ONLY because the
+  // Routstr view still renders structurally from it; its hardcoded model list
+  // is replaced by agent-authoritative catalog data in a follow-up.
   const s = emptyState();
-  s.projects = seedProjects();
-  s.sessions = seedSessions();
-  s.milestones = seedMilestones();
-  s.todos = seedTodos();
-  s.files = seedFiles();
-  s.marketTasks = seedMarketTasks();
   s.routstr = seedRoutstr();
   return s;
 }

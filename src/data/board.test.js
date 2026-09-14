@@ -37,7 +37,7 @@ afterEach(() => {
   delete globalThis.localStorage;
 });
 
-const SLUG = 'continuum'; // one of the seeded projects
+const SLUG = 'continuum'; // arbitrary test slug — board ops are slug-keyed and do not require a real project record
 const OTHER = 'torii-quest';
 
 describe('defaults', () => {
@@ -286,14 +286,17 @@ describe('input validation & payload bounds', () => {
 describe('persistence & migration', () => {
   it('persists board state across a reload (new store instance, same storage)', async () => {
     const stub = globalThis.localStorage;
-    const [todo] = store.boardColumnsFor(SLUG);
-    store.addCard(SLUG, todo.content.id, { title: 'survive reload' });
+    // FE-09: no seeded projects anymore, so create a real one to own this board.
+    const created = store.createProject({ name: 'Board Persist' });
+    const slug = created.content.slug;
+    const [todo] = store.boardColumnsFor(slug);
+    store.addCard(slug, todo.content.id, { title: 'survive reload' });
 
     vi.resetModules();
     const store2 = await import('./store.js');
     store2.initStore();
-    const cols = store2.boardColumnsFor(SLUG);
-    const cards = store2.cardsFor(SLUG, cols[0].content.id);
+    const cols = store2.boardColumnsFor(slug);
+    const cards = store2.cardsFor(slug, cols[0].content.id);
     expect(cards.map((c) => c.content.title)).toContain('survive reload');
     expect(stub).toBe(globalThis.localStorage); // same backing store
   });
@@ -336,11 +339,17 @@ describe('regressions — existing project surface still works', () => {
   });
 
   it('leaves todos/milestones/sessions untouched by board ops', () => {
-    const beforeTodos = store.todosFor(SLUG).length;
-    const [todo] = store.boardColumnsFor(SLUG);
-    store.addCard(SLUG, todo.content.id, { title: 'unrelated' });
-    expect(store.todosFor(SLUG).length).toBe(beforeTodos);
-    expect(store.milestonesFor(SLUG).length).toBeGreaterThan(0);
+    const created = store.createProject({ name: 'Board Isolation' });
+    const slug = created.content.slug;
+    store.addTodo(slug, 'a todo');
+    const beforeTodos = store.todosFor(slug).length;
+    const beforeMilestones = store.milestonesFor(slug).length;
+    const beforeSessions = store.sessionsFor(slug).length;
+    const [todo] = store.boardColumnsFor(slug);
+    store.addCard(slug, todo.content.id, { title: 'unrelated' });
+    expect(store.todosFor(slug).length).toBe(beforeTodos);
+    expect(store.milestonesFor(slug).length).toBe(beforeMilestones);
+    expect(store.sessionsFor(slug).length).toBe(beforeSessions);
   });
 });
 
