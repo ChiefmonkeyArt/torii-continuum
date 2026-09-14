@@ -187,7 +187,7 @@ function renderTodos(slug, S, opts) {
 
   const card = h('div', { class: 'card', style: 'margin-bottom: 16px;' }, [
     h('h3', { text: 'Todo list' }),
-    h('p', { class: 'muted', text: 'Every todo is a signed, addressable nostr event — portable across clients.' }),
+    h('p', { class: 'muted', text: 'Every todo is an addressable record in your project — kept locally and portable across clients.' }),
     list,
   ]);
   return card;

@@ -233,12 +233,15 @@ export function renderRoutstr(mount, opts = {}) {
 
   mount.appendChild(h('div', { style: 'height: 16px' }));
 
-  // Endpoint + advanced
+  // Endpoint + spending guide. FE-09 follow-up: these are local-only preferences
+  // written to the browser store — the live Routstr endpoint and any hard spending
+  // cap are SERVER configuration (agent/core/config.mjs), not this UI. Labelled
+  // honestly rather than implying they redirect traffic or enforce a cap.
   const settings = h('div', { class: 'card' }, [
-    h('h3', { text: 'Endpoint' }),
-    h('p', { class: 'muted', text: 'Point Continuum at any Routstr-compatible endpoint. Default is api.routstr.com.' }),
+    h('h3', { text: 'Endpoint + spending guide' }),
+    h('p', { class: 'muted', text: 'Saved in this browser only. The live Routstr endpoint and any hard spending cap are server configuration — these fields record your preference and are not yet enforced.' }),
     h('div', { class: 'form-row' }, [
-      h('label', { text: 'Routstr URL' }),
+      h('label', { text: 'Routstr URL (preference)' }),
       (() => {
         const inp = h('input', { type: 'text', value: c.endpoint });
         inp.addEventListener('change', demoIntercept(demo, () => updateRoutstr({ endpoint: inp.value.trim() || 'https://api.routstr.com' })));
@@ -246,7 +249,7 @@ export function renderRoutstr(mount, opts = {}) {
       })(),
     ]),
     h('div', { class: 'form-row' }, [
-      h('label', { text: 'Monthly Cashu budget (sats)' }),
+      h('label', { text: 'Monthly Cashu budget (sats, guide)' }),
       (() => {
         const inp = h('input', { type: 'number', value: c.usage.monthlyBudget, min: 0, step: 1000 });
         inp.addEventListener('change', demoIntercept(demo, () => updateRoutstr({ usage: { ...c.usage, monthlyBudget: Math.max(0, parseInt(inp.value || '0', 10)) } })));
@@ -1210,8 +1213,12 @@ function startBalancePoll(mount) {
     const sats = readBalanceSats(r.data);
     if (sats == null) return; // no numeric balance in payload — leave display as-is
     const cur = getRoutstr().content;
-    if (cur.cashuBalanceSats !== sats || !cur.connected) {
-      updateRoutstr({ connected: true, cashuBalanceSats: sats });
+    // FE-09: update the balance WITHOUT flipping `connected` back on — a balance
+    // result must never silently reconnect the UI after the operator disconnected
+    // (disconnect is a deliberate local toggle, and the poll was previously
+    // re-marking it connected on the next tick).
+    if (cur.cashuBalanceSats !== sats) {
+      updateRoutstr({ cashuBalanceSats: sats });
       // Refresh the balance number in place. A targeted textContent write avoids
       // tearing/re-rendering the whole page mid-interaction, and only touches the
       // node if it is still on-screen (Routstr page still mounted).
