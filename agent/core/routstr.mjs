@@ -31,6 +31,7 @@
  */
 
 import { appendFile, mkdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { dirname, resolve, join } from 'node:path';
 import { agentRoot } from './config.mjs';
 import {
@@ -139,21 +140,30 @@ function fetchWithTimeout(url, opts, ms) {
 
 /**
  * Env-gated 520-diagnosis probe (OFF by default; set ROUTSTR_DEBUG=1 to enable).
- * Logs ONLY non-sensitive response metadata: HTTP status, Cloudflare cf-ray,
- * whether a refund header rode back, the token PREFIX (e.g. "cashuA"/"cashuB",
- * never the full token), and the first ~200 chars of the body. NEVER logs the
- * full token, proofs, or message contents.
+ * Logs ONLY non-sensitive metadata: HTTP status, Cloudflare cf-ray, whether a
+ * refund header rode back, the token PREFIX (e.g. "cashuA"/"cashuB", never the
+ * full token), the response content-type, byte length, and a SHA-256 fingerprint
+ * of the body (A24). NEVER logs the raw body, the full token, proofs, or message
+ * contents — truncation is not redaction, so no upstream content is echoed.
  */
-function debugProbe(log, res, body, token) {
+export function debugProbe(log, res, body, token) {
   if (process.env.ROUTSTR_DEBUG !== '1') return;
   let cfRay = null;
+  let contentType = null;
   const h = res?.headers;
-  if (h && typeof h.get === 'function') cfRay = h.get('cf-ray') ?? h.get('CF-Ray');
-  else if (h && typeof h === 'object') cfRay = h['cf-ray'] ?? h['CF-Ray'];
+  if (h && typeof h.get === 'function') {
+    cfRay = h.get('cf-ray') ?? h.get('CF-Ray');
+    contentType = h.get('content-type');
+  } else if (h && typeof h === 'object') {
+    cfRay = h['cf-ray'] ?? h['CF-Ray'];
+    contentType = h['content-type'];
+  }
+  const text = typeof body === 'string' ? body : '';
+  const bodySha = text ? createHash('sha256').update(text).digest('hex').slice(0, 16) : 'none';
   log.info(`[routstr:debug] status=${res?.status} cf-ray=${cfRay || 'none'} ` +
     `refund_hdr=${readRefundHeader(res) ? 'yes' : 'no'} ` +
     `token_prefix=${typeof token === 'string' ? token.slice(0, 7) : 'n/a'} ` +
-    `body="${typeof body === 'string' ? body.slice(0, 200) : ''}"`);
+    `content_type=${contentType || 'none'} body_bytes=${Buffer.byteLength(text)} body_sha256=${bodySha}`);
 }
 
 function modelForSkill(cfg, skill) {

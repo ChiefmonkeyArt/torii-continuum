@@ -27,7 +27,7 @@ import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getEncodedToken, getDecodedToken, CheckStateEnum } from '@cashu/cashu-ts';
-import { createRoutstr } from '../core/routstr.mjs';
+import { createRoutstr, debugProbe } from '../core/routstr.mjs';
 import { createWallet } from '../core/wallet.mjs';
 
 function silentLog() {
@@ -504,4 +504,45 @@ test('wallet.receive stores the mint-swapped proofs, not the token decoded proof
   assert.equal(persisted.proofs.length, 1);
   assert.equal(persisted.proofs[0].secret, 'fresh-from-mint', 'must persist the mint-swapped proofs');
   assert.ok(!persisted.proofs.some((p) => p.secret === 'foreign-untrusted'), 'must never trust the token decoded proofs verbatim');
+});
+
+// ─── A24: safe diagnostics (no raw upstream body in logs) ────────────────────
+
+test('A24: debug probe logs metadata + fingerprint, never the canary body', () => {
+  const CANARY = 'SECRET_CANARY_9f3a1b2c4d5e6f7a8b9c';
+  const lines = [];
+  const log = { info: (m) => lines.push(String(m)) };
+  const res = {
+    status: 200,
+    headers: { get: (k) => (k === 'content-type' ? 'application/json' : null) },
+  };
+  const body = `{"choices":[{"message":{"content":"generated ${CANARY} text"}}]}`;
+  const prev = process.env.ROUTSTR_DEBUG;
+  process.env.ROUTSTR_DEBUG = '1';
+  try {
+    debugProbe(log, res, body, 'cashuAtok');
+  } finally {
+    if (prev === undefined) delete process.env.ROUTSTR_DEBUG;
+    else process.env.ROUTSTR_DEBUG = prev;
+  }
+  assert.equal(lines.length, 1);
+  const msg = lines[0];
+  assert.ok(!msg.includes(CANARY), 'raw body content must never reach the logger');
+  assert.ok(!msg.includes('generated'), 'user/generated text must never reach the logger');
+  assert.match(msg, /body_bytes=/);
+  assert.match(msg, /body_sha256=[0-9a-f]{16}/);   // safe fingerprint
+  assert.match(msg, /token_prefix=cashuAt/);         // prefix only, never full token
+});
+
+test('A24: debug probe is a no-op unless ROUTSTR_DEBUG=1', () => {
+  const called = [];
+  const log = { info: (m) => called.push(String(m)) };
+  const prev = process.env.ROUTSTR_DEBUG;
+  delete process.env.ROUTSTR_DEBUG;
+  try {
+    debugProbe(log, { status: 500, headers: { get: () => null } }, 'HTML <b>boom</b>', 'cashuAtok');
+  } finally {
+    if (prev !== undefined) process.env.ROUTSTR_DEBUG = prev;
+  }
+  assert.equal(called.length, 0);
 });
