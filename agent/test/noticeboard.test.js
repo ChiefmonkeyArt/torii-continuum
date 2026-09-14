@@ -47,6 +47,14 @@ test('normalizeNotices enforces the notice cap and coerces unknown kinds to noti
   assert.equal(coerced[0].kind, 'notice');
 });
 
+test('A16: writer rejects non-finite dates and floors finite ones to whole seconds', () => {
+  assert.equal(normalizeNotices([{ title: 'x', starts_at: 'garbage' }]), null);
+  assert.equal(normalizeNotices([{ title: 'x', ends_at: 'NaN' }]), null);
+  const out = normalizeNotices([{ title: 'x', starts_at: 1700000000.9, ends_at: '1700000100.9' }]);
+  assert.equal(out[0].starts_at, 1700000000);
+  assert.equal(out[0].ends_at, 1700000100);
+});
+
 test('buildNoticeboardEvent emits kind 30078 with the d tag and versioned JSON', () => {
   const ev = buildNoticeboardEvent([{ kind: 'sale', title: 'Skin', price_sats: 500 }], { createdAt: 1730000000 });
   assert.equal(ev.kind, NOTICEBOARD_KIND);

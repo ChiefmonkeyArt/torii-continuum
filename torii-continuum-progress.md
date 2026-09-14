@@ -9,6 +9,20 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.156-alpha — audit A16: shared noticeboard schema + cache coalescing (2026-09-14)
+
+**What shipped.** Finding **A16** (read/write contract drift) is closed:
+
+- **One schema, one vocabulary.** `parseNoticeboard` (greeter read path) now runs through `normalizeNoticesRead`, which shares the writer's exact field bounds (`MAX_TITLE`/`MAX_BODY`/`MAX_URL`, `NOTICE_KINDS`, `MAX_NOTICES`) — so a signed board can no longer smuggle unbounded fields or a foreign `kind` into the model's system context. The writer (`normalizeNotices`) now rejects non-finite `starts_at`/`ends_at` instead of signing a poisoned `NaN`.
+- **The reader renders the intended detail.** `formatNotices` now carries body, url, and start/end dates (previously dropped), and labels each notice's time status (`ongoing`/`ended`/`upcoming`) so the "current auctions and sales" framing is not a lie for expired/future entries.
+- **Cache stampede closed.** `createNoticeboardCache` coalesces a burst of cold calls onto one in-flight fetch instead of fanning out one relay fetch per concurrent question.
+
+**Tests.** Agent 595 → **600** (+5: reader bounding, kind/entry skip, time-status + detail rendering, cache coalescing, writer finite-date). Frontend unchanged at **1850**.
+
+**Version markers bumped.** 0.2.155 → 0.2.156-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [N/A]; strategy [unchanged]; ops [unchanged].
+
 ## v0.2.155-alpha — audit A20: config normalization + persistence contracts (2026-09-14)
 
 **What shipped.** Finding **A20** (contradictory config contracts) is closed:
