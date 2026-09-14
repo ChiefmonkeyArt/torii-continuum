@@ -19,7 +19,7 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import cookie from '@fastify/cookie';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { writeFile, mkdir, unlink, readdir, readFile, stat, rename } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { loadConfig, persistAdminNpub } from './core/config.mjs';
@@ -68,8 +68,14 @@ try {
   console.error(`[boot] could not read agent/package.json for VERSION: ${e.message}`);
 }
 
-const cfg = loadConfig();
-
+/**
+ * buildApp(cfg) — construct + register the full Fastify app WITHOUT listening or
+ * binding a port. Import this from tests to drive the REAL route registrations
+ * via app.inject(); production runs it from the entrypoint guard at the bottom.
+ * The function body is kept at column 0 to stay diff-minimal and avoid
+ * corrupting whitespace-sensitive string/template literals (A22).
+ */
+export async function buildApp(cfg) {
 // trustProxy is a LOOPBACK-ONLY allow-list, never `true`. nginx terminates TLS
 // and proxies from 127.0.0.1 (or ::1), so only a connection whose socket peer
 // is loopback may set req.ip from X-Forwarded-For. If the agent is ever exposed
@@ -92,7 +98,11 @@ const app = Fastify({
 await app.register(cors, {
   origin: cfg.server.cors_origins,
   credentials: true,
-  methods: ['GET', 'POST', 'OPTIONS'],
+  // A22: reflect the full set of methods the routes actually register. The
+  // preflight list previously omitted DELETE (and PUT), so a cross-origin
+  // DELETE /api/pending/:file preflight was answered with no DELETE allow and
+  // the browser refused the actual request.
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 });
 
 // Cookie parsing (HERMES-DASHBOARD-1) — read-only. Populates req.cookies so
@@ -1606,12 +1616,28 @@ app.post(
   },
 );
 
+  return {
+    app, cfg, auth, wallet, routstr, router, ollama, projectSources,
+    releaseChecker, updater, memoryCache, memory, reflector, chatSkill, audit,
+    genesis, memstore, sessionStore, consent, portability, secretStore,
+    routstrProvider, projectStore, onboarding,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────
-// Startup
+// Entrypoint (run only when invoked directly, never on import — A22)
 // ─────────────────────────────────────────────────────────────
 
-const port = cfg.server.port;
-const host = cfg.server.host;
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMain) {
+  const mainCfg = loadConfig();
+  const {
+    app, auth, wallet, memoryCache, memory, memstore,
+  } = await buildApp(mainCfg);
+
+  const port = mainCfg.server.port;
+  const host = mainCfg.server.host;
 
 // A21: run the retention sweep once at boot so retention-bounded classes are
 // actually reaped in production (conversation 7d / episodic 365d — semantic/
@@ -1635,9 +1661,9 @@ try {
       : 'admin: UNCLAIMED — first verified NIP-07 caller will claim (first-touch)',
   );
   app.log.info(`cashu mints: ${wallet.mints.join(', ') || '(none)'}`);
-  app.log.info(`routstr endpoint: ${cfg.routstr.endpoint}`);
-  app.log.info(`ollama: enabled=${cfg.ollama?.enabled === true} endpoint=${cfg.ollama?.endpoint || '(default)'}`);
-  app.log.info(`model router strategy: ${cfg.model_router?.strategy || 'routstr_first'}`);
+  app.log.info(`routstr endpoint: ${mainCfg.routstr.endpoint}`);
+  app.log.info(`ollama: enabled=${mainCfg.ollama?.enabled === true} endpoint=${mainCfg.ollama?.endpoint || '(default)'}`);
+  app.log.info(`model router strategy: ${mainCfg.model_router?.strategy || 'routstr_first'}`);
   app.log.info(`character loaded: ${memory.status().character_loaded}, memory unlocked: ${memoryCache.isUnlocked()}`);
 } catch (err) {
   app.log.error({ err }, 'listen failed');
@@ -1652,4 +1678,5 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     await app.close();
     process.exit(0);
   });
+}
 }
