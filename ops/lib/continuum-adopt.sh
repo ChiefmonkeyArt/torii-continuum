@@ -67,25 +67,38 @@ readonly CONTINUUM_STATE_ITEMS=(config.yaml memory ciphertexts pending)
 
 # ── layout_detect <app_dir> <agent_dir> <standalone_dir> ────────────────────────
 #   Prints exactly one of:
-#     mode=existing-ansible   app_dir IS a git checkout (.git) AND agent has config
-#     mode=partial-adoption   agent dir has state but app_dir has NO .git — a
-#                             half-migrated tree from a failed adoption. NEVER
-#                             treated as a valid existing-Ansible install.
+#     mode=existing-ansible   app_dir is a VERIFIED managed release (a git checkout
+#                             via .git, OR an artifact install via its VERSION
+#                             file) AND agent has config
+#     mode=partial-adoption   agent dir has state but app_dir has NO managed-release
+#                             marker (no .git, no VERSION) — a half-migrated tree
+#                             from a failed adoption. NEVER treated as a valid
+#                             existing-Ansible install.
 #     mode=adopt-standalone   no Ansible-side state, but standalone state exists
 #     mode=fresh              nothing anywhere
 #   Precedence matters:
-#     * a real git-backed Ansible install wins (never re-adopt over it);
-#     * a NON-git app dir carrying state is a partial adoption to be recovered,
-#       not an install to build on top of (that was the v0.2.41 failure mode).
+#     * a real managed install (git-backed OR artifact-installed) wins — never
+#       re-adopt over it;
+#     * a NON-managed app dir carrying state is a partial adoption to be
+#       recovered, not an install to build on top of (the v0.2.41 failure mode).
+#
+#   SB-02: the artifact fast-path extracts dist/ + agent/ + VERSION with NO .git.
+#   Treating ".git only" as the sole managed-release proof caused a live
+#   artifact-installed Continuum (agent has state, no .git) to be misdetected as
+#   partial-adoption, which then preferred a STALE standalone state dir as the
+#   authoritative source over the running install.
 layout_detect() {
   local app_dir="$1" agent_dir="$2" standalone_dir="$3"
-  local agent_has_state=false standalone_has_state=false
+  local agent_has_state=false standalone_has_state=false managed_release=false
   { [ -f "${agent_dir}/config.yaml" ] || [ -d "${agent_dir}/memory" ]; } && agent_has_state=true
   { [ -f "${standalone_dir}/config.yaml" ] || [ -d "${standalone_dir}/memory" ]; } && standalone_has_state=true
+  # Verified managed release: a git checkout (.git) OR an artifact install
+  # (VERSION is generated only by the artifact builder, never committed).
+  { [ -d "${app_dir}/.git" ] || [ -f "${app_dir}/VERSION" ]; } && managed_release=true
 
-  if [ -d "${app_dir}/.git" ] && [ -f "${agent_dir}/config.yaml" ]; then
+  if [ "$managed_release" = true ] && [ -f "${agent_dir}/config.yaml" ]; then
     echo "mode=existing-ansible"
-  elif [ "$agent_has_state" = true ] && [ ! -d "${app_dir}/.git" ]; then
+  elif [ "$agent_has_state" = true ] && [ "$managed_release" = false ]; then
     echo "mode=partial-adoption"
   elif [ "$standalone_has_state" = true ]; then
     echo "mode=adopt-standalone"

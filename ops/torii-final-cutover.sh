@@ -111,6 +111,28 @@ if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
   exit 1
 fi
 
+# ── Guard 2b: legacy downgrade consent (audit SB-26) ─────────────────────
+# This cutover is a version-FROZEN one-off that pins torii-base v0.1.4 and
+# Continuum v0.2.67-alpha — running it today DOWNGRADES a modern install, and
+# its rollback restores the deployment CONFIG pin rather than the prior code.
+# It is retired from normal operator use: refuse to run unless the operator
+# explicitly opts in, in full knowledge of the downgrade.
+if [[ "${FORCE_LEGACY_CUTOVER:-}" != "1" ]]; then
+  cat >&2 <<'EOF'
+[cutover] FATAL: torii-final-cutover.sh is a retired legacy downgrade path.
+
+  It pins torii-base v0.1.4 + Continuum v0.2.67-alpha and is NOT safe against
+  a current install (its rollback restores a config pin, not the prior code).
+
+  Use the sanctioned Suite installer instead: TORII_CONTINUUM_REF=<tag>
+  /opt/torii-suite/checkout/installers/install-continuum.sh
+
+  To run this legacy script anyway, in explicit knowledge of the downgrade:
+      FORCE_LEGACY_CUTOVER=1 sudo bash ops/torii-final-cutover.sh
+EOF
+  exit 1
+fi
+
 readonly DOMAIN="chiefmonkey.art"
 readonly BASE_REPO="https://github.com/ChiefmonkeyArt/torii-base.git"
 readonly BASE_TAG="v0.1.4"

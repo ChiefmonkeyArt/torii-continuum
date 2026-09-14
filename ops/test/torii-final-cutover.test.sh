@@ -123,6 +123,25 @@ printf '%s' "$src_out" | grep -qiF 'do not source' \
   && ! printf '%s' "$src_out" | grep -qF 'Starting final VPS cutover' \
   && ok "sourcing refuses and never enters main()" || bad "sourcing was not refused safely"
 
+# ── 2b. SB-26: retired legacy downgrade path fails closed without consent ──────
+# The script pins torii-base v0.1.4 + Continuum v0.2.67-alpha — running it today
+# DOWNGRADES a modern install, and its rollback restores a config pin rather than
+# the prior code. It must refuse to run unless FORCE_LEGACY_CUTOVER=1.
+grep -qF 'FORCE_LEGACY_CUTOVER' "$CUTOVER" && ok "defines the FORCE_LEGACY_CUTOVER consent guard" || bad "no FORCE_LEGACY_CUTOVER guard"
+grep -qiF 'retired legacy downgrade' "$CUTOVER" && ok "consent guard says the path is a retired legacy downgrade" || bad "guard does not warn of a downgrade"
+grep -qF 'restores a config pin, not the prior code' "$CUTOVER" && ok "guard warns the rollback restores a config pin, not code" || bad "guard lacks the config-pin rollback warning"
+grep -qF 'FORCE_LEGACY_CUTOVER=1 sudo bash ops/torii-final-cutover.sh' "$CUTOVER" \
+  && ok "guard documents the explicit opt-in invocation" || bad "guard does not document the opt-in"
+# The guard must come AFTER the root check (so non-root still gets 'must run as
+# root') and BEFORE the version constants (so nothing else runs on refusal).
+guard_line="$(grep -n 'FORCE_LEGACY_CUTOVER' "$CUTOVER" | head -1 | cut -d: -f1)"
+root_line="$(grep -n 'must run as root' "$CUTOVER" | head -1 | cut -d: -f1)"
+const_line="$(grep -n 'BASE_TAG="v0.1.4"' "$CUTOVER" | head -1 | cut -d: -f1)"
+[[ -n "$guard_line" && -n "$root_line" && -n "$const_line" \
+   && "$guard_line" -gt "$root_line" && "$guard_line" -lt "$const_line" ]] \
+  && ok "consent guard sits after root check, before version constants" \
+  || bad "consent guard misplaced (root=$root_line guard=$guard_line const=$const_line)"
+
 # ── 3. Pinned annotated tags + version markers ───────────────────────────────
 grep -qF 'BASE_TAG="v0.1.4"' "$CUTOVER"                 && ok "pins torii-base v0.1.4"             || bad "torii-base tag not pinned"
 grep -qF 'BASE_VERSION="0.1.4"' "$CUTOVER"              && ok "pins torii-base VERSION 0.1.4"      || bad "torii-base version not pinned"

@@ -127,23 +127,60 @@ node_bin() {
   printf '%s' "$nb"
 }
 
-# Run the nsec helper once, caching its JSON so a single install only ever
-# mints ONE nsec. `NPC_NSEC`, when set, reuses that identity.
-_NSEC_JSON=""
-nsec_json() {
-  if [ -z "$_NSEC_JSON" ]; then
-    [ -f "$AGENT_DIR/scripts/npc-nsec.mjs" ] || \
-      die "npc-nsec.mjs not found under AGENT_DIR=$AGENT_DIR (is the repo checked out?)"
-    _NSEC_JSON="$(cd "$AGENT_DIR" && \
-      ${NPC_NSEC:+NPC_NSEC="$NPC_NSEC"} \
-      node scripts/npc-nsec.mjs)" || die "npc-nsec (mint) failed"
-  fi
-  printf '%s' "$_NSEC_JSON"
-}
+# ── identity resolution (SB-04 hardened) ─────────────────────────────────────
+# Resolve the single greeter identity exactly once per install: reuse NPC_NSEC
+# (passed as a REAL environment assignment — never an expanded command word) or
+# mint a fresh nsec. Cache all three derived fields in this shell so npub,
+# nsec_hex and nsec_bech32 always describe the SAME key, and fail closed (write
+# no config) on invalid/inconsistent output.
+_IDENTITY_HEX=""
+_IDENTITY_NPUB=""
+_IDENTITY_BECH32=""
 
-nsec_field() {
-  local field="$1"
-  nsec_json | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>process.stdout.write(JSON.parse(d).$field))"
+resolve_identity() {
+  [ -n "$_IDENTITY_HEX" ] && return 0
+  local helper="$AGENT_DIR/scripts/npc-nsec.mjs"
+  [ -f "$helper" ] || die "npc-nsec.mjs not found under AGENT_DIR=$AGENT_DIR (is the repo checked out?)"
+
+  local raw
+  if [ -n "${NPC_NSEC:-}" ]; then
+    raw="$(cd "$AGENT_DIR" && NPC_NSEC="$NPC_NSEC" node scripts/npc-nsec.mjs)" \
+      || die "npc-nsec failed to reuse supplied NPC_NSEC"
+  else
+    raw="$(cd "$AGENT_DIR" && node scripts/npc-nsec.mjs)" \
+      || die "npc-nsec failed to mint a greeter identity"
+  fi
+
+  # Parse + validate in ONE node pass so the three fields are inseparable parts
+  # of a single identity; any parse/format mismatch yields empty -> fail closed.
+  local parsed
+  parsed="$(printf '%s' "$raw" | node -e '
+    let d="";
+    process.stdin.on("data", (c) => (d += c)).on("end", () => {
+      try {
+        const o = JSON.parse(d);
+        const hex = String(o.nsec_hex || "").toLowerCase();
+        const npub = String(o.npub || "");
+        const bech32 = String(o.nsec_bech32 || "");
+        if (!/^[0-9a-f]{64}$/.test(hex)) return;
+        if (!npub.startsWith("npub1")) return;
+        if (!bech32.startsWith("nsec1")) return;
+        process.stdout.write(hex + "\t" + npub + "\t" + bech32);
+      } catch { /* invalid JSON → empty → fail closed below */ }
+    });
+  ')" || true
+
+  if [ -z "$parsed" ]; then
+    die "npc-nsec returned an invalid or inconsistent identity (audit SB-04)"
+  fi
+  _IDENTITY_HEX="$(printf '%s' "$parsed" | cut -f1)"
+  _IDENTITY_NPUB="$(printf '%s' "$parsed" | cut -f2)"
+  _IDENTITY_BECH32="$(printf '%s' "$parsed" | cut -f3)"
+
+  if [ -z "$_IDENTITY_HEX" ] || [ -z "$_IDENTITY_NPUB" ] || [ -z "$_IDENTITY_BECH32" ]; then
+    die "npc-nsec identity fields incomplete (audit SB-04)"
+  fi
+  return 0
 }
 
 # Render the .env. NPC_NSEC is the one secret; the 64-hex is what the gateway
@@ -216,13 +253,14 @@ case "$MODE" in
     exit 0
     ;;
   generate)
+    resolve_identity
     cat <<EOF
 
 Greeter identity (minted at install; the nsec is disposable and holds no funds):
 
-npub=$(nsec_field npub)
-nsec_hex=$(nsec_field nsec_hex)
-nsec_bech32=$(nsec_field nsec_bech32)
+npub=${_IDENTITY_NPUB}
+nsec_hex=${_IDENTITY_HEX}
+nsec_bech32=${_IDENTITY_BECH32}
 
 Store nsec_bech32 somewhere safe ONLY if you intend to keep this exact identity
 across reinstalls. Otherwise it is safe to lose — a fresh install mints a new one.
@@ -255,7 +293,8 @@ if [ -f "$ENV_FILE" ] && grep -qE '^NPC_NSEC=[0-9a-f]{64}$' "$ENV_FILE"; then
   info "reusing existing $ENV_FILE (nsec already present)"
   NPC_NSEC="$(grep -E '^NPC_NSEC=' "$ENV_FILE" | cut -d= -f2-)"
 else
-  { render_env "$(nsec_field nsec_hex)"; } > "$ENV_FILE" || die "write $ENV_FILE failed"
+  resolve_identity
+  { render_env "$_IDENTITY_HEX"; } > "$ENV_FILE" || die "write $ENV_FILE failed"
   chown "${NAP_BRIDGE_USER}:${NAP_BRIDGE_USER}" "$ENV_FILE"
   chmod 0600 "$ENV_FILE"
 fi
