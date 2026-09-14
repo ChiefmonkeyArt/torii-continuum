@@ -47,6 +47,7 @@ import { createHash, randomBytes } from 'node:crypto';
  * @property {string} dTag        - the parameterized-replaceable d-tag
  * @property {object} content     - decrypted JSON payload (see events.mjs for shapes)
  * @property {number} createdAt   - unix seconds
+ * @property {string} scope       - project slug (scoped store) or null (flat identity/intents/panic)
  * @property {string} source      - 'unlock' | 'draft' — where the entry originated
  */
 
@@ -67,7 +68,7 @@ import { createHash, randomBytes } from 'node:crypto';
  */
 export function createMemoryCache(log, { ttlSec = 86400, now = () => Math.floor(Date.now() / 1000) } = {}) {
   /** @type {Map<string, MemoryEntry>} */
-  let cache = new Map(); // key = `${kind}:${dTag}` (latest replaces older)
+  let cache = new Map(); // key = `${kind}:${scope}:${dTag}` scoped / `${kind}:${dTag}` flat (latest replaces older)
   let unlockedAt = null;
   let unlockedFor = null; // npub the cache is unlocked for
 
@@ -95,7 +96,12 @@ export function createMemoryCache(log, { ttlSec = 86400, now = () => Math.floor(
     for (const e of entries) {
       if (!e || typeof e !== 'object') continue;
       if (!e.kind || !e.dTag) continue;
-      const key = `${e.kind}:${e.dTag}`;
+      // A09 follow-up (scope-aware): a scoped-store entry keys on its project
+      // slug, so the same kind+d-tag under two projects no longer shadows each
+      // other in the flat prompt cache. Flat identity/intents/panic (no scope)
+      // keep the legacy flat key.
+      const scope = (typeof e.scope === 'string' && e.scope.length > 0) ? e.scope : null;
+      const key = scope ? `${e.kind}:${scope}:${e.dTag}` : `${e.kind}:${e.dTag}`;
       // If we've seen this key already in this batch, keep the newer createdAt.
       const prev = next.get(key);
       if (prev && prev.createdAt > (e.createdAt || 0)) continue;
@@ -103,6 +109,7 @@ export function createMemoryCache(log, { ttlSec = 86400, now = () => Math.floor(
         eventId: e.eventId || null,
         kind: e.kind,
         dTag: e.dTag,
+        scope,
         content: e.content,
         createdAt: e.createdAt || Math.floor(Date.now() / 1000),
         source: e.source || 'unlock',
@@ -118,9 +125,9 @@ export function createMemoryCache(log, { ttlSec = 86400, now = () => Math.floor(
   /**
    * Get one entry by kind + d-tag.
    */
-  function get(kind, dTag) {
+  function get(kind, dTag, scope = null) {
     ensureFresh();
-    return cache.get(`${kind}:${dTag}`) || null;
+    return cache.get(scope ? `${kind}:${scope}:${dTag}` : `${kind}:${dTag}`) || null;
   }
 
   /**

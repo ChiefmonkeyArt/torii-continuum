@@ -76,13 +76,17 @@ Portability `buildBundle` now returns an `excluded` list naming identity,
 intents, and panic as **intentionally** not portable, rather than silently
 omitting them.
 
-## Remaining follow-up
+## Remaining follow-up (resolved)
 
-**Scope-aware unlock cache.** The RAM cache keys `${kind}:${dTag}` (flat). If
-an operator later stores the same kind+d-tag under two projects, the flat
-prompt cache would shadow one. Resolve by making the unlock key scope-aware
-(`${kind}:${project}:${dTag}`) when the scoped store is the only source —
-deferred because the operator's own agent is flat in practice today.
+The scope-aware unlock cache key landed in v0.2.173-alpha. The RAM cache now
+keys scoped entries `${kind}:${project}:${dTag}` instead of the flat
+`${kind}:${dTag}`, so the same kind+d-tag stored under two projects no longer
+shadows one. Flat identity/intents/panic (no scope) keep the legacy flat key.
+`createMemoryCache.unlock()` stores a per-entry `scope`; `get(kind, dTag,
+scope)` is scope-aware; the `/api/memory/unlock` + `/api/memory/activate`
+normalizers and the frontend `decryptEntries` carry the scoped entry's project
+forward. Regression tests: `agent/test/memory-cache-scope.test.js` +
+`src/views/memory-activation.test.js`.
 
 ## Regression requirements
 

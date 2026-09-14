@@ -9,6 +9,12 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.173-alpha — A09 scope-aware unlock cache key (2026-09-14)
+
+**What shipped.** The A09 memory-inventory follow-up (scope-aware unlock cache). `createMemoryCache` in `agent/lib/crypto.mjs` now keys scoped entries `${kind}:${project}:${dTag}` instead of the flat `${kind}:${dTag}`, so the same kind+d-tag stored under two projects no longer shadows one in the RAM prompt cache; flat identity/intents/panic (no scope) keep the legacy flat key. `unlock()` stores a per-entry `scope`; `get(kind, dTag, scope)` is scope-aware. The `/api/memory/unlock` + `/api/memory/activate` normalizers and the frontend `decryptEntries` carry the scoped entry's project forward. Regression tests: new `agent/test/memory-cache-scope.test.js` (shadowing, flat-vs-scoped isolation, within-scope dedupe) + two new `memory-activation.test.js` cases. `docs/memory-inventory.md` marks the follow-up resolved.
+
+**Version markers bumped.** 0.2.172 → 0.2.173-alpha (all four). Agent 619 / frontend 1123 green.
+
 ## v0.2.172-alpha — A22 real-app test seam (deps injection + real route registration) (2026-09-14)
 
 **What shipped.** `buildApp(cfg)` in `agent/index.mjs` now accepts an optional `deps = {}` injection seam exposing `auth` / `releaseChecker` / `updater` (each defaults to the production construction, so the entrypoint is unchanged). Two tests that previously copied inline route handlers into a minimal Fastify app now import `buildApp` and drive the REAL registrations via `app.inject()`: `auth-refresh-route.test.js` (fixed-clock `auth` double) and `update-routes.test.js` (in-memory `releaseChecker`/`updater` doubles + a real minted session token). This closes the audit’s A22 “copied route/fake passes independently of real wiring” gap — behaviour pins are now exercised against production wiring, not a drifting copy. The un-measured “cohesive domain-plugin split” of `index.mjs` remains deferred (the testability seam is now in place; the monolith split is a future maintainability pass, not a defect).
