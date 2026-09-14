@@ -9,6 +9,19 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.159-alpha — audit A19: discovery trust + fan-out policy (2026-09-14)
+
+**What shipped.** Finding **A19** (discovery trust/fan-out) is closed:
+
+- **Remote-origin guard.** Relay-announced provider URLs now pass `safeRemoteBaseUrl` — https-only, no embedded credentials, and rejection of private/loopback/link-local/reserved IP literals (IPv4 ranges + IPv6 `::1`/`::`/ULA/`fe80::/10`/multicast and IPv4-mapped `::ffff:a.b.c.d`), plus `localhost`/`.local`/`.internal`/`home.arpa` names. Operator-configured bootstrap endpoints stay exempt (a self-hosted private provider is a deliberate opt-in).
+- **Redirect + bounds.** Catalog fetch uses `redirect:'error'`, a 1 MiB body cap, a per-provider model cap, and windowed concurrency (≤8) instead of unbounded `Promise.all`. Provider count is capped at 50.
+
+**Tests.** Agent 605 → **608** (+3: remote-origin reject matrix incl. IPv4-mapped + metadata IP, announcement-vs-bootstrap boundary, redirect/concurrency). Frontend unchanged at **1850**.
+
+**Version markers bumped.** 0.2.158 → 0.2.159-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [N/A]; strategy [unchanged]; ops [unchanged].
+
 ## v0.2.158-alpha — audit A23: effective constitution version in working values (2026-09-14)
 
 **What shipped.** Finding **A23** (runtime working values ignored the acknowledged constitution) is closed. `buildWorkingValues` now resolves the EFFECTIVE covenant — acknowledged version, else birth pin, else current — and renders the header from that version's frozen body, plus the CURRENT safety floor (which binds regardless of version). An unrecognised birth pin fails closed to the current covenant and is flagged. The `/api/chat` and `/api/memory/working-values` routes now resolve the caller's `constitution.version`/`acknowledged_version` from their genesis manifest and pass it through, so a bot declining non-floor upgrades is no longer told the latest header is binding.
