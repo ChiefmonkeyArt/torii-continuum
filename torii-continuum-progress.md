@@ -9,6 +9,14 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.170-alpha — FE-15 test-discovery config (2026-09-14)
+
+**What shipped.** `vitest.config.js` now pins an explicit include list — current SPA (`src/**` + `test/**`) plus the current `.21` onboarding test only — and drops `passWithNoTests: true`. An archived/misplaced suite can no longer silently inflate the count, and a test-discovery failure now fails the run instead of green-passing empty (stale “root has no vitest suites” comment removed). The other FE-15 sub-items were covered by the FE-04/FE-05/FE-08 behavioural regressions. Tests **1120 green (66 files)**.
+
+**Version markers bumped.** 0.2.169 → 0.2.170-alpha (all four package files).
+
+**Update-All checklist.** Code [vitest config only]; version markers [done, all four]; continuity docs [done]; ops/ADR [n/a]; deploy workflow [n/a]; Space mirror [updated after merge].
+
 ## v0.2.169-alpha — FE-10/11/12/13/16 current onboarding hardening (2026-09-14)
 
 **What shipped.** The current onboarding (`.21`) hardened across five audit findings: (FE-10) a late full-key reveal after leave/hide/expiry is now blocked by a post-await `sessionLive()` + `onStep5` re-check in reveal/copy/download, and NWC/Routstr secret inputs clear before the await; (FE-11) deck keyboard nav ignores form controls, the step-dot `active` state is reachable again, `inert`/`aria-hidden` make only the active panel reachable, and “Seed this project” is replaced with honest copy; (FE-12) the Fontshare CDN is gone in favour of the system font stack and heavy preloads are desktop-gated; (FE-13) a load-generation guard disposes stale GLB results so a stalled original that resolves late can't add a second model; (FE-16) `optimize-glb.mjs` refuses same-path source/output, captures provenance before writing, and derives the manifest asset name from the output path.
