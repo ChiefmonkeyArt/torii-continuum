@@ -125,7 +125,10 @@ function queryKind38421(pool, relays, timeoutMs) {
     };
     const timer = setTimeout(finish, timeoutMs);
     try {
-      pool.subscribeMany(relays, [{ kinds: [KIND_PROVIDER_ANNOUNCEMENT], limit: 200 }], {
+      // nostr-tools SimplePool.subscribeMany takes a BARE filter object as arg 2
+      // (not an array of filters) — passing `[{...}]` sends a malformed wire REQ
+      // that every relay rejects. See npc-bridge.mjs's documented contract.
+      pool.subscribeMany(relays, { kinds: [KIND_PROVIDER_ANNOUNCEMENT], limit: 200 }, {
         onevent: (ev) => { events.push(ev); },
         oneose: () => finish(),
         onclose: () => finish(),

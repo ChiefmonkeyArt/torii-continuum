@@ -115,16 +115,31 @@ export function isSenderAllowed(senderHex, allowlist) {
  * `throttle` flag (send one notice), the rest are silent. Each message is
  * checked BEFORE inference — the expensive part.
  *
- * @param {{windowMs:number, maxPerWindow:number, now:function}} [opts]
- * @returns {{check:function(string):{allowed:boolean, throttle:boolean}}}
+ * @param {{windowMs:number, maxPerWindow:number, maxBuckets:number, now:function}} [opts]
+ * @returns {{check:function(string):{allowed:boolean, throttle:boolean}, size:function():number}}
  */
-export function createRateLimiter({ windowMs = 60_000, maxPerWindow = 6, now = () => Date.now() } = {}) {
+export function createRateLimiter({ windowMs = 60_000, maxPerWindow = 6, maxBuckets = 10_000, now = () => Date.now() } = {}) {
   const win = Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 60_000;
   const max = Number.isFinite(maxPerWindow) && maxPerWindow >= 1 ? maxPerWindow : 6;
+  const cap = Number.isFinite(maxBuckets) && maxBuckets >= 1 ? maxBuckets : 10_000;
   const buckets = new Map(); // senderHex(lower) -> { windowStart, count, notified }
 
   function keyOf(senderHex) {
     return typeof senderHex === 'string' ? senderHex.trim().toLowerCase() : '';
+  }
+
+  // Bound the bucket map (audit A15): in public mode arbitrary identities create
+  // one bucket each, so an unbounded map grows forever. Expire stale windows and,
+  // if still over cap, evict the oldest-inserted bucket (FIFO).
+  function evict(t) {
+    for (const [k, b] of buckets) {
+      if (t >= b.windowStart + win) buckets.delete(k);
+    }
+    while (buckets.size >= cap) {
+      const oldest = buckets.keys().next().value;
+      if (oldest === undefined) break;
+      buckets.delete(oldest);
+    }
   }
 
   function check(senderHex) {
@@ -133,6 +148,7 @@ export function createRateLimiter({ windowMs = 60_000, maxPerWindow = 6, now = (
     const t = now();
     let b = buckets.get(key);
     if (!b || t >= b.windowStart + win) {
+      evict(t);
       b = { windowStart: t, count: 0, notified: false };
       buckets.set(key, b);
     }
@@ -145,7 +161,7 @@ export function createRateLimiter({ windowMs = 60_000, maxPerWindow = 6, now = (
     return { allowed: true, throttle: false };
   }
 
-  return { check };
+  return { check, size: () => buckets.size };
 }
 
 /**
@@ -351,6 +367,33 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
   const now = () => Math.floor(Date.now() / 1000);
   const rateLimit = createRateLimiter(cfg?.rateLimit || {});
 
+  // Global work bound (audit A15): public mode admits arbitrary authenticated
+  // identities, so a per-sender limiter alone can't stop a fan of fresh keys from
+  // launching unbounded simultaneous decrypt/inference/reply jobs. A drop-when-full
+  // semaphore caps concurrent handleEvent jobs (no unbounded queue).
+  const maxConcurrent = Number.isFinite(cfg?.maxConcurrent) && cfg.maxConcurrent >= 1 ? cfg.maxConcurrent : 8;
+  let activeJobs = 0;
+
+  // Per-message input cap (audit A15): bound the prompt length sent to inference.
+  const maxInputChars = Number.isFinite(cfg?.maxInputChars) && cfg.maxInputChars >= 1 ? cfg.maxInputChars : 2000;
+
+  // In-memory replay dedupe (audit A15): remember processed gossip ids for a TTL
+  // so a relay that re-delivers (or a sender that re-wraps) the SAME rumor doesn't
+  // cost inference + a duplicate reply. Non-durable by design — restart replay and
+  // the "backlog or not" freshness policy are separate product decisions.
+  const replayTtlMs = Number.isFinite(cfg?.replayTtlMs) && cfg.replayTtlMs > 0 ? cfg.replayTtlMs : 5 * 60_000;
+  const seen = new Map(); // rumorId(lower) -> expiry (Date.now() ms)
+  function isReplay(rumorId) {
+    if (!rumorId) return false;
+    const t = Date.now();
+    for (const [k, exp] of seen) if (t >= exp) seen.delete(k);
+    return seen.has(String(rumorId).toLowerCase());
+  }
+  function markSeen(rumorId) {
+    if (!rumorId) return;
+    seen.set(String(rumorId).toLowerCase(), Date.now() + replayTtlMs);
+  }
+
   /**
    * Process one inbound gift wrap (kind 1059) end-to-end. Silently drops
    * anything that fails verification / unwrap / allowlist / rate-limit /
@@ -397,6 +440,15 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
       }
       const senderHex = seal.pubkey.toLowerCase();
 
+      // 4b. Replay dedupe — if this exact gossip (rumor.id) was already processed
+      //     within the TTL, drop it: a re-delivered or re-wrapped rumor must not
+      //     cost a second inference or produce a duplicate reply.
+      if (isReplay(rumor.id)) {
+        log.warn(`[npc-gateway] dropped replay ${String(rumor.id).slice(0, 8)}…`);
+        return;
+      }
+      markSeen(rumor.id);
+
       // 5. Access gate — before any inference. Public mode admits every
       //    authenticated sender (rate-limited next); otherwise fail-closed
       //    allowlist (empty admits nobody).
@@ -421,7 +473,7 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
         return;
       }
 
-      const plaintext = typeof rumor.content === 'string' ? rumor.content : '';
+      const plaintext = (typeof rumor.content === 'string' ? rumor.content : '').slice(0, maxInputChars);
 
       // 7. Local inference with the greeter persona in the system turn, plus
       //    the current noticeboard (auctions/sales/events) when one is posted.
@@ -466,10 +518,32 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
     const sealTpl = buildSealTemplate({ ciphertext: sealCipher, greeterHex, createdAt: now() });
     const signedSeal = await signer.signEvent(sealTpl);
     const wrap = await giftWrap(signedSeal, senderHex);
-    const pubs = await Promise.allSettled(
-      cfg.relayUrls.map((url) => pool.publish([url], wrap)),
-    );
+    // nostr-tools SimplePool.publish(relays, event) returns an ARRAY of promises —
+    // one per relay — not a single promise. The old code mapped `publish([url], wrap)`
+    // per URL and `allSettled` those outer arrays, which fulfilled immediately and
+    // counted every relay as accepted without awaiting any delivery. Publish once to
+    // the relay set and settle the returned promise array so rejections are observed.
+    const perRelay = pool.publish(cfg.relayUrls, wrap);
+    const pubs = await Promise.allSettled(Array.isArray(perRelay) ? perRelay : [perRelay]);
     return pubs.filter((p) => p.status === 'fulfilled').length;
+  }
+
+  /**
+   * Global-work-bound dispatch (audit A15). The subscription callback fires once
+   * per message with no backpressure, so this semaphore gates handleEvent directly
+   * (drop-when-full) rather than queueing unbounded async jobs.
+   */
+  async function dispatch(event) {
+    if (activeJobs >= maxConcurrent) {
+      log.warn('[npc-gateway] overloaded — dropped message (global concurrency bound)');
+      return;
+    }
+    activeJobs += 1;
+    try {
+      await handleEvent(event);
+    } finally {
+      activeJobs -= 1;
+    }
   }
 
   /** Open the gift-wrap subscription and run until stop() is called. */
@@ -485,7 +559,7 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
     sub = pool.subscribeMany(
       cfg.relayUrls,
       { kinds: [KIND_WRAP], '#p': [greeterHex] },
-      { onevent: (e) => { handleEvent(e); } },
+      { onevent: (e) => { dispatch(e); } },
     );
     log.info(`[npc-gateway] subscribed to kind-${KIND_WRAP} for ${greeterHex.slice(0, 8)}… on ${cfg.relayUrls.length} relay(s)`);
   }
@@ -495,5 +569,5 @@ export function createNpcBridge({ cfg, greeterHex, log, pool, signer, chat, gift
     if (sub && typeof sub.close === 'function') sub.close();
   }
 
-  return { start, stop, handleEvent };
+  return { start, stop, handleEvent, dispatch, _activeJobs: () => activeJobs };
 }

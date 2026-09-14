@@ -131,6 +131,23 @@ test('discoverProviders merges bootstrap + kind-38421 announcements, dedupes, sk
   assert.equal(new Set(urls).size, urls.length, 'duplicates collapsed by normalised URL');
 });
 
+test('kind-38421 discovery passes a bare filter object (not an array) to subscribeMany (A13)', async () => {
+  let capturedFilter;
+  const fakePool = {
+    subscribeMany(_relays, filters, handlers) {
+      capturedFilter = filters;
+      handlers.oneose();
+      return {};
+    },
+    close() {},
+  };
+  await discoverProviders({ bootstrapEndpoints: [], relays: ['wss://relay.test'], pool: fakePool });
+  assert.ok(capturedFilter, 'subscribeMany was called');
+  assert.equal(Array.isArray(capturedFilter), false, 'filter must be a bare object, not [filter]');
+  assert.ok(Array.isArray(capturedFilter.kinds), 'filter has a kinds array');
+  assert.equal(capturedFilter.limit, 200, 'filter carries the catalog limit');
+});
+
 // ── runtime routing via createRoutstr ──
 
 async function baseCfg(model) {
