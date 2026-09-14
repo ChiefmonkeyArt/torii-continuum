@@ -61,6 +61,15 @@ describe('routstr.js — balance poll uses the correct field', () => {
   it('refreshes the balance number in place without a full re-render mid-poll', () => {
     expect(routstrSrc).toMatch(/balanceNumEl/);
   });
+
+  it('a balance result never reconnects the UI after a local disconnect (FE-09)', () => {
+    // The old bug: every balance result set `connected: true`, so the poll
+    // silently re-connected the display after the operator clicked Disconnect.
+    // The poll now patches cashuBalanceSats only, preserving the operator's
+    // deliberate `connected` choice.
+    expect(routstrSrc).toMatch(/updateRoutstr\(\{\s*cashuBalanceSats:\s*sats\s*\}\)/);
+    expect(routstrSrc).not.toMatch(/updateRoutstr\(\{\s*connected:\s*true,\s*cashuBalanceSats:\s*sats/);
+  });
 });
 
 describe('routstr.js — two matching wallet cards (v0.2.70-alpha)', () => {

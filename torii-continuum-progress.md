@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.171-alpha — FE-09 routstr follow-ups (honesty + disconnect-reconnect) (2026-09-14)
+
+**What shipped.** Three honesty/correctness fixes: (1) the Routstr endpoint/budget card is relabelled “Endpoint + spending guide” with copy stating these are local-browser preferences while the live endpoint + any hard cap are server configuration and not yet enforced here — previously the UI implied these fields redirected traffic / capped spend when they only wrote local store state; (2) the balance poll no longer flips `connected` back to true on every tick, so a local Disconnect is no longer silently re-connected on the next balance result (new structural regression test); (3) the false “signed” claims in `projects.js` (“signed reference” → “local reference”) and `projectHome.js` (“signed, addressable nostr event” → “addressable record … kept locally”) match the null `sig`/`id` in `schema.js` until an event is actually signed.
+
+**Tests.** 1120 → **1121** (66 files; one new regression assertion).
+
+**Version markers bumped.** 0.2.170 → 0.2.171-alpha (all four).
+
+**Update-All checklist.** Code [done]; tests [done]; version markers [done, all four]; continuity docs [done]; ops/ADR [n/a]; deploy workflow [n/a]; Space mirror [updated after merge].
+
 ## v0.2.170-alpha — FE-15 test-discovery config (2026-09-14)
 
 **What shipped.** `vitest.config.js` now pins an explicit include list — current SPA (`src/**` + `test/**`) plus the current `.21` onboarding test only — and drops `passWithNoTests: true`. An archived/misplaced suite can no longer silently inflate the count, and a test-discovery failure now fails the run instead of green-passing empty (stale “root has no vitest suites” comment removed). The other FE-15 sub-items were covered by the FE-04/FE-05/FE-08 behavioural regressions. Tests **1120 green (66 files)**.

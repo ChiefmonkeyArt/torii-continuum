@@ -108,7 +108,7 @@ function openNewProject() {
   const repoRow = h('div', { class: 'form-row', style: 'display:none' }, [
     h('label', { text: 'Repository URL' }),
     repoInput,
-    h('div', { class: 'muted', style: 'font-size:11.5px', text: 'Continuum imports the repo as a project reference. Nothing is cloned yet — the URL is stored as a signed reference.' }),
+    h('div', { class: 'muted', style: 'font-size:11.5px', text: 'Continuum imports the repo as a project reference. Nothing is cloned yet — the URL is stored as a local reference in your project.' }),
   ]);
 
   const body = h('div', {}, [
