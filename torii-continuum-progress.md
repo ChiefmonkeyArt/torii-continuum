@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.160-alpha — audit A17: memory session-lifetime authority model (2026-09-14)
+
+**What shipped.** Finding **A17** (memory signature/session-lifetime claims) is closed. The verified admin session (Nostr-signer login) is now the explicit single authority for memory, encoded in `createMemoryCache` and documented in `docs/memory-authority.md`. The plaintext RAM cache is LEASED for `session_ttl_sec` and auto-drops when the lease lapses (injectable clock), on lock/panic, and on shutdown — plaintext no longer outlives the session. The misleading "cache zeroed" wording is replaced with the accurate "references dropped; immutable JS strings are not cryptographically zeroized" caveat.
+
+**Tests.** Agent 608 → **611** (+3 lease lifecycle). Frontend unchanged at **1850**.
+
+**Version markers bumped.** 0.2.159 → 0.2.160-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [done — `docs/memory-authority.md`]; strategy [unchanged]; ops [unchanged].
+
 ## v0.2.159-alpha — audit A19: discovery trust + fan-out policy (2026-09-14)
 
 **What shipped.** Finding **A19** (discovery trust/fan-out) is closed:
