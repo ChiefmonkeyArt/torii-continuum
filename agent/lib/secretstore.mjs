@@ -55,10 +55,30 @@ function assertName(name) {
   }
 }
 
-function deriveKey(sessionSecret, name) {
-  // session_secret is validated >=64 hex chars at config load; use its raw
-  // bytes as HKDF input keying material. hkdfSync returns an ArrayBuffer.
-  const ikm = Buffer.from(sessionSecret, 'utf8');
+/**
+ * A25: resolve the AT-REST master key, decoupled from session signing.
+ *
+ * `session_secret` signs/verifies session tokens (core/auth.mjs). The encrypted
+ * store is deliberately keyed by a SEPARATE secret so rotating `session_secret`
+ * (the login/session secret) does NOT destroy the NWC/Routstr credentials the
+ * agent legitimately holds at rest. When no dedicated key is configured, fall
+ * back to `session_secret` so existing v1 records keep verifying (legacy
+ * install, which remains rotation-unsafe until the operator opts into a
+ * dedicated key).
+ */
+function resolveAtRestKey(cfg) {
+  const dedicated = cfg?.secretstore_key;
+  const k = (typeof dedicated === 'string' && dedicated.length > 0) ? dedicated : cfg?.session_secret;
+  if (typeof k !== 'string' || k.length < 64) {
+    throw new Error('secretstore: at-rest key required (>=64 chars; set secretstore_key or session_secret)');
+  }
+  return k;
+}
+
+function deriveKey(atRestKey, name) {
+  // Use the at-rest master key as HKDF input keying material; hkdfSync returns
+  // an ArrayBuffer.
+  const ikm = Buffer.from(atRestKey, 'utf8');
   const info = Buffer.from(INFO_PREFIX + name, 'utf8');
   return Buffer.from(hkdfSync('sha256', ikm, Buffer.alloc(0), info, KEY_LEN));
 }
@@ -68,9 +88,10 @@ function deriveKey(sessionSecret, name) {
  * @param {object} deps { dir?: absolute secrets dir, log? }
  */
 export function createSecretStore(cfg, deps = {}) {
-  if (!cfg || typeof cfg.session_secret !== 'string' || cfg.session_secret.length < 64) {
-    throw new Error('secretstore: cfg.session_secret required (>=64 chars)');
-  }
+  // A25: resolve once at construction — the dedicated at-rest key when set, else
+  // session_secret (legacy). Rotating session_secret is safe only when a
+  // dedicated secretstore_key is configured.
+  const atRestKey = resolveAtRestKey(cfg);
   const dir = deps.dir || resolve(process.cwd(), 'memory', 'secrets');
   const log = deps.log || { info() {}, warn() {}, error() {} };
 
@@ -88,7 +109,7 @@ export function createSecretStore(cfg, deps = {}) {
     if (typeof plaintext !== 'string' || plaintext.length === 0) {
       throw new Error('secretstore: plaintext must be a non-empty string');
     }
-    const key = deriveKey(cfg.session_secret, name);
+    const key = deriveKey(atRestKey, name);
     const iv = randomBytes(IV_LEN);
     const cipher = createCipheriv(ALG, key, iv);
     const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
@@ -134,7 +155,7 @@ export function createSecretStore(cfg, deps = {}) {
     if (!env || env.v !== ENVELOPE_VERSION || env.alg !== 'A256GCM') {
       throw new Error(`secretstore: ${name} unsupported envelope`);
     }
-    const key = deriveKey(cfg.session_secret, name);
+    const key = deriveKey(atRestKey, name);
     const iv = Buffer.from(env.iv, 'base64');
     const tag = Buffer.from(env.tag, 'base64');
     const ct = Buffer.from(env.ct, 'base64');
@@ -147,8 +168,9 @@ export function createSecretStore(cfg, deps = {}) {
     try {
       pt = Buffer.concat([decipher.update(ct), decipher.final()]);
     } catch {
-      // Wrong key (rotated session_secret) or tampered ciphertext.
-      throw new Error(`secretstore: ${name} decrypt failed (rotated secret or tampered blob)`);
+      // Wrong at-rest key (rotated WITHOUT a dedicated secretstore_key) or
+      // tampered ciphertext.
+      throw new Error(`secretstore: ${name} decrypt failed (rotated at-rest key or tampered blob)`);
     }
     return pt.toString('utf8');
   }
@@ -191,10 +213,11 @@ export function createSecretStore(cfg, deps = {}) {
 
   /**
    * Encrypted-store health, DISTINCT from HTTP/agent health. Attempts to decrypt
-   * every stored secret under the current key; a rotated session_secret makes
-   * each record fail its GCM tag (undecryptable) rather than merely absent.
-   * The rotation hold (A25) relies on this: a clean login does not prove the
-   * NWC/Routstr records are still usable, but this check does.
+   * every stored secret under the current at-rest key; a rotated key WITHOUT a
+   * dedicated `secretstore_key` makes each record fail its GCM tag (undecryptable)
+   * rather than merely absent. The rotation hold (A25) relies on this: a clean
+   * login does not prove the NWC/Routstr records are still usable, but this check
+   * does.
    */
   async function health() {
     const names = await list();

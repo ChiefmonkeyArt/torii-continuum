@@ -35,6 +35,14 @@ admin_npub: ""
 # Rotate any time; existing sessions become invalid.
 session_secret: "REPLACE_WITH_32_BYTES_HEX"
 
+# (Optional, A25) The AT-REST master key for the encrypted secret store
+# (NWC connection, Routstr key). Kept SEPARATE from session_secret so rotating
+# the login/session secret does NOT destroy saved credentials. When unset, the
+# store falls back to session_secret (legacy) — in that mode rotating
+# session_secret makes stored records undecryptable, so prefer setting this.
+# Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+# secretstore_key: "REPLACE_WITH_32_BYTES_HEX"
+
 # How long a session token stays valid (seconds). 24h default. The browser
 # renews it in the background before it lapses (CONT-AUTH-1), so this is the
 # window a stolen token is usable for — not how often you have to sign in.

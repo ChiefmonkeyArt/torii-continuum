@@ -148,8 +148,8 @@ test('put rejects an empty plaintext', async () => {
   }
 });
 
-test('constructing without a >=64-char session_secret throws', () => {
-  assert.throws(() => createSecretStore({ session_secret: 'short' }, { dir: '/tmp' }), /session_secret required/);
+test('constructing without a >=64-char secret throws', () => {
+  assert.throws(() => createSecretStore({ session_secret: 'short' }, { dir: '/tmp' }), /at-rest key required/);
 });
 
 test('fingerprint is stable, short, and not the plaintext', () => {
@@ -178,6 +178,48 @@ test('health() reports undecryptable records after a rotated secret (audit A25)'
     const report = await afterRotation.health();
     assert.equal(report.ok, false);
     assert.deepEqual(report.undecryptable.sort(), ['nwc', 'routstr_key']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── A25 remediation: dedicated at-rest key decouples session rotation ────────
+
+const DEDICATED = 'd'.repeat(64);
+
+test('A25: a dedicated secretstore_key survives session_secret rotation', async () => {
+  const dir = tmpDir();
+  try {
+    // Store the credential under a DEDICATED at-rest key.
+    const storeWithDedicated = (sessionSecret) =>
+      createSecretStore({ session_secret: sessionSecret, secretstore_key: DEDICATED }, { dir });
+    await storeWithDedicated(SECRET).put('nwc', 'nwc-envelope');
+
+    // Rotate session_secret (the login secret) — the at-rest key is unchanged,
+    // so the stored credential is still readable.
+    const after = storeWithDedicated(OTHER_SECRET);
+    assert.equal(await after.get('nwc'), 'nwc-envelope');
+    assert.deepEqual(await after.health(), {
+      ok: true, count: 1, readable: ['nwc'], undecryptable: [],
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('A25: legacy coupling (no secretstore_key) still makes rotation destroy records', async () => {
+  const dir = tmpDir();
+  try {
+    await store(dir, SECRET).put('nwc', 'value');
+    await assert.rejects(() => store(dir, OTHER_SECRET).get('nwc'), /decrypt failed/);
+
+    // And a dedicated key that DIFFERS from the one used to encrypt also fails
+    // closed (a wrong at-rest key is indistinguishable from tampering).
+    const wrongDedicated = createSecretStore(
+      { session_secret: SECRET, secretstore_key: 'e'.repeat(64) },
+      { dir },
+    );
+    await assert.rejects(() => wrongDedicated.get('nwc'), /decrypt failed/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
