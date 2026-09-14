@@ -96,6 +96,23 @@ describe('decryptEntries', () => {
     expect(out[0].d_tag).toBeUndefined();
   });
 
+  it('carries a scoped entry d-tag forward when the payload is a plain object (A09)', async () => {
+    const list = [{ kind: 30094, d_tag: 'home-city', ciphertext: 'ct' }];
+    const decrypt = async () => JSON.stringify({ fact: 'lives in X', why: 'stated' });
+    const out = await decryptEntries(list, 'pk', decrypt);
+    expect(out[0].d_tag).toBe('home-city');
+    expect(out[0].kind).toBe(30094);
+    expect(out[0].content).toEqual({ fact: 'lives in X', why: 'stated' });
+  });
+
+  it('lets a full event d-tag win over entry metadata d-tag', async () => {
+    const event = { kind: 30094, tags: [['d', 'from-event']], content: '{}' };
+    const list = [{ kind: 30094, d_tag: 'from-metadata', ciphertext: 'ct' }];
+    const decrypt = async () => JSON.stringify(event);
+    const out = await decryptEntries(list, 'pk', decrypt);
+    expect(out[0].d_tag).toBe('from-event');
+  });
+
   it('skips malformed entries with no ciphertext', async () => {
     const out = await decryptEntries([null, { kind: 1 }, {}], 'pk', async () => 'x');
     expect(out).toHaveLength(0);

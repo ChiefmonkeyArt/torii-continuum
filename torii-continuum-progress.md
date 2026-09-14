@@ -9,6 +9,20 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.150-alpha — audit A09: unified memory inventory (read-path) + ADR (2026-09-14)
+
+**What shipped.** The read half of finding **A09** (legacy and scoped memory had incompatible read lifecycles): `GET /api/memory/ciphertexts` now returns a single owner-level inventory — the **scoped store** (`memstore.listAllForOwner`, covering semantic/procedural/conversation/episodic/project) **plus** the flat identity/intents/panic kind dirs (and the legacy flat semantic/procedural dirs for read-back compatibility). Previously the activation enumeration read only the flat kind dirs, so a memory approved into the scoped store was invisible to unlock — that gap is closed. Each scoped entry carries `{ kind, d_tag, ciphertext, class, scope, sha256, integrity_ok }`, never plaintext. The frontend `decryptEntries` now carries a scoped entry's `d_tag` forward when the decrypted payload is a plain fact object (not a full Nostr event), so scoped memories round-trip their d-tag into the unlock cache.
+
+**ADR.** `docs/memory-inventory.md` records the decision: scoped store = single durable source of truth for memory classes; identity (30092), destructive intents (30096), and the panic key (30097) stay flat and owner-level by design (single-writer/cold/double-sig semantics must not inherit quota/retention/dedupe). Privacy invariant unchanged: ciphertext at rest, browser decrypts, AI memory stays approval-gated.
+
+**Tests.** Frontend 1848 → **1850** (+2: scoped d-tag carry-forward for plain-object payloads, and full-event d-tag wins over entry metadata). Agent unchanged at **578**.
+
+**Version markers bumped.** 0.2.149 → 0.2.150-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [ADDED — `docs/memory-inventory.md`]; strategy [unchanged]; ops [unchanged].
+
+**Remaining (staged):** write-path collapse (route `/api/memory/store` facts/skills into the scoped store, then drop the flat facts/skills dirs) and naming identity/intents as intentionally excluded from portability export.
+
 ## v0.2.149-alpha — audit A10: bundle verification binds the exact imported item set (2026-09-14)
 
 **What shipped.** Closes audit finding **A10** (bundle verification did not bind the full imported item set). `agent/lib/portability.mjs` `verifyBundle` previously matched imported items against the signed manifest by `project/class/d-tag/ciphertext-hash` only — omitting **item kind** and **bot scope** — and required no bijection/count match; import then consumed `it.kind` from the unsigned body. A genuinely signed manifest therefore still verified after altering a body item kind (30094→30095), dropping all body items, or injecting a mismatched item. The fix introduces a canonical per-item identity key (`bot_id`, project, class, kind, d-tag, sha256) computed for **both** the signed manifest and the unsigned body, and requires an exact 1:1 set binding — rejecting count mismatch, duplicates (either side), extra/unlisted items, and any kind/bot-scope divergence. Verification stays default-deny; import still quarantines (never auto-activates).

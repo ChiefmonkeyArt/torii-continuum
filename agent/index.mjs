@@ -1336,8 +1336,30 @@ app.post('/api/memory/quarantine/:sha/reject', { preHandler: requireAdmin }, asy
 
 // GET /api/memory/ciphertexts — list all encrypted files so browser can
 // pull them down, decrypt, and POST back to /api/memory/unlock.
-app.get('/api/memory/ciphertexts', { preHandler: requireAdmin }, async () => {
+//
+// A09 consolidation: this is now the single owner-level inventory. It returns
+// BOTH (a) the scoped store (memstore — facts/skills/conversation/episodic/
+// project, the durable source of truth) and (b) the flat identity/intents/panic
+// kind dirs (owner-level, kept flat by design) plus the legacy semantic/
+// procedural flat dirs for read-back compatibility. Each entry carries the
+// shape decryptEntries expects: { kind, d_tag?, ciphertext, … }. Never plaintext.
+app.get('/api/memory/ciphertexts', { preHandler: requireAdmin }, async (req) => {
   const out = [];
+
+  // Scoped durable store — the missing half of the A09 gap: approved scoped
+  // memory must appear here or it is invisible to activation/unlock.
+  const scoped = await memstore.listAllForOwner(req.session.npub).catch(() => null);
+  if (scoped && scoped.ok) {
+    for (const e of scoped.entries) {
+      out.push({
+        kind: e.kind, d_tag: e.d_tag, ciphertext: e.ciphertext,
+        class: e.class, scope: e.scope, sha256: e.sha256, integrity_ok: e.integrity_ok,
+        source: 'scoped',
+      });
+    }
+  }
+
+  // Flat identity/intents/panic (owner-level) + legacy facts/skills dirs.
   for (const kind of Object.values(KINDS)) {
     const relDir = dirForKind(kind);
     const absDir = join(AGENT_ROOT, relDir);
@@ -1349,7 +1371,7 @@ app.get('/api/memory/ciphertexts', { preHandler: requireAdmin }, async () => {
       if (!f.endsWith('.enc')) continue;
       const body = await readFile(join(absDir, f), 'utf8').catch(() => null);
       if (!body) continue;
-      out.push({ kind, path: `${relDir}/${f}`, ciphertext: body });
+      out.push({ kind, path: `${relDir}/${f}`, ciphertext: body, source: 'flat' });
     }
   }
   return { count: out.length, entries: out };

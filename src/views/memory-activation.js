@@ -87,6 +87,10 @@ export async function decryptEntries(list, pubkey, decrypt) {
     const plaintext = await decrypt(pubkey, e.ciphertext);
     const parsed = safeParse(plaintext);
     const entry = { kind: e.kind, content: parsed !== undefined ? parsed : plaintext };
+    // A09: scoped-store entries carry their d-tag as METADATA (the decrypted
+    // payload is a plain fact object, not a full event), so carry it forward
+    // here. A full event's own 'd' tag (below) still wins when present.
+    if (e.d_tag) entry.d_tag = e.d_tag;
     if (parsed && Array.isArray(parsed.tags) && parsed.kind != null) {
       const dTag = parsed.tags.find((t) => Array.isArray(t) && t[0] === 'd');
       if (dTag && dTag[1]) entry.d_tag = dTag[1];
