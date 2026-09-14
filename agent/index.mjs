@@ -34,7 +34,7 @@ import { scrub } from './lib/scrub.mjs';
 import { createMemoryLoader } from './lib/memory.mjs';
 import { createReflector } from './lib/reflect.mjs';
 import { KINDS, dirForKind, legacyDirForKind } from './lib/events.mjs';
-import { createMemStore, classForKind } from './lib/memstore.mjs';
+import { createMemStore, classForKind, GLOBAL_PROJECT } from './lib/memstore.mjs';
 import { createSessionStore } from './lib/sessions.mjs';
 import { createConsent } from './lib/consent.mjs';
 import { createPortability } from './lib/portability.mjs';
@@ -1090,6 +1090,27 @@ app.post('/api/memory/store', { preHandler: requireAdmin }, async (req, reply) =
   if (!g || !g.exists) {
     return reply.code(403).send({ error: 'memory_write denied: no genesis manifest (bot not owner-bound)' });
   }
+
+  // A09 write-path collapse: facts (30094) and skills (30095) live in the scoped
+  // store (the single durable source of truth), not the flat kind dirs. Identity
+  // root / destructive intents / panic key stay flat below.
+  if (kind === KINDS.SEMANTIC_FACT || kind === KINDS.PROCEDURAL_SKILL) {
+    const botId = await resolveBotId(req.session.npub);
+    if (!botId) return reply.code(403).send({ error: 'memory_write denied: no genesis bot_id' });
+    const stored = await memstore.put({
+      ownerNpub: req.session.npub, botId, projectSlug: GLOBAL_PROJECT,
+      cls: classForKind(kind), kind, dTag: d_tag,
+      eventId: event_id || null, ciphertext, source: 'store',
+    });
+    if (!stored.ok) return reply.code(400).send({ error: stored.reason, code: stored.code });
+    app.log.info(`[memory] stored ${kind}:${d_tag} → scoped ${stored.path}`);
+    await audit.append('memory.store', {
+      owner_pubkey_prefix: (g.manifest?.owner?.pubkey_hex || '').slice(0, 12),
+      bot_id: botId, kind, d_tag, path: stored.path, ciphertext_fp: stored.sha256,
+    }).catch((e) => app.log.error(`[memory] audit store failed: ${e.message}`));
+    return { ok: true, path: stored.path, fingerprint: stored.sha256 };
+  }
+
   let filename;
   try {
     filename = ciphertextFilename(event_id || null);
@@ -1359,8 +1380,9 @@ app.get('/api/memory/ciphertexts', { preHandler: requireAdmin }, async (req) => 
     }
   }
 
-  // Flat identity/intents/panic (owner-level) + legacy facts/skills dirs.
-  for (const kind of Object.values(KINDS)) {
+  // Flat identity/intents/panic (owner-level). Facts (30094) + skills (30095)
+  // now live only in the scoped store, so their flat dirs are no longer read.
+  for (const kind of [KINDS.CHARACTER_ROOT, KINDS.DESTRUCTIVE_INTENT, KINDS.EMERGENCY_WIPE]) {
     const relDir = dirForKind(kind);
     const absDir = join(AGENT_ROOT, relDir);
     let files;

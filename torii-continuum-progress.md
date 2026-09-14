@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.151-alpha — audit A09: write-path collapse + export boundary (2026-09-14)
+
+**What shipped.** The two staged follow-ups that complete finding **A09**. **Write-path collapse:** `POST /api/memory/store` now routes facts (30094) and skills (30095) into the scoped store (`memstore.put` with the `_global` reserved project and the genesis `bot_id`), so new facts/skills land in exactly one place; identity root (30092), destructive intents (30096), and the panic key (30097) still go to the flat kind dirs. The `ciphertexts` activation enumeration now reads the flat **identity/intents/panic** dirs only (not the flat `semantic`/`procedural` dirs, which are superseded). **Export boundary:** `buildBundle` now returns an `excluded` list naming identity/intents/panic as intentionally not portable, rather than silently omitting them.
+
+**Tests.** Agent 578 → **579** (+1: `buildBundle` names the three identity/safety kinds as excluded, and no portable item is one of them). Frontend unchanged at **1850**.
+
+**Version markers bumped.** 0.2.150 → 0.2.151-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [UPDATED — `docs/memory-inventory.md`]; strategy [unchanged]; ops [unchanged].
+
 ## v0.2.150-alpha — audit A09: unified memory inventory (read-path) + ADR (2026-09-14)
 
 **What shipped.** The read half of finding **A09** (legacy and scoped memory had incompatible read lifecycles): `GET /api/memory/ciphertexts` now returns a single owner-level inventory — the **scoped store** (`memstore.listAllForOwner`, covering semantic/procedural/conversation/episodic/project) **plus** the flat identity/intents/panic kind dirs (and the legacy flat semantic/procedural dirs for read-back compatibility). Previously the activation enumeration read only the flat kind dirs, so a memory approved into the scoped store was invisible to unlock — that gap is closed. Each scoped entry carries `{ kind, d_tag, ciphertext, class, scope, sha256, integrity_ok }`, never plaintext. The frontend `decryptEntries` now carries a scoped entry's `d_tag` forward when the decrypted payload is a plain fact object (not a full Nostr event), so scoped memories round-trip their d-tag into the unlock cache.

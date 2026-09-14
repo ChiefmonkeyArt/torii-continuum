@@ -30,6 +30,7 @@ import { nip19 } from 'nostr-tools';
 import { createMemStore, GLOBAL_PROJECT, MAX_ITEM_BYTES } from '../lib/memstore.mjs';
 import { createConsent } from '../lib/consent.mjs';
 import { createPortability, BUNDLE_SIG_KIND, buildManifest, MAX_BUNDLE_ITEMS } from '../lib/portability.mjs';
+import { KINDS } from '../lib/events.mjs';
 import { buildWorkingValues, fenceUntrusted, DATA_FENCE } from '../lib/workingvalues.mjs';
 import { getConstitution, CODE_OF_PRACTICE_VERSION } from '../lib/constitution.mjs';
 import { createAudit } from '../lib/audit.mjs';
@@ -383,6 +384,23 @@ test('portability: buildManifest is deterministic (same items → same digest)',
   const m1 = buildManifest({ ownerHex: PK_A, botId: BOT, items, createdAt: 100 });
   const m2 = buildManifest({ ownerHex: PK_A, botId: BOT, items: [...items].reverse(), createdAt: 100 });
   assert.equal(m1.manifest_digest, m2.manifest_digest);
+});
+
+test('portability: A09 — buildBundle names identity/intents/panic as intentionally excluded', async () => {
+  const h = harness();
+  const built = await h.portability.buildBundle({ ownerNpub: NPUB_A, botId: BOT });
+  assert.equal(built.ok, true);
+  assert.ok(Array.isArray(built.excluded), 'excluded list present');
+  const kinds = built.excluded.map((x) => x.kind).sort((a, b) => a - b);
+  assert.deepEqual(kinds, [KINDS.CHARACTER_ROOT, KINDS.DESTRUCTIVE_INTENT, KINDS.EMERGENCY_WIPE].sort((a, b) => a - b));
+  for (const e of built.excluded) assert.ok(e.reason);
+  // And none of the portable items are identity/intents.
+  for (const it of built.bundle.items) {
+    assert.notEqual(it.kind, KINDS.CHARACTER_ROOT);
+    assert.notEqual(it.kind, KINDS.DESTRUCTIVE_INTENT);
+    assert.notEqual(it.kind, KINDS.EMERGENCY_WIPE);
+  }
+  h.cleanup();
 });
 
 test('portability: a correctly owner-signed bundle verifies', async () => {

@@ -36,6 +36,7 @@ import { verifyEvent } from 'nostr-tools/pure';
 import { ownerHexFromNpub } from '../core/genesis.mjs';
 import { canonicalize, getConstitution, CODE_OF_PRACTICE_VERSION } from './constitution.mjs';
 import { validBotId, validProjectSlug, CLASSES, MAX_ITEM_BYTES } from './memstore.mjs';
+import { KINDS } from './events.mjs';
 
 export const BUNDLE_SCHEMA = 'torii.continuum.memory_bundle/1';
 export const BUNDLE_FORMAT_VERSION = 1;
@@ -178,6 +179,14 @@ export function createPortability(deps = {}) {
       },
       // The exact digest the browser must sign (as event `x` tag + content).
       sign_target: { manifest_digest: manifest.manifest_digest, sig_kind: BUNDLE_SIG_KIND },
+      // A09: identity / intents / panic are intentionally NOT portable memory —
+      // they are owner-level identity/safety records, so name them as excluded
+      // rather than silently omitting them from the bundle.
+      excluded: [
+        { kind: KINDS.CHARACTER_ROOT, reason: 'character_root — identity/provenance, not portable memory' },
+        { kind: KINDS.DESTRUCTIVE_INTENT, reason: 'destructive_intent — safety authorization, not portable memory' },
+        { kind: KINDS.EMERGENCY_WIPE, reason: 'emergency_wipe (panic key) — cold/offline safety key, not portable' },
+      ],
     };
   }
 
