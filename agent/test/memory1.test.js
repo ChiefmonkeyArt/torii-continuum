@@ -32,7 +32,7 @@ import { createConsent } from '../lib/consent.mjs';
 import { createPortability, BUNDLE_SIG_KIND, buildManifest, MAX_BUNDLE_ITEMS } from '../lib/portability.mjs';
 import { KINDS } from '../lib/events.mjs';
 import { buildWorkingValues, fenceUntrusted, DATA_FENCE } from '../lib/workingvalues.mjs';
-import { getConstitution, CODE_OF_PRACTICE_VERSION } from '../lib/constitution.mjs';
+import { getConstitution, getConstitutionByVersion, CONSTITUTION_VERSION, CODE_OF_PRACTICE_VERSION } from '../lib/constitution.mjs';
 import { createAudit } from '../lib/audit.mjs';
 
 function hexToBytes(hex) {
@@ -613,6 +613,42 @@ test('the Pareto rule reaches the prompt as an operating rule that yields to dut
   // which is where the non-negotiable floor lives.
   const inv = header.split('\n').find((l) => l.startsWith('Invariants:'));
   assert.equal(/20%/.test(inv), false);
+});
+
+test('A23: an older unacknowledged bot renders its birth covenant + the safety floor', () => {
+  const { header, provenance } = buildWorkingValues({ pinnedVersion: 'genesis-1.0.0' });
+  // It stays on genesis-1.0.0 — the newer Pareto operating rule must NOT bind.
+  assert.match(header, /Constitution genesis-1\.0\.0 \(current genesis-1\.2\.0; non-floor upgrades bind only after your owner acknowledges them\)/);
+  assert.equal(header.includes('~20% of actions giving ~80%'), false, 'Pareto must not bind an unacknowledged bot');
+  // The safety floor (no-credential-custody, added in 1.2.0) DOES bind regardless.
+  assert.match(header, /Safety floor \(binds regardless of acknowledged version\): never use a human password/);
+  assert.match(header, /never store, log, reproduce, expose or take custody of/);
+  // Provenance reflects the resolution, not merely the latest release.
+  assert.equal(provenance.constitution_version, 'genesis-1.0.0');
+  assert.equal(provenance.pinned_version, 'genesis-1.0.0');
+  assert.equal(provenance.acknowledged_version, 'genesis-1.0.0');
+  assert.equal(provenance.current_version, CONSTITUTION_VERSION);
+  assert.equal(provenance.is_current, false);
+  assert.ok(provenance.safety_floor_rule_ids.includes('no-credential-custody'));
+});
+
+test('A23: an acknowledged-latest bot renders the current covenant as current', () => {
+  const { header, provenance } = buildWorkingValues({ pinnedVersion: 'genesis-1.0.0', acknowledgedVersion: CONSTITUTION_VERSION });
+  assert.match(header, /Constitution genesis-1\.2\.0/);
+  assert.match(header, /~20% of actions giving ~80%/, 'Pareto binds once acknowledged');
+  assert.equal(provenance.is_current, true);
+  assert.equal(provenance.acknowledged_version, CONSTITUTION_VERSION);
+  // The floor is already part of 1.2.0's body, so no separate floor line is added.
+  assert.equal(header.includes('binds regardless of acknowledged version'), false);
+});
+
+test('A23: an unknown birth pin fails closed to the current covenant and is flagged', () => {
+  const { header, provenance } = buildWorkingValues({ pinnedVersion: 'genesis-9.9.9' });
+  assert.match(header, /birth pin unrecognised — fail-closed to the current covenant/);
+  assert.match(header, /Constitution genesis-1\.2\.0/);
+  assert.equal(provenance.constitution_version, CONSTITUTION_VERSION, 'renders current as the complete set we can vouch for');
+  assert.equal(provenance.is_current, false, 'cannot claim current for an unknown pin');
+  assert.equal(provenance.known_pinned_version, false);
 });
 
 test('fenceUntrusted wraps content in the untrusted-data boundary', () => {
