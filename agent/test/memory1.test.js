@@ -653,3 +653,23 @@ test('consent: A12 — concurrent approve vs reject resolve exactly one winner',
   assert.equal(pv.proposal.ciphertext, undefined);
   h.cleanup();
 });
+
+test('A21: sweepRetention reaps past-window conversation but keeps permanent classes', async () => {
+  const memoryRoot = tmpMemRoot();
+  const t0 = 1_000_000_000;
+  const t8d = t0 + 8 * 86400;
+  const storeOld = createMemStore({ memoryRoot, now: () => t0 });
+  await storeOld.put({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', cls: 'conversation', dTag: 'old-chat', ciphertext: 'CT-OLD' });
+  await storeOld.put({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p', cls: 'semantic', dTag: 'keep', ciphertext: 'CT-KEEP' });
+
+  // A fresh store over the same root, 8 days later: conversation (7d) must reap,
+  // semantic (permanent, null window) must survive.
+  const storeNew = createMemStore({ memoryRoot, now: () => t8d });
+  const sweep = await storeNew.sweepRetention();
+  assert.equal(sweep.ok, true);
+  assert.equal(sweep.reaped.length, 1, 'only the past-window conversation item reaped');
+  const list = await storeNew.list({ ownerNpub: NPUB_A, botId: BOT, projectSlug: 'p' });
+  assert.equal(list.count, 1);
+  assert.equal(list.items[0].d_tag, 'keep');
+  rmSync(join(memoryRoot, '..'), { recursive: true, force: true });
+});

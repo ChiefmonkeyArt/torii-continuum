@@ -21,12 +21,21 @@ pending/*.json
 # — not committed. Restore from operator's own backup.
 memory/character/
 memory/semantic/
+memory/procedural/
 memory/intents/
 memory/panic/
 memory/episodic/
 memory/reflect-watermark.json
 memory/panic-key-nudge.json
 skills/*.enc
+
+# Encrypted operator secrets (NWC URI, Routstr key, pending funding quote) —
+# single-writer secretstore, 0600 ciphertext. Never commit (A21).
+memory/secrets/
+
+# Scoped sealed memory store — owners/bots/projects ciphertext + index, consent
+# pending, sessions, and portability quarantine. Runtime state, never commit (A21).
+memory/owners/
 
 # Genesis manifests (GENESIS-1) — one per owner pubkey, bound to a verified
 # npub. Provenance data, not secret, but still per-owner runtime state — not

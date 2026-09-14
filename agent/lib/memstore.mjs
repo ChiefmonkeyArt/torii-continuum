@@ -437,14 +437,12 @@ export function createMemStore(deps = {}) {
   }
 
   /**
-   * Apply retention: drop items in non-permanent / retention-bounded classes
-   * older than their window. Returns the ids reaped. Never touches permanent
-   * classes with a null window.
+   * Re-read one scope's index and reap any retention-bounded items past their
+   * per-class window. Returns the ids reaped. Never touches null-window classes
+   * (semantic/procedural/project are permanent; conversation=7d, episodic=365d).
    */
-  async function applyRetention(params = {}) {
-    const scope = resolveScope(params.ownerNpub, params.botId, params.projectSlug);
-    if (!scope.ok) return { ok: false, reason: scope.reason };
-    const index = await readIndex(scope.scopeDir);
+  async function reapScopeDir(scopeDir) {
+    const index = await readIndex(scopeDir);
     const nowTs = now();
     const reaped = [];
     const keep = [];
@@ -452,7 +450,7 @@ export function createMemStore(deps = {}) {
       const meta = CLASSES[rec.class];
       const days = meta?.retentionDays;
       if (days && (nowTs - (rec.created_at || nowTs)) > days * 86400) {
-        const abs = join(classDir(scope.scopeDir, rec.class), `${rec.id}.enc`);
+        const abs = join(classDir(scopeDir, rec.class), `${rec.id}.enc`);
         await unlink(abs).catch(() => {});
         reaped.push(rec.id);
       } else {
@@ -462,13 +460,53 @@ export function createMemStore(deps = {}) {
     if (reaped.length) {
       index.items = keep;
       index.updated_at = nowTs;
-      await writeIndexAtomic(scope.scopeDir, index);
+      await writeIndexAtomic(scopeDir, index);
     }
+    return reaped;
+  }
+
+  /**
+   * Apply retention for one explicit (owner, bot, project) scope.
+   */
+  async function applyRetention(params = {}) {
+    const scope = resolveScope(params.ownerNpub, params.botId, params.projectSlug);
+    if (!scope.ok) return { ok: false, reason: scope.reason };
+    const reaped = await reapScopeDir(scope.scopeDir);
+    return { ok: true, reaped };
+  }
+
+  /**
+   * Audit A21: retention must actually run, not just exist as a test-only entry
+   * point. Sweep every owner/bot/project scope under the single memory root and
+   * reap past-window items. Bounded, restart-safe (never touches live data it
+   * doesn't own), and cleanly no-ops on an empty/absent tree.
+   */
+  async function sweepRetention() {
+    const reaped = [];
+    let ownerDirs;
+    try { ownerDirs = await readdir(ownersRoot); } catch { return { ok: true, reaped }; }
+    for (const ownerHex of ownerDirs) {
+      if (!HEX64_RE.test(ownerHex)) continue;
+      const botsDir = join(ownersRoot, ownerHex, 'bots');
+      let bots;
+      try { bots = await readdir(botsDir); } catch { continue; }
+      for (const botId of bots) {
+        if (!SLUG_RE.test(botId)) continue;
+        const projDir = join(botsDir, botId, 'projects');
+        let projects;
+        try { projects = await readdir(projDir); } catch { continue; }
+        for (const project of projects) {
+          if (!validProjectSlug(project)) continue;
+          reaped.push(...(await reapScopeDir(join(projDir, project))));
+        }
+      }
+    }
+    if (reaped.length) log.info(`[memstore] retention swept ${reaped.length} item(s)`);
     return { ok: true, reaped };
   }
 
   return {
     resolveScope, put, list, read, remove, usage, verifyScope, applyRetention,
-    listAllForOwner, _ownersRoot: ownersRoot, _quotas: quotas,
+    sweepRetention, listAllForOwner, _ownersRoot: ownersRoot, _quotas: quotas,
   };
 }
