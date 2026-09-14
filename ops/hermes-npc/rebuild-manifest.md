@@ -4,11 +4,11 @@ What `ops/install-hermes-npc.sh` does, what it writes, and how to verify it.
 
 ## What it provisions
 
-1. **Reuses the shared Ollama backend** — if the `ollama` user/service/model
-   are already present (provisioned by `install-hermes-owner.sh`), every step
-   reports "already …; skipping". If absent, it installs local-only Ollama
-   bound to `127.0.0.1:11434` (with `OLLAMA_KEEP_ALIVE=5m`) and pulls
-   `qwen3:4b`. Both voices share this one backend.
+1. **Sets up the shared Ollama backend** — if the `ollama` user/service/model
+   are already present, every step reports "already …; skipping". If absent, it
+   installs local-only Ollama bound to `127.0.0.1:11434` (with
+   `OLLAMA_KEEP_ALIVE=5m`) and pulls `qwen3:4b`. The greeter uses this one
+   backend.
 2. **`hermes-npc`** user (no sudo, HOME `0700`, `umask 077`) + vanilla Nous
    Research Hermes with an **`npc`** profile (`--description` records the
    greeter role for the kanban orchestrator).
@@ -59,9 +59,9 @@ secrets_on_disk:           none (local Ollama needs no API key)
   `fallback_providers`, no router URL, no token.
 - **Smoke** — `sudo -u hermes-npc hermes -p npc` answers via local Ollama.
 - **Isolation** — `hermes-npc` HOME `0700`, `umask 077`; the npc user cannot
-  read `/home/hermes-owner`, its `.env`, or the agent's `openai_adapter`
-  config (verify: `sudo -u hermes-npc cat /home/hermes-owner/.hermes/...` fails
-  with permission denied). `hermes-npc` holds no sudo.
+  read the agent's config/secrets or any owner state (verify: `sudo -u
+  hermes-npc cat /apps/continuum/...` fails with permission denied).
+  `hermes-npc` holds no sudo.
 - **No paid leakage** — the npc profile points only at `127.0.0.1:11434`; there
   is no path to `127.0.0.1:8787` (the Continuum router `/v1`).
 

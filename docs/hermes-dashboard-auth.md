@@ -1,6 +1,6 @@
 # Decision: Hermes runs passwordless behind the Continuum Nostr gateway
 
-- **Status:** **RETIRED (OWNER-UI-4, v0.2.145-alpha).** The Hermes Web Dashboard was a bolted-on third-party chat surface at `/hermes/`. Continuum's own console (chat + projects + milestones/todos + board + marketplace + routstr + sessions) is now the sole owner interface, so the dashboard — and this decision's gateway wiring — is removed. The two-voice boundary and the headless `hermes-owner` brain (via `/v1`) are unchanged; see `docs/hermes-two-voice.md`. This ADR is kept for the decision history.
+- **Status:** **RETIRED (OWNER-UI-4, v0.2.145-alpha).** The Hermes Web Dashboard was a bolted-on third-party chat surface at `/hermes/`. Continuum's own console (chat + projects + milestones/todos + board + marketplace + routstr + sessions) is now the sole owner interface, so the dashboard — and this decision's gateway wiring — is removed. The headless `hermes-owner` brain and its `/v1` spine were also since retired (v0.2.147-alpha); see `docs/hermes-two-voice.md`. This ADR is kept for the decision history.
 - **Date:** 2026-09-13
 - **Supersedes:** HERMES-DASHBOARD-2 (subdomain + Hermes `basic_auth` username/password)
 - **Decision driver:** identity is Nostr, and a regular user must never SSH or

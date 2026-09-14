@@ -1,80 +1,69 @@
-# Hermes two-voice architecture (HERMES-OWNER-1 + HERMES-NPC-1)
+# Continuum agent + greeter architecture (two voices)
 
-Status: **decided** (owner wired v0.2.108-alpha; NPC wired v0.2.109-alpha).
+Status: **updated** — the owner voice is consolidated into the Continuum agent
+(OWNER-UI-1..5 + this slice); the separate `hermes-owner` brain and the `/v1`
+OpenAI adapter are **retired** (removed v0.2.147-alpha). The isolated public
+greeter (`hermes-npc`) is the remaining separate voice.
 
 ## Intent
 
-Torii Continuum returns to its intended two-voice shape: one **private owner
-brain** (the project engine) and one **isolated public greeter**. The healthy
-Fastify Routstr/Ollama router is *not yet either voice* — it is the shared
-inference spine both voices sit behind. The voices are separate **vanilla Nous
-Research Hermes** installs, not a fork of the router.
+Torii Continuum has two isolated agentic voices with a hard boundary between
+them:
+
+- **Owner voice** — the private project engine, with full tool access and the
+  paid Routstr/Cashu spine. This is now the **Continuum agent itself**: the
+  owner chats through the console's `POST /api/chat` → `chat.mjs` skill →
+  `model-router` (Routstr-first → local Ollama fallback), with the character +
+  memory stack applied in-process.
+- **Public greeter** — `hermes-npc`, a separate vanilla Nous Research Hermes
+  install that is chat-only, local-inference-only, and structurally unable to
+  reach owner secrets, tools, or the paid path.
+
+The two voices never share memory, keys, tools, or project access. Public
+prompts must be structurally unable to reach owner secrets.
+
+## History (what changed)
+
+The owner voice was originally a **separate vanilla Hermes install**
+(`hermes-owner`) that reached the Continuum router through a loopback
+OpenAI-compatible `/v1` surface (`agent/core/openai-adapter.mjs`). OWNER-UI
+folded the owner interface into Continuum's own console, which talks to the
+agent directly — so `hermes-owner` and its `/v1` bridge became dead weight and
+were removed. The owner voice is simply the Continuum agent's chat path now; no
+second process, no second profile, no `/v1` loopback token.
+
+This does **not** collapse the boundary: the owner voice kept the full-tool,
+Routstr/Cashu spine inside the agent; the public greeter stays an isolated,
+unprivileged, local-only process. The public greeter has always been, and
+remains, unable to spend the owner's Cashu float or read owner state.
 
 ## Isolation boundary: Unix users, not containers
 
-`hermes-owner` and `hermes-npc` are separate **unprivileged** system users with
-separate homes (`0700`, `umask 077`). The OS user is the primary trust
-boundary. Docker, if added later, is hardening only — never the identity
-boundary. Memory, keys, tools, and project access are never shared between the
-two voices. Public prompts (NPC) must be structurally unable to reach owner
-secrets.
+`hermes-npc` is a separate **unprivileged** system user (`hermes-npc`,
+HOME `0700`, `umask 077`). The OS user is the primary trust boundary. Docker,
+if added later, is hardening only — never the identity boundary. The owner
+voice lives inside the Continuum agent's own process (`torii-continuum-agent`),
+which the greeter cannot reach.
 
-## The two voices
+## The owner voice — the Continuum agent
 
-| | hermes-owner | hermes-npc |
-|---|---|---|
-| Role | private project engine; full tool access | public greeter / Kami mode / in-world NPC |
-| Inference | Continuum router (`/v1`) primary → local `qwen3:4b` fallback | local Ollama only |
-| Tools | yes (project engine, todos, sessions) | none — chat + receive sats only |
-| Secrets | own profile `.env` (`0600`) | own, separate — never reads owner |
-| Net | loopback only | loopback only |
+- **Role** — private project engine; full tool access.
+- **Inference** — `model-router` (Routstr-first → local Ollama fallback).
+- **Tools** — sessions, project store, board, marketplace, wallet, etc.
+- **Secrets** — the agent's own `session_secret`/NWC/Routstr records (encrypted
+  at rest); never readable by the greeter.
+- **Net** — loopback only.
 
-## `/v1` — the OpenAI-compatible surface (this slice)
-
-The Continuum router consumes OpenAI-compatible endpoints (Routstr discovery +
-Ollama) but does not **serve** one. Vanilla Hermes needs a
-`model.provider: custom` + `base_url` target, so the router gains a thin
-adapter that speaks OpenAI protocol over its existing `model-router`:
-
-- `GET  /v1/models` — the discoverable model catalog (Routstr discovery +
-  local Ollama model).
-- `POST /v1/chat/completions` — OpenAI-compatible, **streaming** SSE,
-  delegating to `model-router.chat()` (Routstr-first → local fallback, the
-  same healthy chain the console uses).
-
-### Boundary rules
-
-- **Loopback only** — bound to `127.0.0.1`, same as the rest of the agent.
-- **Local token auth** — a static bearer token (agent config + hermes-owner's
-  profile `.env`, both `0600`) so *any local process cannot* spend the Cashu
-  float. This is a distinct surface from the console's `requireAdmin` NIP-07
-  session; it never grants the `/api/*` admin routes.
-- **No persona** — the adapter returns the router's raw completion. The
-  Continuum "you are Continuum…" character is applied only by `chat.mjs` for
-  the console; hermes-owner brings its own Nous `owner` persona.
-- **No credential custody** — the token is a capability, not a user secret;
-  keys/nsecs are never written, logged, or echoed.
-
-## Fallback config (correct shape)
-
-Hermes fallback is a **top-level `fallback_providers` list** (canonical in
-current Hermes); `fallback_model` (singular) is the legacy key. The redirect
-wiring keeps local `qwen3:4b` as the degraded fallback only — the router is the
-normal route, so the 4b model is resilience, not the interactive path.
-
-The installer must write fallback into the path Hermes actually reads (profile
-vs main config) — verified against the installed Hermes build, not assumed.
-
-## `hermes-npc` — the isolated public greeter (HERMES-NPC-1)
+## `hermes-npc` — the isolated public greeter
 
 The second voice is provisioned by `ops/install-hermes-npc.sh` as its own
-`hermes-npc` user + an `npc` profile. It differs from the owner brain in three
+`hermes-npc` user + an `npc` profile. It differs from the owner voice in three
 load-bearing ways:
 
 - **Local Ollama only.** `model.provider: custom` → `127.0.0.1:11434/v1`, no
-  `api_key_env`, no `fallback_providers`, and no reference to the router's
-  `127.0.0.1:8787/v1` surface. The greeter therefore has *no paid path* and
-  cannot spend the owner's Cashu float.
+  `api_key_env`, no `fallback_providers`, and no reference to the agent. The
+  greeter therefore has **no paid path** and cannot spend the owner's Cashu
+  float.
 - **No secrets on disk.** Local Ollama needs no API key, so the npc profile has
   no `.env` and no bearer — there is nothing to exfiltrate.
 - **Greeter persona via `SOUL.md`.** The profile writes a warm, concise greeter
@@ -82,7 +71,9 @@ load-bearing ways:
   infer secrets/owner data, loopback-only, honest about what it cannot do.
 
 The shared Ollama backend is the one deliberately-shared surface (stateless
-inference). Memory, keys, tools, and project access remain fully separate.
+inference). Memory, keys, tools, and project access remain fully separate. The
+npc installer provisions Ollama itself and no longer depends on any owner-brain
+installer.
 
 ## Public transport (NAP-BRIDGE)
 
@@ -93,48 +84,13 @@ greeter with a **local per-install ephemeral nsec** — no NIP-46 bunker, no
 locally. Wire format is NIP-17 kind-1059 gift-wrap + NIP-44. See
 `docs/nap-bridge-1.md` for the signer-custody ADR and the wrap flow.
 
-## Hermes Web Dashboard — RETIRED (OWNER-UI-4, v0.2.145-alpha)
+## Hermes Web Dashboard — RETIRED
 
-**Retired.** The first-party Nous Hermes Web Dashboard (loopback `127.0.0.1:9119`,
+The first-party Nous Hermes Web Dashboard (loopback `127.0.0.1:9119`, formerly
 mounted at `/hermes/`) was a bolted-on third-party chat surface duplicating the
-console. Continuum's own console is now the sole owner interface, so the
-dashboard, its nginx fragment, its systemd unit, and its install workflow are
-removed. **Unchanged:** the two-voice boundary, the headless `hermes-owner` brain
-(its `owner` profile + `/v1` spine below), and `hermes-npc`'s DM-only path.
-launching Hermes from within Continuum remains possible through the headless
-brain via `/v1`. Historical wiring details follow for the record.
-
-The retired wiring was: a first-party **Web Dashboard** (`hermes dashboard`;
-flags `--host`/`--port`/`--no-open`/`--isolated`, defaults `127.0.0.1:9119`) with a
-Chat tab that embeds the real Hermes TUI. It ran **passwordless** on loopback
-and was mounted at `/hermes/` on the Continuum apex, gated by Continuum's own
-session — no subdomain, no username/password. See
-`docs/hermes-dashboard-auth.md` (decision, now retired).
-
-Two corrections landed this: (1) Hermes's SPA **does** honour
-`X-Forwarded-Prefix` — it rewrites its root-relative `/assets/*`, `/fonts/*` and
-`/favicon.ico` and injects `window.__HERMES_BASE_PATH__`, so a same-origin path
-mount works (the earlier `/hermes/` failure was only a missing header, never a
-Hermes limitation); and (2) with no `dashboard.public_url` and no `basic_auth`,
-Hermes runs in unauthenticated loopback mode, so the auth responsibility moves
-to the gateway that already understands Nostr. The loopback WS hand-off needs a
-loopback Host, a stripped Origin, and a URL-safe (hex) `?token=` session token.
-
-Continuum's own auth still mints the HttpOnly `__Host-torii_session` cookie
-mirroring the bearer (for the console and any other same-origin gated surface):
-
-- `POST /api/auth/verify` and `POST /api/auth/refresh` set the cookie
-  (HttpOnly, Secure, SameSite=Lax, expires in step with the token).
-- `POST /api/auth/logout` clears it (HttpOnly ⇒ server-only clear; the frontend
-  fires it best-effort on sign-out).
-- `GET /api/auth/session` is a read-only 200/401 check accepting cookie OR
-  bearer — usable as an `auth_request` target on same-origin surfaces.
-
-The retired dashboard ran loopback-only under `hermes-owner` as its own systemd
-unit, mounted by the nginx gateway at `/hermes/` behind the Continuum session.
-`hermes-npc` is never exposed this way (DM path only). The bearer admin API
-(`/api/*`) is unchanged — the cookie unlocked only the session check, never the
-admin routes.
+console. It is retired (OWNER-UI-4, v0.2.145-alpha) along with its nginx
+fragment, systemd unit, and install workflow. See `docs/hermes-dashboard-auth.md`
+(decision, now retired).
 
 ## Non-goals (later slices)
 

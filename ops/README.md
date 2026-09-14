@@ -700,40 +700,19 @@ rewrite + fail-safe state machine + service/bootstrap wiring), plus the agent
 
 ---
 
-## Hermes owner-brain install (HERMES-OWNER-1, `install-hermes-owner.sh`)
+## (Retired) Hermes owner-brain install — removed v0.2.147-alpha
 
-The Hermes-led pivot makes Continuum the operator shell: it installs two fully
-isolated Nous Research Hermes brains. `ops/install-hermes-owner.sh` provisions
-the first — the owner's personal/project brain — plus the one shared Ollama the
-NPC brain will later reuse:
-
-- `ollama` system user + local-only Ollama (`127.0.0.1:11434`) serving `qwen3:4b`,
-  with `OLLAMA_KEEP_ALIVE` so the model unloads when idle (RAM headroom on the
-  8.9 GiB / no-swap VPS).
-- `hermes-owner` unprivileged user (HOME `0700`, `umask 077`) + vanilla Hermes
-  with an `owner` profile.
-- Routstr as primary (custom OpenAI-compatible endpoint) when `ROUTSTR_BASE_URL`
-  + `ROUTSTR_MODEL` are supplied, with Hermes-native `fallback_providers` → local
-  Ollama `qwen3:4b`; local Ollama is the primary otherwise. The Routstr key is
-  written to the profile `.env` (`0600`), never committed or logged.
-
-```bash
-sudo env ROUTSTR_BASE_URL=https://<routstr>/v1 ROUTSTR_MODEL=<model> \
-  ./ops/install-hermes-owner.sh          # Routstr-first
-sudo ./ops/install-hermes-owner.sh       # local-first, idempotent
-sudo ./ops/install-hermes-owner.sh --dry-run
-./ops/install-hermes-owner.sh --render-config
-```
-
-Secrets, version pinning, and run-on-VPS acceptance checks live in
-`ops/hermes-owner/rebuild-manifest.md`; the committed, secret-free template is
-`ops/hermes-owner/config.yaml.example`.
+The separate `hermes-owner` brain and its `ops/install-hermes-owner.sh` are
+**retired**. The owner voice is now the Continuum agent itself (`POST /api/chat`
+→ chat skill → model-router), so there is no second Hermes install and no `/v1`
+loopback bridge. Only the isolated public greeter (`hermes-npc`) and the shared
+Ollama backend remain; `ops/install-hermes-npc.sh` provisions Ollama itself and
+no longer depends on an owner-brain installer. See `docs/hermes-two-voice.md`.
 
 ## Hermes NPC-greeter install (HERMES-NPC-1, `install-hermes-npc.sh`)
 
-`ops/install-hermes-npc.sh` provisions the second, isolated voice — the public
-greeter (`hermes-npc`) — reusing the shared Ollama backend the owner installer
-set up. It points the greeter at **local Ollama only** (no Continuum router, no
+`ops/install-hermes-npc.sh` provisions the isolated public voice — the public
+greeter (`hermes-npc`) — setting up the shared Ollama backend itself. It points the greeter at **local Ollama only** (no Continuum router, no
 paid path, no fallback) so the greeter cannot spend the owner's Cashu float, and
 it has **no secrets on disk** because local Ollama needs no API key. It also
 writes a greeter `SOUL.md` (hard limits: no tools, local-only, never touch owner

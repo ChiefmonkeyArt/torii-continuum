@@ -9,6 +9,29 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.147-alpha — OWNER-UI close-out: retire the `/v1` adapter + `hermes-owner` brain (2026-09-14)
+
+**What shipped.** The headless `hermes-owner` brain and the loopback `/v1`
+OpenAI adapter are retired. The owner voice is now the Continuum agent itself
+(console `POST /api/chat` → chat skill → model-router), so a separate vanilla
+Hermes owner brain and its `/v1` bridge are dead weight. Removed
+`agent/core/openai-adapter.mjs` + its registration in `agent/index.mjs` + the
+`openai_adapter` config default (`agent/core/config.mjs`) + the
+`openai_adapter` block in `agent/config.example.yaml` + the
+`agent/test/openai-adapter.test.js` test; deleted `ops/install-hermes-owner.sh`,
+`ops/hermes-owner/`, and `ops/test/install-hermes-owner.test.sh`. **Preserved:**
+the two-voice boundary and the isolated `hermes-npc` greeter + nap-bridge; the
+NPC installer already provisions Ollama itself, so no shared dependency was
+lost. Updated `docs/hermes-two-voice.md` (owner = agent, NPC = greeter),
+`docs/hermes-dashboard-auth.md`, `docs/project-store-trust.md`,
+`torii-continuum-strategy.md`, `ops/README.md`, and the NPC installer headers.
+
+**Tests.** Agent 586 → **566** (removed 20 openai-adapter cases). Frontend unchanged at **1848**. NPC installer shell test 22/22.
+
+**Version markers bumped.** 0.2.146 → 0.2.147-alpha (all four).
+
+**Update-All checklist.** Code+tests [done]; version markers [done]; continuity docs [done]; ADR [UPDATED — `docs/hermes-two-voice.md` owner-voice reframe]; strategy [UPDATED — two-voice section + OWNER-UI-4 note]; ops runbook + NPC installer headers [done].
+
 ## v0.2.146-alpha — OWNER-UI-5: Perplexity-like chat polish (2026-09-13)
 
 **What shipped.** The chat dock reads as a clean thread instead of an avatar-and-bubble chat. Removed the per-turn "you"/"AI" avatar chrome (`src/chat.js` now emits a single bubble), and restyled `src/styles/chat.css`: assistant turns are flat text with no border/background (clean reading flow), user turns are right-aligned tinted pills, and the thinking indicator aligns with the assistant text. The conversation log stays an accessible live region (`role="log"` + `aria-live="polite"`). New `src/chat-polish.test.js` pins the no-avatar/flat-assistant treatment. **This closes OWNER-UI-1..5 — the owner interface now lives wholly in Continuum's own console.**

@@ -21,7 +21,7 @@ OWNER-UI-3 requires the owner AI to create/update milestones and todos itself. A
 ## Security posture
 
 - **At rest:** the on-disk blob is AES-256-GCM ciphertext (mode `0600`), key derived from `session_secret` with domain-separated HKDF info (`torii-continuum/secretstore/v1/project_store`). Rotating `session_secret` renders it undecryptable — fail closed.
-- **In transit / authorization:** `GET`/`PUT /api/store` are `requireAdmin`-gated. The public NPC is a separate, sealed-out process (`hermes-owner` vs the NPC user home) and never reaches this route.
+- **In transit / authorization:** `GET`/`PUT /api/store` are `requireAdmin`-gated. The public NPC is a separate, sealed-out process (the isolated `hermes-npc` user home) and never reaches this route.
 - **Never relay-published:** format ("Nostr-shaped", signed, addressable) and location are separate decisions. This document is private owner state; nothing is broadcast to a relay without an explicit, separate owner opt-in.
 - **Privilege boundary unchanged:** the two-voice split (`docs/hermes-two-voice.md`) is untouched — this only changes where the *owner's* project data lives.
 
