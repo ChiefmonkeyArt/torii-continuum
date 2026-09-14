@@ -4,14 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>continuum · onboarding</title>
-  <!-- Fontshare CDN: dev-time only, acceptable per standing rule for local mockups.
-       TODO before shipped Continuum: self-host these three font families (Cabinet Grotesk,
-       Satoshi, JetBrains Mono) to remove this third-party CDN dependency in production. -->
-  <link rel="preconnect" href="https://api.fontshare.com" crossorigin>
-  <!-- v0.1.9: non-blocking font stylesheet swap. Prints as media=print (fetched
-       but doesn't block paint), then flips to media=all when loaded. -->
-  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@500,700&f[]=satoshi@400,500,700&f[]=jetbrains-mono@400,500&display=swap" media="print" onload="this.media='all'">
-  <noscript><link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@500,700&f[]=satoshi@400,500,700&f[]=jetbrains-mono@400,500&display=swap"></noscript>
+  <!-- FE-12: no third-party font CDN. System font stack lives in shared.css; removing
+       this removes the api.fontshare.com preconnect/stylesheet so onboarding never
+       phones a third-party host for typefaces. -->
   <link rel="stylesheet" href="./shared.css">
 
   <!-- v0.1.9: preload the critical above-the-fold assets so the browser
@@ -20,23 +15,23 @@
        Scenes converted PNG->WebP (14.5MB -> 1.3MB total). Only scene 1 is
        eagerly preloaded; scenes 2-5 are decode=async, browser can pull them
        lazily as the user progresses. -->
-  <link rel="preload" as="image" href="./scenes/01-approach.webp" fetchpriority="high">
+  <link rel="preload" as="image" href="./scenes/01-approach.webp" fetchpriority="high" media="(min-width: 900px) and (pointer: fine)">
   <!-- v0.1.11: no crossorigin on same-origin preloads. GLTFLoader and DRACOLoader
        fetch these without CORS credentials mode; a crossorigin preload doesn't
        match and on reload the browser either double-fetches or silently stalls.
        chiefmonkey.art serves its own assets, so plain same-origin preload is
        the correct form. -->
-  <link rel="preload" as="fetch" href="./assets/chiefmonkey-onboarding.glb" type="model/gltf-binary">
-  <link rel="preload" as="fetch" href="./three-libs/draco/draco_decoder.wasm" type="application/wasm">
-  <link rel="preload" as="script" href="./three-libs/draco/draco_wasm_wrapper.js">
+  <link rel="preload" as="fetch" href="./assets/chiefmonkey-onboarding.glb" type="model/gltf-binary" media="(min-width: 900px) and (pointer: fine)">
+  <link rel="preload" as="fetch" href="./three-libs/draco/draco_decoder.wasm" type="application/wasm" media="(min-width: 900px) and (pointer: fine)">
+  <link rel="preload" as="script" href="./three-libs/draco/draco_wasm_wrapper.js" media="(min-width: 900px) and (pointer: fine)">
   <!-- Only three.module and character.js get modulepreload. The addon loaders
        import 'three' by bare specifier which relies on the importmap; a raw
        modulepreload probes them without the importmap and prints a resolution
        error. Skipping them here is safe - the actual module load happens
        after the importmap is parsed. -->
-  <link rel="modulepreload" href="./three-libs/three/three.module.js">
-  <link rel="modulepreload" href="./character.js">
-  <link rel="modulepreload" href="./onboarding-client.js">
+  <link rel="modulepreload" href="./three-libs/three/three.module.js" media="(min-width: 900px) and (pointer: fine)">
+  <link rel="modulepreload" href="./character.js" media="(min-width: 900px) and (pointer: fine)">
+  <link rel="modulepreload" href="./onboarding-client.js" media="(min-width: 900px) and (pointer: fine)">
   <!-- Desktop-only gate: onboarding sets up a self-hosted Torii + configures a
        desktop-only game, so a small-screen or coarse-pointer experience is
        intentionally blocked. This runs BEFORE any scripts to avoid loading
@@ -282,7 +277,7 @@
     <article class="panel" data-panel="4">
       <div class="panel-eyebrow">Step 4 · Welcome</div>
       <h1 class="panel-title panel-title-quote">"I'm Chiefmonkey. Welcome home, operator."</h1>
-      <p class="panel-lede">Your Torii is yours. Your gateway is open. Before you step through — one question, so your first screen already has something on it.</p>
+      <p class="panel-lede">Your Torii is yours. Your gateway is open. Before you step through — jot down what you'll build first, and set it up as your first project the moment you're inside Continuum.</p>
       <div class="welcome-field">
         <label class="welcome-label" for="firstBuild">What do you want to build first?</label>
         <input
@@ -292,11 +287,11 @@
           placeholder="A bot that trades bitcoin news headlines&hellip;"
           autocomplete="off"
           spellcheck="false" />
-        <div class="welcome-hint">This becomes your first project card. You can rename or delete it any time.</div>
+        <div class="welcome-hint">A note to carry through — your first project is created inside Continuum, where you can rename or delete it any time.</div>
       </div>
       <div class="panel-actions">
         <button class="btn-primary" data-advance>
-          <span>Seed this project</span>
+          <span>Continue</span>
           <span class="arrow">&rarr;</span>
         </button>
         <button class="btn-ghost" data-advance>Skip — I'll start blank</button>
@@ -307,7 +302,7 @@
     <article class="panel" data-panel="5">
       <div class="panel-eyebrow">Step 5 · Recovery kit</div>
       <h1 class="panel-title">Take your keys. Then step through.</h1>
-      <p class="panel-lede">A one-page bundle of everything that makes this Torii yours. Save it somewhere only you can reach. The default kit carries redacted previews and restoration instructions — never your wallet connection secret or full key.</p>
+      <p class="panel-lede">A one-page bundle of everything that makes this Torii yours. Save it somewhere only you can reach. The preview below is redacted — your full key is embedded only when you confirm the download, and your wallet connection secret is never included.</p>
       <!-- Redacted, secret-free preview populated at runtime from the agent's
            no-store recovery-kit endpoint. No static secret-adjacent values. -->
       <div class="kit-preview" data-kit-preview aria-live="polite">

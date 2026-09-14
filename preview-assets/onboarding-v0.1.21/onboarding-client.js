@@ -1408,10 +1408,11 @@ export function initStep2(doc = typeof document !== 'undefined' ? document : nul
         return;
       }
       connectBtn.disabled = true;
+      // FE-10: capture then clear the secret input BEFORE the await, so the full
+      // NWC connection string never lingers in the DOM during the round-trip.
+      if (input) input.value = '';
       renderStatus(statusEl, 'warn', '<div class="conn-line"><span class="conn-dot"></span><span>Connecting to your wallet…</span></div>');
       const res = await connectWallet({ nwcUri });
-      // Never echo the secret back: clear the box on every outcome.
-      if (input) input.value = '';
       connectBtn.disabled = false;
       if (res.ok) {
         showConnected(res);
@@ -1511,12 +1512,14 @@ export function initStep3(doc = typeof document !== 'undefined' ? document : nul
         return;
       }
       keyConnectBtn.disabled = true;
+      // FE-10: capture then clear the secret input BEFORE the await, so the full
+      // Routstr key never lingers in the DOM during the verification round-trip.
+      if (keyInput) keyInput.value = '';
       setProgress(progressEl, ONBOARD_PHASES.VERIFYING);
       const stop = startElapsed(progressEl);
       renderStatus(statusEl, 'warn', '<div class="conn-line"><span class="conn-dot"></span><span>Verifying with your provider…</span></div>');
       const res = await connectRoutstrKey({ key });
       stop();
-      if (keyInput) keyInput.value = '';
       if (res.ok) {
         // Idempotency: a verified key is terminal — keep the button disabled.
         renderSuccessAdvance(statusEl, progressEl, 3, res);
@@ -1652,6 +1655,7 @@ export function initStep5(doc = typeof document !== 'undefined' ? document : nul
   let kitBody = null;       // redacted agent kit (no secrets)
   let revealedKey = null;   // full key, in memory ONLY while shown inline
   let revealTimer = null;   // conservative auto-hide timer
+  let onStep5 = false;      // FE-10: true only while the deck is on step 5 — gates a late reveal
 
   const sessionLive = () => {
     try { return !!restoreSession(); } catch { return false; }
@@ -1733,6 +1737,10 @@ export function initStep5(doc = typeof document !== 'undefined' ? document : nul
     const res = await fetchFullKey();
     if (eye) eye.disabled = false;
     if (!res.ok) { setStatus('err', `<div class="conn-line"><span class="conn-dot"></span><span>${res.reason}</span></div>`); return; }
+    // FE-10: the await is an async boundary — re-verify the session is live AND
+    // the operator is still on step 5 before surfacing the full key, so a key
+    // that arrives after leaving the panel (or after expiry) never renders.
+    if (!sessionLive() || !onStep5) return;
     revealedKey = res.key;
     if (val) { val.textContent = revealedKey; val.classList.add('is-revealed'); }
     if (eye) { eye.setAttribute('aria-pressed', 'true'); eye.setAttribute('aria-label', 'Hide full Routstr key'); eye.innerHTML = EYE_OFF_SVG; }
@@ -1747,6 +1755,9 @@ export function initStep5(doc = typeof document !== 'undefined' ? document : nul
     if (!key) {
       const res = await fetchFullKey();
       if (!res.ok) { setStatus('err', `<div class="conn-line"><span class="conn-dot"></span><span>${res.reason}</span></div>`); return; }
+      // FE-10: same post-await boundary as revealInline — never copy a key that
+      // landed after the operator left step 5 or the session expired.
+      if (!sessionLive() || !onStep5) return;
       key = res.key;
     }
     try {
@@ -1785,6 +1796,7 @@ export function initStep5(doc = typeof document !== 'undefined' ? document : nul
   if (typeof window !== 'undefined') {
     window.addEventListener('onboarding:step', (e) => {
       const step = e && e.detail && e.detail.step;
+      onStep5 = (step === 5);
       if (step !== 5 && revealedKey && shouldMaskReveal('leave-step')) maskKey();
     });
   }
@@ -1807,6 +1819,9 @@ export function initStep5(doc = typeof document !== 'undefined' ? document : nul
       if (!keyForKit && kitBody.routstr && kitBody.routstr.connected) {
         const res = await fetchFullKey();
         if (!res.ok) { setStatus('err', `<div class="conn-line"><span class="conn-dot"></span><span>${res.reason}</span></div>`); return; }
+        // FE-10: post-await boundary — do not build a kit containing a key when
+        // the operator has since left step 5 or the session has expired.
+        if (!sessionLive() || !onStep5) return;
         keyForKit = res.key;
       }
       const kit = buildRecoveryKit(kitBody, { revealedKey: keyForKit });

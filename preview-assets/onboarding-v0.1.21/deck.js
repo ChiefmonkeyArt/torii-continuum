@@ -45,7 +45,7 @@
     dots.forEach((d, i) => {
       const step = i + 1;
       d.classList.remove('active', 'done');
-      if (step < Math.min(next, TOTAL_STEPS + 1)) {
+      if (step <= Math.min(next, TOTAL_STEPS + 1)) {
         if (step === next && next <= TOTAL_STEPS) d.classList.add('active');
         else if (step < next) d.classList.add('done');
       }
@@ -57,6 +57,14 @@
     // Nav button state
     navBack.disabled = next <= 1 || next > TOTAL_STEPS;
     navForward.disabled = next > TOTAL_STEPS;
+
+    // FE-11: the incoming panel is the ONLY interactive one — every other panel
+    // (including the just-left outgoing panel) becomes inert/unreachable so Tab
+    // and assistive tech can't land on hidden payment/key controls. Focus moves
+    // to the new panel's heading so keyboard users arrive on the right step.
+    applyPanelReachability(next);
+    const heading = nextPanel.querySelector('.panel-title');
+    if (heading) { heading.setAttribute('tabindex', '-1'); heading.focus({ preventScroll: true }); }
 
     // Broadcast so character.js can switch animations
     window.dispatchEvent(new CustomEvent('onboarding:step', {
@@ -70,6 +78,20 @@
     // listens for this same onboarding:step broadcast, resolves the real
     // same-origin Continuum destination, navigates deterministically, and shows
     // a fallback "Open Continuum now" link. Deck.js only drives the panels.
+  }
+
+  // FE-11: make exactly one panel reachable. Non-active panels get `inert` (no
+  // keyboard focus, no pointer interaction, hidden from the accessibility tree)
+  // plus `aria-hidden`, while the active panel is re-exposed. We deliberately do
+  // NOT toggle display/visibility — that would kill the outgoing panel's
+  // transition animation. Called on every step change and on restored load.
+  function applyPanelReachability(activeStep) {
+    panels.forEach((p, i) => {
+      const isActive = (i + 1) === activeStep;
+      p.inert = !isActive;
+      if (isActive) p.removeAttribute('aria-hidden');
+      else p.setAttribute('aria-hidden', 'true');
+    });
   }
 
   // Wire per-panel "advance" buttons
@@ -97,6 +119,11 @@
 
   // Keyboard nav
   window.addEventListener('keydown', (e) => {
+    // FE-11: never let deck navigation fire while the operator is editing a form
+    // control or composing text — Enter/arrows there belong to the field.
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+    if (e.isComposing) return;
     if (e.key === 'ArrowRight' || e.key === 'Enter') go(current + 1);
     if (e.key === 'ArrowLeft')  go(current - 1);
     if (e.key === 'Escape')     go(CURTAIN_STEP);
@@ -122,6 +149,9 @@
     });
     current = start;
   }
+  // FE-11: reachability must hold on the default path too — on a fresh load
+  // (start === 1) panels 2..6 would otherwise stay Tab-focusable.
+  applyPanelReachability(current);
   navBack.disabled = current <= 1;
   navForward.disabled = current > TOTAL_STEPS;
   window.dispatchEvent(new CustomEvent('onboarding:step', {

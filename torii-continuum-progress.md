@@ -9,6 +9,18 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.169-alpha — FE-10/11/12/13/16 current onboarding hardening (2026-09-14)
+
+**What shipped.** The current onboarding (`.21`) hardened across five audit findings: (FE-10) a late full-key reveal after leave/hide/expiry is now blocked by a post-await `sessionLive()` + `onStep5` re-check in reveal/copy/download, and NWC/Routstr secret inputs clear before the await; (FE-11) deck keyboard nav ignores form controls, the step-dot `active` state is reachable again, `inert`/`aria-hidden` make only the active panel reachable, and “Seed this project” is replaced with honest copy; (FE-12) the Fontshare CDN is gone in favour of the system font stack and heavy preloads are desktop-gated; (FE-13) a load-generation guard disposes stale GLB results so a stalled original that resolves late can't add a second model; (FE-16) `optimize-glb.mjs` refuses same-path source/output, captures provenance before writing, and derives the manifest asset name from the output path.
+
+**Tests.** 1120 green (66 files). One structural assertion updated to the new `handleFailure('stall', gen)` wiring. `npm run build` unchanged (no SPA source touched).
+
+**Deferred (documented in todo).** innerHTML→textContent sinks; NIP-46 unwired-surface note; RAF-tween/`animateLookAt` consolidation; optimize-glb atomic-write + tools lockfile + inspector hash-keyed verdicts. Preview files ship in the repo but the live onboarding endpoint still serves them via the separate cutover/rsync path (not the agent deploy workflow).
+
+**Version markers bumped.** 0.2.168 → 0.2.169-alpha (all four package files).
+
+**Update-All checklist.** Code [done]; version markers [done, all four]; continuity docs [done]; ops/ADR [n/a]; deploy workflow [n/a]; Space mirror [updated after merge]; onboarding preview live-sync [separate cutover/rsync step — not part of the agent deploy].
+
 ## v0.2.168-alpha — FE-01 historical preview archival (2026-09-14)
 
 **What shipped.** `onboarding-v0.1.0`–`v0.1.20` and `releases/` (485 files / 381,496,875 bytes) are removed from the working tree and recorded in `preview-assets/archive-manifest.tsv` (per-file SHA-256 + bytes) + `preview-assets/ARCHIVE.md` (recovery via Git history; last-pre-archival commit `a8ecdc6`). The current `onboarding-v0.1.21/` — hard-referenced by `ops/torii-final-cutover.sh` — is untouched, and the README now points to the archive index. The release artifact already excludes `preview-assets/`, so the deployed app is byte-identical; this is a working-tree/checkout cleanup, not an app change.

@@ -162,14 +162,22 @@ const GLB_URL = './assets/chiefmonkey-onboarding.glb';
 // give up. The preload hints are untouched (v0.1.11 no-crossorigin fix kept).
 const _load = { loaded: false, retried: false };
 let _stallTimer = null;
+// FE-13: monotonically increasing load generation. Every load kick-off and every
+// retry bumps it; a result (success OR failure) for an older generation is a stale
+// result from a superseded request and must be dropped, so a stalled original that
+// finally resolves after its retry can never add a second model to the scene.
+let _loadGen = 0;
 
 function startLoad(url) {
   clearTimeout(_stallTimer);
-  _stallTimer = setTimeout(() => handleFailure('stall'), 8000);
-  loader.load(url, onLoaded, undefined, onErr);
+  const gen = ++_loadGen;
+  _stallTimer = setTimeout(() => handleFailure('stall', gen), 8000);
+  loader.load(url, (gltf) => onLoaded(gltf, gen), undefined, (err) => onErr(err, gen));
 }
 
-function handleFailure(event) {
+function handleFailure(event, gen) {
+  // FE-13: ignore a failure from a load that has already been superseded.
+  if (gen !== _loadGen) return;
   const decision = nextLoadAttempt(_load, event);
   if (decision.action === 'ignore') return;
   clearTimeout(_stallTimer);
@@ -190,7 +198,10 @@ function handleFailure(event) {
   window.dispatchEvent(new CustomEvent('onboarding:model-error', { detail: { event } }));
 }
 
-function onLoaded(gltf) {
+function onLoaded(gltf, gen) {
+  // FE-13: stale-result disposal — if a retry already superseded this load, drop
+  // the late result and free its GPU resources instead of adding a duplicate model.
+  if (gen !== _loadGen) { disposeUnneededGltf(gltf); return; }
   _load.loaded = true;
   clearTimeout(_stallTimer);
   _stallTimer = null;
@@ -266,9 +277,25 @@ function onLoaded(gltf) {
   window.__toriiCharacterReady = true;
   window.dispatchEvent(new CustomEvent('onboarding:model-loaded', { detail: { step: readyStep } }));
 }
-function onErr(err) {
+function onErr(err, gen) {
+  // FE-13: a stale error (from a superseded load) is not a reason to retry again.
+  if (gen !== _loadGen) return;
   console.error('[character] GLB failed to load', err);
-  handleFailure('error');
+  handleFailure('error', gen);
+}
+
+// Release a GLB result we are discarding (it never entered the scene graph, so
+// there are no actions/mixer entries), disposing its geometry/material/texture
+// so it does not linger on the GPU.
+function disposeUnneededGltf(gltf) {
+  if (!gltf || !gltf.scene) return;
+  try {
+    gltf.scene.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) (Array.isArray(o.material) ? o.material : [o.material])
+        .forEach((m) => { if (m.map) m.map.dispose(); m.dispose(); });
+    });
+  } catch (_) { /* disposal is best-effort */ }
 }
 // v0.1.15: hide the canvas BEFORE kicking off the async load so the initial
 // hidden→fade-in transition is deterministic.
