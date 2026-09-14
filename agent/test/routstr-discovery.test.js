@@ -22,6 +22,7 @@ import {
   normalizeBaseUrl,
   extractProviderUrl,
   isOnionUrl,
+  safeRemoteBaseUrl,
   estimateSatsForModel,
   fetchProviderCatalog,
   discoverProviders,
@@ -76,7 +77,7 @@ test('fetchProviderCatalog parses models, filters empty ids, skips unreachable',
     if (String(url).includes('good.example')) {
       return {
         ok: true,
-        json: async () => ({
+        text: async () => JSON.stringify({
           data: [
             { id: 'gpt-x', name: 'GPT X', sats_pricing: { prompt: 0.01, completion: 0.02, request: 0.001 } },
             { id: '', name: 'empty id' },                 // filtered
@@ -278,4 +279,71 @@ test('returns provider_disabled when no provider is reachable and no legacy endp
   const r = await routstr.chat({ messages: [{ role: 'user', content: 'yo' }] });
   assert.equal(r.ok, false);
   assert.equal(r.code, 'provider_disabled');
+});
+// ─── A19: discovery trust + origin policy ────────────────────────────────────
+
+test('A19: safeRemoteBaseUrl accepts a safe https remote and rejects unsafe origins', () => {
+  assert.equal(safeRemoteBaseUrl('https://api.example.com/'), 'https://api.example.com');
+  assert.equal(safeRemoteBaseUrl('api.example.com'), 'https://api.example.com'); // prefix https
+  // Rejected: non-https, private/loopback/link-local literal IPs, embedded creds.
+  assert.equal(safeRemoteBaseUrl('http://api.example.com'), null);
+  assert.equal(safeRemoteBaseUrl('https://127.0.0.1'), null);
+  assert.equal(safeRemoteBaseUrl('https://127.1.2.3'), null);
+  assert.equal(safeRemoteBaseUrl('https://10.0.0.5'), null);
+  assert.equal(safeRemoteBaseUrl('https://172.16.0.1'), null);
+  assert.equal(safeRemoteBaseUrl('https://192.168.1.1'), null);
+  assert.equal(safeRemoteBaseUrl('https://169.254.169.254'), null); // metadata
+  assert.equal(safeRemoteBaseUrl('https://[::1]'), null);
+  assert.equal(safeRemoteBaseUrl('https://[fe80::1]'), null);
+  assert.equal(safeRemoteBaseUrl('https://[::ffff:127.0.0.1]'), null); // IPv4-mapped
+  assert.equal(safeRemoteBaseUrl('https://localhost'), null);
+  assert.equal(safeRemoteBaseUrl('https://foo.local'), null);
+  assert.equal(safeRemoteBaseUrl('https://svc.internal'), null);
+  assert.equal(safeRemoteBaseUrl('https://user:pass@api.example.com'), null); // creds
+});
+
+test('A19: discoverProviders drops unsafe announced URLs but keeps operator bootstrap', async () => {
+  const fakePool = {
+    subscribeMany(_relays, _filters, handlers) {
+      handlers.onevent({ pubkey: 'n1', content: '{}', tags: [['u', 'https://good.example']] });
+      handlers.onevent({ pubkey: 'n2', content: '{}', tags: [['u', 'http://127.0.0.1/v1']] });   // private
+      handlers.onevent({ pubkey: 'n3', content: '{}', tags: [['u', 'http://169.254.169.254']] }); // metadata
+      handlers.onevent({ pubkey: 'n4', content: '{}', tags: [['u', 'http://insecure.example']] }); // non-https
+      handlers.onevent({ pubkey: 'n5', content: '{}', tags: [['u', 'https://localhost']] });       // loopback
+      handlers.oneose();
+      return {};
+    },
+    close() {},
+  };
+  // A private/plain bootstrap endpoint is an explicit operator opt-in → kept.
+  const providers = await discoverProviders({
+    bootstrapEndpoints: ['http://192.168.1.10:8000'],
+    relays: ['wss://relay.test'],
+    pool: fakePool,
+  });
+  const urls = providers.map((p) => p.baseUrl);
+  assert.ok(urls.includes('https://good.example'), 'safe https announcement kept');
+  assert.ok(urls.includes('http://192.168.1.10:8000'), 'operator bootstrap exempt from the remote guard');
+  for (const bad of ['127.0.0.1', '169.254.169.254', 'insecure.example', 'localhost']) {
+    assert.ok(!urls.some((u) => u.includes(bad)), `unsafe announced URL dropped: ${bad}`);
+  }
+});
+
+test('A19: fetchProviderCatalog uses redirect:error and bounds concurrency', async () => {
+  const seen = [];
+  let concurrent = 0;
+  let maxConcurrent = 0;
+  const fetchFn = async (url, opts) => {
+    seen.push({ url: String(url), redirect: opts?.redirect ?? null });
+    concurrent++;
+    maxConcurrent = Math.max(maxConcurrent, concurrent);
+    await new Promise((r) => setTimeout(r, 5));
+    concurrent--;
+    return { ok: true, text: async () => JSON.stringify({ data: [{ id: 'm1' }] }) };
+  };
+  const providers = Array.from({ length: 20 }, (_, i) => ({ baseUrl: `https://p${i}.example`, name: null, npub: null }));
+  const catalog = await fetchProviderCatalog(providers, { fetchFn, concurrency: 8 });
+  assert.equal(catalog.length, 20);
+  assert.ok(seen.every((s) => s.redirect === 'error'), 'every catalog fetch must disallow redirects');
+  assert.ok(maxConcurrent <= 8, `concurrency bounded to 8, saw ${maxConcurrent}`);
 });
