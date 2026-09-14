@@ -9,6 +9,12 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.172-alpha — A22 real-app test seam (deps injection + real route registration) (2026-09-14)
+
+**What shipped.** `buildApp(cfg)` in `agent/index.mjs` now accepts an optional `deps = {}` injection seam exposing `auth` / `releaseChecker` / `updater` (each defaults to the production construction, so the entrypoint is unchanged). Two tests that previously copied inline route handlers into a minimal Fastify app now import `buildApp` and drive the REAL registrations via `app.inject()`: `auth-refresh-route.test.js` (fixed-clock `auth` double) and `update-routes.test.js` (in-memory `releaseChecker`/`updater` doubles + a real minted session token). This closes the audit’s A22 “copied route/fake passes independently of real wiring” gap — behaviour pins are now exercised against production wiring, not a drifting copy. The un-measured “cohesive domain-plugin split” of `index.mjs` remains deferred (the testability seam is now in place; the monolith split is a future maintainability pass, not a defect).
+
+**Version markers bumped.** 0.2.171 → 0.2.172-alpha (all four). Agent 616 / frontend 1121 green.
+
 ## v0.2.171-alpha — FE-09 routstr follow-ups (honesty + disconnect-reconnect) (2026-09-14)
 
 **What shipped.** Three honesty/correctness fixes: (1) the Routstr endpoint/budget card is relabelled “Endpoint + spending guide” with copy stating these are local-browser preferences while the live endpoint + any hard cap are server configuration and not yet enforced here — previously the UI implied these fields redirected traffic / capped spend when they only wrote local store state; (2) the balance poll no longer flips `connected` back to true on every tick, so a local Disconnect is no longer silently re-connected on the next balance result (new structural regression test); (3) the false “signed” claims in `projects.js` (“signed reference” → “local reference”) and `projectHome.js` (“signed, addressable nostr event” → “addressable record … kept locally”) match the null `sig`/`id` in `schema.js` until an event is actually signed.
