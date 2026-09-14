@@ -123,9 +123,17 @@ export async function topUpPollTick(session, handle, deps) {
   log(`[topup] poll response ok=${ok} paid=${paid} state=${state} throttled=${throttled}`);
   if (!ok) return { ok: false }; // transient; keep polling until expiry
   if (paid) {
-    // Drain the singleton (clears this very interval) BEFORE the UI update so a
-    // late tick can never re-enter toPaid and double-count the mint.
-    clearTopUpSession(session.quoteId);
+    // FE-05: re-verify we are STILL the current singleton AFTER the async status
+    // call. Two overlapping ticks can both pass the pre-await guard, both observe
+    // paid, and — without this post-await identity check — both drain the singleton
+    // and both invoke onPaid (double completion). Clearing is synchronous, so the
+    // first tick to reach here wins and every concurrent tick re-checks to
+    // undefined and bails as a duplicate.
+    if (topUpSessions.get(session.quoteId) !== session || session.completing) {
+      return { duplicate: true, paid: true };
+    }
+    session.completing = true; // request → paid → completing
+    clearTopUpSession(session.quoteId); // drain the singleton + interval
     await deps.onPaid(r.data);
     return { paid: true };
   }

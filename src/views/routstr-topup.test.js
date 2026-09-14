@@ -101,6 +101,35 @@ describe('topUpPollTick — the single poll iteration', () => {
     expect(topUpSessions.has('q-paid')).toBe(false);
   });
 
+  it('FE-05: two overlapping paid ticks invoke completion exactly once', async () => {
+    const session = createTopUpSession({ quoteId: 'q-concurrent', source: 'cashu' });
+    session.pollHandle = 77;
+    const onPaid = vi.fn();
+    // The status yields once so BOTH concurrent ticks pass the pre-await guard
+    // (the singleton still points at `session`) before either drains it.
+    const statusCashu = vi.fn(async () => {
+      await Promise.resolve();
+      return { ok: true, data: { paid: true, new_balance_sats: 50 } };
+    });
+    const deps = { statusCashu, statusNwc: vi.fn(), onPaid, log: noopLog };
+
+    const [r1, r2] = await Promise.all([
+      topUpPollTick(session, 77, deps),
+      topUpPollTick(session, 77, deps),
+    ]);
+
+    // The whole bug: without the post-await identity check this would call onPaid
+    // twice (two in-flight ticks both observing paid).
+    expect(onPaid).toHaveBeenCalledTimes(1);
+    expect(statusCashu).toHaveBeenCalledTimes(2); // both ticks did ask, that's fine
+    // Exactly one tick reports the real completion; the other is a duplicate.
+    const paidResults = [r1, r2].filter((r) => r.paid === true);
+    const duplicateResults = [r1, r2].filter((r) => r.duplicate === true);
+    expect(paidResults.length).toBe(2);
+    expect(duplicateResults.length).toBe(1);
+    expect(topUpSessions.has('q-concurrent')).toBe(false);
+  });
+
   it('keeps polling (no self-cancel) on a transient !ok response', async () => {
     const session = createTopUpSession({ quoteId: 'q-transient', source: 'cashu' });
     session.pollHandle = 1;
