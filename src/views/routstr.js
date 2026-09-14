@@ -5,6 +5,7 @@ import { h, clear, formatSats, openModal } from './util.js';
 import * as store from '../data/store.js';
 import { getRoutstr, updateRoutstr } from '../data/store.js';
 import { setChatContext } from '../chat.js';
+import { currentRoute } from '../router.js';
 import {
   walletBalance, walletReceive, isAgentConfigured,
   walletMintQuote, walletMintQuoteStatus, walletNwcInvoice, walletNwcInvoiceStatus,
@@ -39,6 +40,14 @@ let balancePollHandle = null;
 // mounted — so a backgrounded tab does no work and an unmounted view leaks no
 // timer. Changed cells flash the accent colour for 200ms.
 const USAGE_POLL_MS = 5000;
+
+// FE-04: Routstr is "active" only while the router is on its real or demo
+// route. The balance + usage polls use this to self-terminate the moment the
+// operator navigates away, instead of idling against a shared main element.
+function isRoutstrActive() {
+  const cr = currentRoute();
+  return !!cr && (cr.pattern === '/routstr' || cr.pattern === '/demo/routstr');
+}
 let usagePollHandle = null;
 let usageVisibilityHandler = null;
 let usageMount = null;
@@ -1130,6 +1139,9 @@ function renderUsage(c) {
 
 // Refresh the usage cells from the store — the single gated tick body.
 function usageTick() {
+  // FE-04 gate 0: the operator must still be ON Routstr. Leaving the view must
+  // stop the poll, not just no-op the tick while the interval keeps running.
+  if (!isRoutstrActive()) { stopUsagePoll(); return; }
   // Gate 1: the tab must be visible (a backgrounded tab does no work).
   if (typeof document !== 'undefined' && document.visibilityState && document.visibilityState !== 'visible') return;
   // Gate 2: the view must still be mounted (no work + no tearing after unmount).
@@ -1187,7 +1199,13 @@ function disconnect() {
 function startBalancePoll(mount) {
   stopBalancePoll();
   const tick = async () => {
+    // FE-04: stop entirely once the operator leaves Routstr, so a backgrounded
+    // or forgotten tab does not keep calling /api/wallet/balance every 15s.
+    if (!isRoutstrActive()) { stopBalancePoll(); return; }
     const r = await walletBalance();
+    // Re-check after the await: if the operator left while the balance was in
+    // flight, drop the result rather than mutate the store or tease the DOM.
+    if (!isRoutstrActive()) { stopBalancePoll(); return; }
     if (!r.ok || !r.data) return;
     const sats = readBalanceSats(r.data);
     if (sats == null) return; // no numeric balance in payload — leave display as-is

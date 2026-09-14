@@ -25,7 +25,7 @@ import {
   listMembers,
   BOARD_LIMITS,
 } from '../data/store.js';
-import { navigate } from '../router.js';
+import { navigate, currentRoute } from '../router.js';
 import { NavLink } from '../components/nav-link.js';
 import { setChatContext, compose } from '../chat.js';
 import { buildCardPrompt } from './card-prompt.js';
@@ -41,8 +41,18 @@ import {
 let mountEl = null;
 let currentSlug = null;
 
+// FE-04: the board is "active" only while the router is actually on its route
+// for the same slug. The module-global mount + slug used to persist across
+// navigation, so an in-flight imported-source response could repaint whatever
+// view the operator had navigated to in the meantime (board → login/dashboard
+// stamping the board back over the destination screen).
+function isBoardActive(slug) {
+  const cr = currentRoute();
+  return !!cr && cr.pattern === '/projects/:slug/board' && !!cr.params && cr.params.slug === slug;
+}
+
 function refresh() {
-  if (mountEl && currentSlug) renderBoard(mountEl, currentSlug);
+  if (mountEl && currentSlug && isBoardActive(currentSlug)) renderBoard(mountEl, currentSlug);
 }
 
 // ── Imported read-only sources (CONT-KANBAN-SYNC, v0.2.47-alpha) ────────────
@@ -53,6 +63,19 @@ function refresh() {
 // a refresh simply replaces this set (the server dedupes by fingerprint, so
 // repeated refreshes never duplicate cards).
 const importState = new Map(); // slug → { status, records, sources, syncedAt, reason, filters }
+
+// FE-04: imported records are owner-scoped. On any session change (sign-out,
+// owner change, session expiry) drop the cached snapshot AND the hanging mount
+// refs, so a previous owner's imported GitHub issues/Markdown can never render
+// into the next owner's board, and a stale in-flight response cannot repaint a
+// surface the operator has since left.
+if (typeof document !== 'undefined') {
+  document.addEventListener('continuum:session-changed', () => {
+    importState.clear();
+    mountEl = null;
+    currentSlug = null;
+  });
+}
 
 function agentAvailable() {
   try { return isAgentConfigured() && isLoggedIn(); } catch { return false; }

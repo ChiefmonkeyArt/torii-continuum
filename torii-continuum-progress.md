@@ -9,6 +9,16 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.167-alpha — FE-04 route-scope teardown (2026-09-14)
+
+**What shipped.** Three route-lifetime fixes: (1) the board's `refresh()` now repaints only while `currentRoute()` is `/projects/:slug/board` AND the slug matches, so a late imported-source response can no longer stamp the board back over the screen the operator navigated to; (2) `importState` and the hanging `mountEl`/`currentSlug` refs are cleared on `continuum:session-changed`, so a previous owner's imported GitHub issues/Markdown can never render into the next owner's board; (3) the Routstr balance + usage polls self-terminate the moment the operator leaves `/routstr` or `/demo/routstr`, with a post-await re-check so an in-flight balance can't mutate the store off-route.
+
+**Tests.** No new unit tests — the route/session lifetime is exercised by the existing navigation + session integration suites (all green). Frontend 1871 unchanged.
+
+**Version markers bumped.** 0.2.166 → 0.2.167-alpha (all four).
+
+**Update-All checklist.** Code [done]; version markers [done, all four]; continuity docs [done]; ops/ADR [n/a — no server/ops change]; deploy workflow [n/a]; Space mirror [updated after merge].
+
 ## v0.2.166-alpha — FE-08 noticeboard approval integrity (2026-09-14)
 
 **What shipped.** The review/sign surface no longer signs a malformed or generic (non-noticeboard) draft. A new `src/lib/noticeboard-validate.js` mirrors the agent's `noticeboard-contract` invariant (kind 30078, one `d="noticeboard"` replaceable tag, finite `created_at`, parseable non-empty well-formed notices array) and gates BOTH the review panel (no “Sign & publish” button on an invalid draft; the reason is shown inline, `Discard` still available) and `signAndPublish` (rechecks immediately before requesting a signature). `signAndPublish` now reconciles the signer's return through the shared `reconcileSignedEvent` adapter (used by auth/memory) and re-validates the reconciled event before it reaches the relay; a failed draft-discard after a successful publish is surfaced rather than swallowed; and each notice's outbound URL is shown in review so a link cannot be signed unseen.
