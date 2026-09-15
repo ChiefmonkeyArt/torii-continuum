@@ -560,6 +560,20 @@ test('working-values header is deterministic and carries constitution + COP prov
   assert.ok(a.provenance.code_of_practice_version);
 });
 
+test('working-values header tolerates a null/undefined covenant (fresh bot, no manifest)', () => {
+  // A fresh bot has no genesis manifest, so resolveConstitutionVersions()
+  // returns null and the chat path passes it straight into buildWorkingValues.
+  // It must not throw and must render byte-identically to a bare (current) call.
+  const bare = buildWorkingValues();
+  const fromNull = buildWorkingValues(null);
+  const fromUndefined = buildWorkingValues(undefined);
+  assert.doesNotThrow(() => buildWorkingValues(null));
+  assert.doesNotThrow(() => buildWorkingValues(undefined));
+  assert.equal(fromNull.header, bare.header);
+  assert.equal(fromNull.provenance.header_sha256, bare.provenance.header_sha256);
+  assert.equal(fromUndefined.header, bare.header);
+});
+
 test('working-values header carries the constitution + COP versions in force', () => {
   const { header, provenance } = buildWorkingValues();
   const con = getConstitution();
