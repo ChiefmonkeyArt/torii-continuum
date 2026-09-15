@@ -49,7 +49,8 @@ export const DATA_FENCE = '<<<UNTRUSTED-MEMORY-DATA>>>';
  * @param {{pinnedVersion?: string, acknowledgedVersion?: string}} [opts]
  * @returns {{ header: string, provenance: object }}
  */
-export function buildWorkingValues({ pinnedVersion, acknowledgedVersion } = {}) {
+export function buildWorkingValues(opts = {}) {
+  const { pinnedVersion, acknowledgedVersion } = opts || {};
   const current = getConstitution();
   const layers = getConstitutionLayers();
 
