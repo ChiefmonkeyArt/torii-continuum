@@ -2,6 +2,14 @@
 
 Living document. This will change as we learn.
 
+**Chat responsiveness (2026-09-22, CONT-CHAT-STREAM-1):** stream safe response
+text end to end before completion, while keeping actions and durable replies
+behind complete-response validation. Measure discovery, payment, provider wait,
+generation and settlement before selecting a faster model or changing routing.
+Never race paid calls for cosmetic speed, expose reasoning/action JSON, persist
+partial replies or weaken the owner-session boundary. See
+`docs/adr-chat-streaming-timings.md`.
+
 **Deployment deadline ownership (2026-09-22, CONT-CHAT-PROXY-1):** enforce
 provider budget < browser deadline < proxy timeout on the actual API mount,
 not merely a sibling route. Suite owns its generated `/agent/` fragment.

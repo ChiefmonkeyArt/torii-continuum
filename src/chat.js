@@ -22,6 +22,7 @@ import { currentRoute } from './router.js';
 import { threadKeyFor, pageTypeFor, projectSlugFrom, trimThread, sanitizeThreads, THREAD_CAP, sessionIdFor } from './chat-threads.js';
 import { clampInputHeight, inputShouldScroll, reserveSpaceFor } from './chat-layout.js';
 import { sealSession, unsealSession } from './session-crypto.js';
+import { phaseLabel, timingLabel } from './chat-stream.js';
 
 let logEl, inputEl, sendBtn, contextEl, modeEl, toggleEl, dockEl;
 let dockResizeObserver = null;
@@ -34,6 +35,24 @@ let mode = 'page'; // 'page' (default) | 'general'
 let context = { label: 'Continuum', where: 'projects' };
 let expanded = false;
 let thinking = false;
+// Preview is transient: never saved, sealed or mixed into another thread.
+let preview = null;
+let turnGeneration = 0;
+let previewPaint = null;
+function schedulePreviewPaint() {
+  if (previewPaint !== null) return;
+  previewPaint = setTimeout(() => {
+    previewPaint = null;
+    if (!logEl) return;
+    const bubble = logEl.querySelector('.chat-preview .bubble');
+    const status = logEl.querySelector('.chat-thinking');
+    if (preview?.key === activeKey && preview.token === getStoredToken() && bubble && status) {
+      bubble.textContent = preview.text;
+      status.textContent = preview.text ? 'Receiving reply…' : preview.phase;
+      logEl.scrollTop = logEl.scrollHeight;
+    } else renderLog();
+  }, 50);
+}
 
 const THREADS_STORAGE_KEY = 'continuum.chat.threads';
 // Read by the Routstr page (src/views/routstr.js) on mount: when set, the page
@@ -122,6 +141,9 @@ export function mountChat(root) {
 
 /** Drop every in-memory thread. Storage is cleared by the sign-out path. */
 export function resetThreads() {
+  turnGeneration += 1;
+  preview = null;
+  thinking = false;
   threads = {};
   if (logEl) syncActiveThread();
 }
@@ -316,6 +338,14 @@ function renderLog() {
     el.innerHTML = `<div class="bubble"></div>`;
     const bubble = el.querySelector('.bubble');
     bubble.textContent = m.text;
+    if (m.timingText) {
+      const detail = document.createElement('small');
+      detail.className = 'chat-timing';
+      detail.dataset.testid = 'chat-timing';
+      detail.textContent = m.timingText;
+      detail.title = 'Measured by your agent, including failed provider attempts. Total also includes preparation and completion work.';
+      el.appendChild(detail);
+    }
     if (m.action === 'topup') {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -326,10 +356,21 @@ function renderLog() {
     }
     logEl.appendChild(el);
   }
-  if (thinking) {
+  if (thinking && preview?.key === activeKey && preview.token === getStoredToken()) {
+    if (preview.text) {
+      const partial = document.createElement('div');
+      partial.className = 'chat-msg ai chat-preview';
+      partial.dataset.testid = 'chat-live-reply';
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = preview.text;
+      partial.appendChild(bubble);
+      logEl.appendChild(partial);
+    }
     const t = document.createElement('div');
     t.className = 'chat-thinking';
-    t.textContent = 'thinking';
+    t.dataset.testid = 'chat-stream-status';
+    t.textContent = preview.text ? 'Receiving reply…' : preview.phase;
     logEl.appendChild(t);
   }
   logEl.scrollTop = logEl.scrollHeight;
@@ -355,30 +396,45 @@ async function send() {
   // or owner change is dropped rather than written into a different owner's
   // thread. The token is the complete identity (HMAC-bound to the npub).
   const turnToken = getStoredToken();
+  const generation = ++turnGeneration;
   push('user', text);
   inputEl.value = '';
   autosize();
   if (!expanded) setExpanded(true);
 
   thinking = true;
+  preview = { key: turnKey, token: turnToken, text: '', phase: 'Preparing', timingText: '' };
   renderLog();
-  const reply = await getReply(text, buildContext());
+  const reply = await getReply(text, buildContext(), event => {
+    if (generation !== turnGeneration || turnToken !== getStoredToken()) return;
+    if (event.type === 'reset') { preview.text = ''; preview.phase = 'Waiting for model'; }
+    if (event.type === 'phase') preview.phase = phaseLabel(event.phase);
+    if (event.type === 'delta' && typeof event.delta === 'string') preview.text += event.delta;
+    if (event.timings) preview.timingText = timingLabel(event.timings);
+    // Coalesce token bursts to at most 20 paints/second.
+    schedulePreviewPaint();
+  });
+  if (generation !== turnGeneration) return;
+  const timingText = preview?.timingText;
+  clearTimeout(previewPaint);
+  previewPaint = null;
+  preview = null;
   thinking = false;
   // The operator signed out (or a different owner signed in) while the agent was
   // answering. The reply belongs to a superseded session — drop it. The
   // session-changed handler already reset in-memory threads, so re-pushing here
   // would resurrect a previous owner's conversation in a shared browser.
   if (turnToken !== getStoredToken()) return;
-  if (reply && typeof reply === 'object') pushTo(turnKey, 'ai', reply.text, reply.action);
-  else pushTo(turnKey, 'ai', reply);
+  if (reply && typeof reply === 'object') pushTo(turnKey, 'ai', reply.text, reply.action, timingText);
+  else pushTo(turnKey, 'ai', reply, undefined, timingText);
 }
 
 // Append to a specific thread; only re-render when it is the visible one. An
 // optional `action` tags the message so renderLog can attach an affordance
 // (e.g. a "Top Up" button for an insufficient-funds reply).
-function pushTo(key, who, text, action) {
+function pushTo(key, who, text, action, timingText) {
   if (!Array.isArray(threads[key])) threads[key] = [];
-  threads[key].push({ who, text, at: Date.now(), ...(action ? { action } : {}) });
+  threads[key].push({ who, text, at: Date.now(), ...(action ? { action } : {}), ...(timingText ? { timingText } : {}) });
   threads[key] = trimThread(threads[key], THREAD_CAP);
   saveThreads();
   void persistServerSession(key);
@@ -445,9 +501,9 @@ export function chatErrorMessage(result) {
  * missing or expired. Canned replies are served ONLY on the agent-less demo
  * build; a production build reports a structured error instead of a fake answer.
  */
-async function getReply(text, ctx) {
+async function getReply(text, ctx, onEvent) {
   if (isSessionLive()) {
-    const r = await agentChat({ message: text, context: ctx });
+    const r = await agentChat({ message: text, context: ctx, onEvent });
     if (r.ok && r.data?.reply) {
       // OWNER-UI-3: when the agent wrote to the shared store this turn (created/
       // updated a milestone or todo), reconcile the browser cache so the project

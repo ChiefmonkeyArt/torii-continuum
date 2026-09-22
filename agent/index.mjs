@@ -29,6 +29,7 @@ import { createRoutstr } from './core/routstr.mjs';
 import { createOllama } from './core/ollama.mjs';
 import { createModelRouter } from './core/model-router.mjs';
 import { createChatSkill } from './skills/chat.mjs';
+import { createChatTelemetry, createPreviewFilter, openChatStream } from './lib/chat-stream.mjs';
 import { createMemoryCache, validateCiphertext, ciphertextFilename, fingerprintCiphertext } from './lib/crypto.mjs';
 import { scrub } from './lib/scrub.mjs';
 import { createMemoryLoader } from './lib/memory.mjs';
@@ -213,7 +214,7 @@ const memory = createMemoryLoader({ cache: memoryCache, agentRoot: AGENT_ROOT, l
 const reflector = createReflector({ agentRoot: AGENT_ROOT, cache: memoryCache, log: app.log });
 await memory.loadCharacter();
 
-const chatSkill = createChatSkill(router, app.log, { memory, reflector });
+const chatSkill = deps.chatSkill ?? createChatSkill(router, app.log, { memory, reflector });
 
 // Genesis stack (GENESIS-1) — sovereign bot birth certificate bound to the
 // verified Nostr owner, under the humanitarian starter constitution. The audit
@@ -299,7 +300,7 @@ async function resolveConstitutionVersions(ownerNpub) {
 //   working directory can never silently relocate the encrypted secret blobs.
 const secretStore = createSecretStore(cfg, { dir: join(AGENT_ROOT, 'memory', 'secrets'), log: app.log });
 const routstrProvider = createRoutstrProvider(cfg, { log: app.log });
-const projectStore = createProjectStore({ secretStore, log: app.log });
+const projectStore = deps.projectStore ?? createProjectStore({ secretStore, log: app.log });
 void projectStore.load().catch((e) => app.log.warn(`[projectstore] boot load failed: ${e.message}`));
 
 // Disk-backed marker store for NWC-issued top-up invoices (v0.2.83-alpha). An
@@ -827,21 +828,44 @@ app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
   if (trimmed.length === 0) return reply.code(400).send({ error: 'empty message' });
   if (trimmed.length > 4000) return reply.code(400).send({ error: 'message too long (max 4000)' });
 
+  const streaming = req.body?.stream === true;
+  const channel = streaming ? openChatStream(reply) : null;
+  let filter;
+  const telemetry = createChatTelemetry(event => {
+    if (event.type === 'reset') filter?.reset();
+    channel?.emit(event);
+  });
+  filter = createPreviewFilter(delta => {
+    telemetry.firstText();
+    channel?.emit({ type: 'delta', delta });
+  });
+  try {
   // A23: pass the caller's effective constitution version so the working-values
   // header reflects what actually binds this bot, not merely the latest release.
-  const constitution = await resolveConstitutionVersions(req.session.npub);
-  const result = await chatSkill.handle({ message: trimmed, context, constitution });
+  const constitution = await telemetry.measure('prepare', () => resolveConstitutionVersions(req.session.npub));
+  const result = await chatSkill.handle({
+    message: trimmed, context, constitution, telemetry,
+    onDelta: streaming ? delta => filter.push(delta) : undefined,
+  });
   if (!result.ok) {
     // Structured + already-sanitised upstream failure. `code` is a stable token
     // (see agent/lib/provider-errors.mjs) so the SPA can branch without parsing
     // prose, and `error` never carries a raw upstream body or HTML error page.
     // 402 marks the payment-path failure the operator can fix by topping up.
     const status = result.code === 'insufficient_funds' ? 402 : 502;
-    return reply.code(status).send({
+    const failure = {
       error: result.reason,
       code: result.code || null,
       provider: result.provider || null,
-    });
+      timings: telemetry.snapshot(),
+    };
+    app.log.info({ evt: 'chat.timing', ok: false, ...failure.timings });
+    if (channel) {
+      channel.emit({ type: 'error', ...failure });
+      channel.end();
+      return reply;
+    }
+    return reply.code(status).send(failure);
   }
 
   // OWNER-UI-3: apply any store-write actions the model requested so the
@@ -851,11 +875,13 @@ app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
   const { reply: replyText, actions } = extractStoreActions(result.reply);
   const store_writes = [];
   for (const action of actions) {
+    // Disconnected preview clients must not trigger late store writes.
+    if (channel && !channel.connected()) break;
     const applied = await projectStore.applyAction(action);
     store_writes.push({ action: action.action, project: action.project, ok: applied.ok, reason: applied.reason || null });
   }
 
-  return {
+  const response = {
     reply: replyText,
     model: result.model,
     provider: result.provider,
@@ -863,7 +889,22 @@ app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
     sats_spent: result.sats_spent,
     fell_back_from: result.fell_back_from || null,
     store_writes: store_writes.length ? store_writes : null,
+    timings: telemetry.snapshot(),
   };
+  app.log.info({ evt: 'chat.timing', ok: true, ...response.timings });
+  if (channel) {
+    channel.emit({ type: 'done', ...response });
+    channel.end();
+    return reply;
+  }
+  return response;
+  } catch (error) {
+    if (!channel) throw error;
+    app.log.info({ evt: 'chat.timing', ok: false, ...telemetry.snapshot() });
+    channel.emit({ type: 'error', code: 'internal_error', error: 'Chat could not be completed.', timings: telemetry.snapshot() });
+    channel.end();
+    return reply;
+  }
 });
 
 // ─────────────────────────────────────────────────────────────

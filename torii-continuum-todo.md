@@ -11,11 +11,14 @@
 
 ### Active tasks
 
-- **CONT-CHAT-PROXY-1 (v0.2.178-alpha / Suite v0.9.23-alpha):** fix the
-  Suite-generated `/agent/` 60-second proxy cutoff. Code and regression coverage
-  are prepared; deploy the merged release pair, verify both runtime versions
-  and read/send 120s on `/agent/`, then ask the owner to verify actual chat.
-  Health checks do not prove inference success.
+- **CONT-CHAT-STREAM-1 (v0.2.179-alpha):** live text and stage timings implemented,
+  with regression and browser coverage. Complete release gates and deployment,
+  then verify the owner's next paid turn visibly streams; inspect first-text,
+  total, payment/model-wait/generation timings before proposing routing changes.
+- **CONT-CHAT-PROXY-1 (v0.2.178-alpha / Suite v0.9.23-alpha):** complete.
+  [Live verification](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/35720112841)
+  confirmed versions and 120s proxy limits. The owner subsequently confirmed
+  a reply arrived, but slowly; CONT-CHAT-STREAM-1 addresses visibility and measurement.
 - **CONT-UPDATE-CONSUMER:** the live Suite install has a pending v0.2.177-alpha
   request dated 2026-09-20 but no Continuum deploy service/timer to consume it.
   The existing authenticated GitHub deployment workflow is usable. Implement

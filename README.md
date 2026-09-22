@@ -2,6 +2,18 @@
 
 An app builder, project engine and marketplace for bot work — a gateway into the Torii ecosystem.
 
+## v0.2.179-alpha: live chat text and timing breakdown
+
+Owner chat displays model text as it arrives rather than waiting for the full
+reply and refund settlement. The dock shows provider-search, payment, model-wait,
+generation and settlement timings, plus first-text and total duration. Partial
+text is never persisted or applied as a project action; logout/navigation and
+provider fallback retain isolation. JSON API clients remain supported.
+
+See [the streaming decision](docs/adr-chat-streaming-timings.md) for the protocol,
+timing definitions, bounds and payment/privacy invariants. This improves visible
+responsiveness without promising faster model generation or changing models.
+
 ## v0.2.178-alpha: Suite chat timeout rollout
 
 Suite v0.9.23-alpha corrects the `/agent/` proxy from 60 seconds to 120 seconds,
