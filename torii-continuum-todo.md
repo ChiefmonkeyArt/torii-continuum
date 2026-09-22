@@ -11,6 +11,17 @@
 
 ### Active tasks
 
+- **CONT-CHAT-PROXY-1 (v0.2.178-alpha / Suite v0.9.23-alpha):** fix the
+  Suite-generated `/agent/` 60-second proxy cutoff. Code and regression coverage
+  are prepared; deploy the merged release pair, verify both runtime versions
+  and read/send 120s on `/agent/`, then ask the owner to verify actual chat.
+  Health checks do not prove inference success.
+- **CONT-UPDATE-CONSUMER:** the live Suite install has a pending v0.2.177-alpha
+  request dated 2026-09-20 but no Continuum deploy service/timer to consume it.
+  The existing authenticated GitHub deployment workflow is usable. Implement
+  an honest capability/status UI and a supported consumer separately; do not
+  silently clear the request or claim the in-app Update button is repaired.
+
 - **OWNER-UI — consolidate the owner interface into Continuum's own console and retire the Hermes owner dashboard. PLANNING LOCKED 2026-09-13. OWNER-UI-1 (sealed session layer) DONE v0.2.141-alpha; OWNER-UI-2 (server-backed shared store replacing `src/data/store.js`) DONE v0.2.142-alpha; OWNER-UI-3 (agent write bridge — AI creates/updates milestones + todos → live panels) DONE v0.2.143-alpha; OWNER-UI-4 (fold owner persona into Continuum chat, retire Hermes owner dashboard) DONE v0.2.145-alpha; OWNER-UI-5 (Perplexity-like chat polish) DONE v0.2.146-alpha. **ALL FIVE MILESTONES COMPLETE — the owner interface now lives wholly in Continuum's own console; the Hermes owner dashboard is retired.** **Close-out (v0.2.147-alpha):** the headless `hermes-owner` brain + loopback `/v1` OpenAI adapter are also retired — the owner voice is the Continuum agent itself, so there is no second Hermes install. Removed `agent/core/openai-adapter.mjs` + registration + `openai_adapter` config + test; deleted `ops/install-hermes-owner.sh` + `ops/hermes-owner/` + its test. The isolated `hermes-npc` greeter + nap-bridge (the public voice) are untouched. See `docs/hermes-two-voice.md`. **Why.** The Hermes dashboard (a bolted-on third-party surface at `/hermes/`) is the clunky owner UI; Continuum's own console already renders chat + projects + milestones/todos/board and is the cleaner surface. **Storage principle (decided).** All storage server-backed + private by default + encrypted at rest; owner→AI sessions are never relay-published ("Nostr-shaped" signed/portable format ≠ "relay-published" location). **Milestones.** (1) OWNER-UI-1 server-side encrypted session layer (list/create/delete + persistence); (2) OWNER-UI-2 server-backed shared store replacing browser `localStorage` (`src/data/store.js`); (3) OWNER-UI-3 agent write bridge for milestones/todos → live project panels; (4) OWNER-UI-4 fold owner persona into Continuum chat, retire Hermes owner dashboard; (5) OWNER-UI-5 Perplexity-like chat polish. **Two-voice boundary unchanged** — owner = private full-tool agent on the Routstr/Cashu spine; NPC = public store/world-only greeter on local Ollama (untouched). See `torii-continuum-strategy.md` → "Owner-console consolidation".
 
 - **AUDIT-REMEDIATION — drive the 2026-09-10 Suite code+storage audit findings to zero. IN PROGRESS.** Source docs: `audits/2026-09-10/{torii-suite-code-audit.md, torii-suite-audit-technical-appendices.md}` (Space mirror). Recommended order: dispatcher → destructive tests → funds/privacy → storage lifecycle → deadlines → Quest/installer → deployment contract → reclamation → consolidation → profiling. Status per finding:

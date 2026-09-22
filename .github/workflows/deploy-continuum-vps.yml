@@ -24,6 +24,11 @@ on:
         description: 'Release tag to deploy (must exist as a GitHub release, e.g. v0.2.111-alpha)'
         required: true
         type: string
+      suite_tag:
+        description: 'Optional merged Suite release tag to select before deploying (preserves .env; refuses local edits)'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   # Never run two VPS deploys at once — the installer holds no external lock
@@ -42,6 +47,7 @@ jobs:
       - name: Validate tag format
         env:
           TAG: ${{ inputs.tag }}
+          SUITE_TAG: ${{ inputs.suite_tag }}
         run: |
           set -euo pipefail
           # Mirror ops/deploy-unattended.sh CONTINUUM_TAG_RE exactly.
@@ -50,6 +56,18 @@ jobs:
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_ENV"
+          if [[ -n "$SUITE_TAG" && ! "$SUITE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::suite_tag must be an explicit release tag"
+            exit 1
+          fi
+
+      - name: Check out reviewed installer-selection helper
+        if: inputs.suite_tag != ''
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: ops/lib/select-suite-release.sh
+          sparse-checkout-cone-mode: false
 
       - name: Confirm tag exists as a GitHub release
         env:
@@ -109,6 +127,18 @@ jobs:
           # The live key matched the pinned anchor — now safe to trust for this run.
           ssh-keyscan -T 10 -t ed25519 "$host_only" >> ~/.ssh/known_hosts 2>/dev/null
           chmod 600 ~/.ssh/known_hosts
+
+      - name: Select merged Suite release without overwriting operator edits
+        if: inputs.suite_tag != ''
+        env:
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+          SUITE_TAG: ${{ inputs.suite_tag }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes -o BatchMode=yes \
+              -o ConnectTimeout=15 "$SSH_HOST" \
+              sudo -n bash -s -- "$SUITE_TAG" < ops/lib/select-suite-release.sh
 
       - name: Deploy tag on VPS
         env:
