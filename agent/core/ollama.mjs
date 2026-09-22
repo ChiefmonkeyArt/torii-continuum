@@ -184,7 +184,7 @@ export function createOllama(cfg, log) {
           const result = await consumeSSE(res.body, { onDelta: delta => {
             if (firstDelta === null) firstDelta = Date.now();
             onDelta(delta);
-          } });
+          }, started, onTrace: trace => telemetry?.upstream(trace) });
           parsed = { choices: [{ message: { content: result.content } }], usage: result.usage };
         } finally {
           telemetry?.add('provider_wait', (firstDelta ?? Date.now()) - readStarted);

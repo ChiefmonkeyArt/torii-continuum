@@ -139,3 +139,38 @@ test('Ollama streaming mode delivers content and keeps cost zero', async () => {
     assert.equal(seen.join(''), 'local hello');
   } finally { globalThis.fetch = original; await rm(dir, { recursive: true, force: true }); }
 });
+
+test('trace distinguishes batched upstream text from incremental arrivals', async () => {
+  for (const batched of [true, false]) {
+    let clock = 0;
+    const chunks = batched
+      ? [[100, frame('one') + frame('two') + 'data: [DONE]\n\n']]
+      : [[100, frame('one')], [350, frame('two')], [400, 'data: [DONE]\n\n']];
+    let trace;
+    const source = { getReader() { return {
+      async read() {
+        const item = chunks.shift();
+        if (!item) return { done: true };
+        clock = item[0];
+        return { done: false, value: encode(item[1]) };
+      }, async cancel() {}, releaseLock() {},
+    }; } };
+    await consumeSSE(source, { now: () => clock, started: 0, onTrace: t => { trace = t; } });
+    assert.equal(trace.content_events, 2);
+    assert.equal(trace.transport_chunks, batched ? 1 : 3);
+    assert.equal(trace.first_content_ms, 100);
+    assert.equal(trace.content_span_ms, batched ? 0 : 250);
+    assert.equal(trace.completed, true);
+  }
+});
+
+test('telemetry keeps bounded numeric traces and excludes upstream secrets', () => {
+  const t = createChatTelemetry();
+  t.attempt('routstr');
+  for (let i = 0; i < 20; i++) t.upstream({ content_events: 5, token: 'secret', endpoint: 'private', completed: true });
+  const result = t.snapshot();
+  assert.equal(result.upstream_attempts.length, 16);
+  assert.equal(result.upstream_attempts[0].content_events, 5);
+  assert.ok(!JSON.stringify(result).includes('secret'));
+  assert.ok(!JSON.stringify(result).includes('private'));
+});

@@ -9,6 +9,27 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.180-alpha: background provider discovery and transport traces (2026-09-22)
+
+Move metadata discovery to startup and refresh before cache expiry. Fresh chats
+do not wait for an in-progress refresh. Single-flight, negative caching,
+expiry checks and shutdown cleanup prevent stampedes or indefinite stale prices.
+No inference or wallet work occurs in background discovery; DeepSeek, routing
+policy and payment settings are untouched.
+
+Add numeric upstream chunk/content-event counts and arrival spread, plus
+independent browser arrival timing. The chat dock shows real elapsed waiting
+time and a compact first-text/total summary with expandable details.
+Tests contrast grouped and progressive upstream output. A real local nginx
+test proves the streaming helper bypasses proxy buffering without a paid call.
+
+Local tests: 644 agent tests (including the nginx test, no skips), 1,135 frontend
+tests across 68 files, all 17 ops suites, and the production build. Browser
+checks verified partial text before completion, waiting feedback, expandable
+timing details, and a 375px-wide dock without horizontal overflow.
+Source/live acceptance requires the merged tag rollout
+and subsequent owner turn; no claim of faster model inference is made.
+
 ## v0.2.179-alpha: streaming owner chat and latency measurements (2026-09-22)
 
 Routstr content now flows incrementally through an authenticated POST SSE response

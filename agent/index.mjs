@@ -177,6 +177,7 @@ const auth = deps.auth ?? createAuth(cfg, {
 });
 const wallet = await createWallet(cfg, app.log);
 const routstr = createRoutstr(cfg, wallet, app.log);
+app.addHook('onClose', async () => routstr.stopDiscovery());
 
 // Read-only project-source adapters (v0.2.47-alpha, CONT-KANBAN-SYNC). Imports
 // local Markdown to-do files + public GitHub issues into per-project Kanban
@@ -405,6 +406,10 @@ app.get('/api/health', async () => ({
   // First-touch state: false means the box is still unclaimed and the next
   // verified NIP-07 caller becomes admin. No pubkey is exposed either way.
   admin_claimed: auth.isClaimed(),
+  provider_discovery: {
+    ready: routstr.discoveryStatus().ready,
+    refreshing: routstr.discoveryStatus().refreshing,
+  },
 }));
 
 // Public /api/version is polled by every open login page, so cap it per-IP.
@@ -457,6 +462,7 @@ app.get('/api/health/models', { preHandler: requireAdmin }, async () => {
       enabled: true,
       endpoint: cfg.routstr?.endpoint || null,
       model: cfg.routstr?.model || null,
+      discovery: routstr.discoveryStatus(),
     },
     ollama: {
       enabled: ollamaEnabled,
@@ -1681,7 +1687,7 @@ const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(imp
 if (isMain) {
   const mainCfg = loadConfig();
   const {
-    app, auth, wallet, memoryCache, memory, memstore,
+    app, auth, wallet, memoryCache, memory, memstore, routstr,
   } = await buildApp(mainCfg);
 
   const port = mainCfg.server.port;
@@ -1702,6 +1708,9 @@ try {
 
 try {
   await app.listen({ port, host });
+  // Catalogue discovery is read-only: no wallet allocation or inference.
+  // Start after binding so readiness/login never waits for remote catalogues.
+  if (mainCfg.model_router?.strategy !== 'ollama_only') void routstr.startDiscovery();
   app.log.info(`torii-continuum-agent listening on http://${host}:${port}`);
   app.log.info(
     auth.isClaimed()

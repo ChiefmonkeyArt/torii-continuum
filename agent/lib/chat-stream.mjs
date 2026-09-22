@@ -8,6 +8,8 @@ export function createChatTelemetry(emit = () => {}, now = performance.now.bind(
   let firstText = null;
   let attempts = 0;
   let provider = null;
+  let deltaEvents = 0;
+  const upstream = [];
   const add = (phase, ms) => {
     if (PHASES.has(phase) && Number.isFinite(ms)) {
       totals[`${phase}_ms`] = (totals[`${phase}_ms`] || 0) + Math.max(0, ms);
@@ -25,12 +27,22 @@ export function createChatTelemetry(emit = () => {}, now = performance.now.bind(
       provider = name;
       emit({ type: 'reset', provider, attempt: attempts });
     },
-    firstText() { if (firstText === null) firstText = now() - started; },
+    firstText() { deltaEvents++; if (firstText === null) firstText = now() - started; },
+    upstream(trace) {
+      if (upstream.length >= 16) return;
+      const safe = { attempt: attempts, provider, completed: trace?.completed === true };
+      for (const key of ['transport_chunks', 'content_events', 'first_chunk_ms', 'first_content_ms', 'content_span_ms']) {
+        safe[key] = Number.isFinite(trace?.[key]) ? Math.max(0, Math.round(trace[key])) : null;
+      }
+      upstream.push(safe);
+    },
     snapshot() {
       return {
         ...Object.fromEntries([...PHASES].map(p => [`${p}_ms`, Math.round(totals[`${p}_ms`] || 0)])),
         first_text_ms: firstText === null ? null : Math.round(firstText),
         total_ms: Math.round(now() - started), attempts, provider,
+        agent_delta_events: deltaEvents,
+        upstream_attempts: upstream.map(item => ({ ...item })),
       };
     },
   };

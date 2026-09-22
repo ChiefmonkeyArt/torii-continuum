@@ -243,3 +243,6 @@
   overflow-wrap: anywhere;
 }
 .chat-msg.ai { flex-direction: column; }
+.chat-timing summary { cursor: pointer; }
+.chat-timing[open] summary { margin-bottom: 6px; }
+.chat-timing summary:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 3px; }

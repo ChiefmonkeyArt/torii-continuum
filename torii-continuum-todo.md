@@ -11,10 +11,17 @@
 
 ### Active tasks
 
+- **CONT-DISCOVERY-PREFETCH (v0.2.180-alpha):** startup preload, refresh-ahead,
+  single-flight, failure cooldown and shutdown implemented. Verify readiness on
+  the live server after rollout; normal chats should reuse a fresh catalogue.
+- **CONT-STREAM-TRACE (v0.2.180-alpha):** compare bounded upstream chunk/event
+  spread with browser arrival spread on the next owner turn. Keep DeepSeek
+  unchanged; do not claim the upstream batching source is proven until measured.
 - **CONT-CHAT-STREAM-1 (v0.2.179-alpha):** live text and stage timings implemented,
-  with regression and browser coverage. Complete release gates and deployment,
-  then verify the owner's next paid turn visibly streams; inspect first-text,
-  total, payment/model-wait/generation timings before proposing routing changes.
+  tested and deployed via [PR #215](https://github.com/ChiefmonkeyArt/torii-continuum/pull/215).
+  Owner acceptance showed replies and timing data, but text arrived together.
+  First/repeat totals were 44.9s/8.6s; discovery 27.8s/0.0s. Continue with the
+  prefetch and transport trace tasks above rather than changing the model.
 - **CONT-CHAT-PROXY-1 (v0.2.178-alpha / Suite v0.9.23-alpha):** complete.
   [Live verification](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/35720112841)
   confirmed versions and 120s proxy limits. The owner subsequently confirmed

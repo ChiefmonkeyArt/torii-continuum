@@ -77,3 +77,26 @@ test('timing summary labels measured first text, total and stage durations', () 
   expect(timingLabel({ first_text_ms: 1200, total_ms: 3000, payment_ms: 100, attempts: 1 }))
     .toBe('First text 1.2s · Total 3.0s · Payment 0.1s · Attempts 1');
 });
+
+test('browser timings include connection wait and distinguish spaced chunks', async () => {
+  let clock = 100;
+  const chunks = [
+    [100, frame({ type: 'phase', phase: 'prepare' })],
+    [200, frame({ type: 'delta', delta: 'one' })],
+    [700, frame({ type: 'delta', delta: 'two' })],
+    [800, frame({ type: 'done', reply: 'onetwo', timings: { total_ms: 700 } })],
+  ];
+  const source = { body: { getReader() { return {
+    async read() {
+      const item = chunks.shift();
+      if (!item) return { done: true };
+      clock = item[0]; return { done: false, value: encode(item[1]) };
+    }, async cancel() {}, releaseLock() {},
+  }; } } };
+  const result = await readChatEvents(source, () => {}, { started: 0, now: () => clock });
+  expect(result.data.timings.browser_first_event_ms).toBe(100);
+  expect(result.data.timings.browser_first_text_ms).toBe(200);
+  expect(result.data.timings.browser_text_span_ms).toBe(500);
+  expect(result.data.timings.browser_delta_events).toBe(2);
+  expect(result.data.timings.total_ms).toBe(700);
+});
