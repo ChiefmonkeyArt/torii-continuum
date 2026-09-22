@@ -9,6 +9,30 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.178-alpha: Suite-owned chat proxy timeout rollout (2026-09-22)
+
+The observed `POST /agent/api/chat` 504 is recorded in nginx's error log at
+10:54:29 UTC. Suite's generated `/agent/` route allowed only 60 seconds;
+the live agent total budget is 100 seconds and the browser deadline 115 seconds.
+Changing the separate `/api/` timeout cannot correct this request path.
+
+Suite v0.9.23-alpha supplies proxy connect/read/send limits of 5/120/120 seconds.
+Continuum adds a tested, optional `suite_tag` deployment input so the existing
+installer checkout can be selected from a merged tag without overwriting local
+tracked edits or operator `.env` state. Invalid tags, foreign origins, failed
+fetches, unmerged releases, version mismatch and checkout collisions fail closed.
+
+Verification includes rendered-fragment assertions and a real-nginx delayed
+reply regression test in Suite, plus helper failure-path tests here. Deployment
+and owner chat verification must be reported from actual results, not inferred
+from these tests. The in-app updater's missing consumer remains open.
+
+Local gates: 1,123 frontend tests across 66 files, 620 agent tests under Node 22,
+all 17 ops shell suites, shellcheck at error severity, and a clean production
+build. Suite's full test set passes, including the real nginx test; against the
+old installer that test returns HTTP 504 as expected. The release pair must
+still pass remote CI and live post-deployment checks.
+
 ## v0.2.174-alpha — Suite SB-02/04/26 ops hardening (nap identity, adopt stale state, legacy cutover pin) (2026-09-14)
 
 **What shipped.** Three open Suite SB findings remediated in the Continuum ops layer.

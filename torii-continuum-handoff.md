@@ -1,5 +1,32 @@
 # Continuum — Session Handover
 
+## Current release: v0.2.178-alpha / Suite v0.9.23-alpha
+
+CONT-CHAT-PROXY-1 repairs the Suite-owned `/agent/` 60-second timeout that
+interrupted chat before the existing 100-second provider budget finished.
+Suite changes read/send to 120s and connect to 5s. Continuum adds the optional
+`suite_tag` input and the tested `ops/lib/select-suite-release.sh` helper to the
+existing manual deployment workflow. Credentials and model policy are unchanged.
+
+Rollout: merge and tag both PRs, wait for the Continuum artifact, then dispatch
+**Deploy to VPS** with `tag=v0.2.178-alpha` and `suite_tag=v0.9.23-alpha`.
+The helper selects only a merged Suite tag matching VERSION; it refuses local
+tracked edits, tag rewrites and foreign origins. The host's `.env` is preserved.
+Verify live frontend/agent version, Suite checkout/tag/main, and `/agent/`
+connect/read/send 5/120/120s. Owner chat response remains a separate acceptance
+check; no automated paid chat test is authorised by this rollout.
+
+The shared `torii-quest` **VPS infra repair (manual)** workflow permits bounded
+diagnostics through `torii-admin-run`; Continuum is not in that wrapper's unit
+allowlist, so do not bypass it to obtain service journals. Its allowed reader
+can inspect relevant nginx configuration and selected non-secret queue metadata.
+
+Open: in-app Update has no installed consumer on this Suite layout. The
+v0.2.177-alpha request from 2026-09-20 remains queued; do not claim that control
+is fixed. Existing GitHub deployment is separate and operational.
+
+## Previous releases
+
 **Current state (v0.2.177-alpha — fix fresh-bot first-chat null-constitution crash):** `buildWorkingValues` threw `TypeError: Cannot destructure property 'pinnedVersion' … as it is null` when handed a `null` covenant — exactly what a brand-new install returns before any genesis manifest exists (`resolveConstitutionVersions()` → `null` on `/api/chat` and `/api/memory/working-values`). Result: the very first chat on a fresh box died as a sanitized 500 before reaching any model. Fix: `buildWorkingValues(opts = {})` now destructures from `opts || {}`, so `null`/`undefined` both default to the current covenant (already the documented behaviour). +1 regression test (`memory1.test.js`) asserting `null`/`undefined` render byte-identical to a bare call. Version → v0.2.177-alpha (root + agent package.json + lockfiles).
 
 **Previous state (v0.2.174-alpha — Suite SB-02/04/26 ops hardening):** Three open Suite SB findings fixed in the Continuum ops layer. SB-04: nap-bridge identity now uses `resolve_identity()` (one helper call, one node pass, fails closed) — the old code ran a supplied `NPC_NSEC` as a command name (leaking it) and re-minted a different nsec per `--generate` field. SB-02: `layout_detect` now recognises the artifact-only `VERSION` marker alongside `.git`, so an artifact-installed Continuum is no longer misread as `partial-adoption` (which preferred stale standalone state). SB-26: the legacy final-cutover now fails closed unless `FORCE_LEGACY_CUTOVER=1`. Regression tests added; all 15 `ops/test/*.sh` green. Deployed live (VPS == tag == main HEAD). **NEXT (Suite SB remediation, cross-repo):** remaining open SB findings live in torii-suite (SB-05/06/07/13/14/15/16/18), torii-base (SB-01/17), and the onboarding prototype (SB-09/19/20/21/22/23/24/25) — tracked in `audits/2026-09-10/suite-sb-inventory.md`.

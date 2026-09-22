@@ -2,6 +2,15 @@
 
 Living document. This will change as we learn.
 
+**Deployment deadline ownership (2026-09-22, CONT-CHAT-PROXY-1):** enforce
+provider budget < browser deadline < proxy timeout on the actual API mount,
+not merely a sibling route. Suite owns its generated `/agent/` fragment.
+Continuum may select an explicitly released, merged Suite installer through
+the deployment workflow, with local-edit and provenance guards; it must not
+silently replace operator state or assume an existing checkout is current.
+See `docs/adr-suite-chat-timeout-rollout.md`. Infrastructure timeout correction
+does not itself prove model responsiveness or owner-chat success.
+
 Source-of-truth split (per the `Torii` Space instructions, one set per project): this file (`torii-continuum-strategy.md`) owns Continuum's vision, core principles, decision rules, and architecture direction. `torii-continuum-todo.md` owns the active task queue. `torii-continuum-progress.md` is the release log. `torii-continuum-handoff.md` and `README.md` are the developer entry points.
 
 Continuum is a **separate app** from Torii Quest. Quest is the game; Continuum is the sovereign dashboard, project engine, and personal AI layer. They share an operator brain (the `Torii` project workspace) and a namespace (`torii-*`), but they are two repos, two versioning cadences, two live surfaces:

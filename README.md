@@ -2,6 +2,19 @@
 
 An app builder, project engine and marketplace for bot work — a gateway into the Torii ecosystem.
 
+## v0.2.178-alpha: Suite chat timeout rollout
+
+Suite v0.9.23-alpha corrects the `/agent/` proxy from 60 seconds to 120 seconds,
+outside Continuum's existing 100-second agent and 115-second browser deadlines.
+The manual **Deploy to VPS** workflow now accepts optional `suite_tag` for a
+reviewed installer update; use `tag=v0.2.178-alpha`, `suite_tag=v0.9.23-alpha`.
+It refuses foreign origins, tracked local edits, moved/unmerged tags and
+VERSION mismatches, without reading or overwriting the operator's `.env`.
+
+See [the rollout decision](docs/adr-suite-chat-timeout-rollout.md) for checks,
+limitations and the separate, still-open in-app update-consumer issue. No
+authentication, model selection, wallet or owner-state behavior changes here.
+
 Continuum treats every project like a nostr identity: portable, signable, yours. Projects, sessions, milestones, todos, and files are all shaped as nostr events (addressable kinds 30078–30082). MVP stores them in `localStorage`; the same objects flip to signed relay events without re-shaping.
 
 ## What's here (v0.2.48-alpha)
