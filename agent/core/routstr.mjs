@@ -117,7 +117,7 @@ export function parseSSE(body) {
  * `onDelta` is best-effort UI progress only; the returned content remains the
  * authoritative completion used for refunds, actions and persistence.
  */
-export async function consumeSSE(stream, { onDelta, now = Date.now, started = now() } = {}) {
+export async function consumeSSE(stream, { onDelta, onTrace, now = Date.now, started = now() } = {}) {
   if (!stream || typeof stream.getReader !== 'function') return { content: '', usage: null, first_token_ms: null };
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -127,6 +127,10 @@ export async function consumeSSE(stream, { onDelta, now = Date.now, started = no
   let firstTokenMs = null;
   let finished = false;
   let bytes = 0;
+  let transportChunks = 0;
+  let contentEvents = 0;
+  let firstChunkMs = null;
+  let lastTokenMs = null;
 
   const consumeLine = (rawLine) => {
     const line = rawLine.trim();
@@ -141,6 +145,8 @@ export async function consumeSSE(stream, { onDelta, now = Date.now, started = no
     const delta = chunk.choices?.[0]?.delta?.content;
     if (typeof delta === 'string' && delta.length > 0) {
       if (firstTokenMs === null) firstTokenMs = Math.max(0, now() - started);
+      lastTokenMs = Math.max(0, now() - started);
+      contentEvents += 1;
       content += delta;
       if (typeof onDelta === 'function') {
         try { onDelta(delta); } catch { /* UI observers never alter payment handling. */ }
@@ -155,6 +161,10 @@ export async function consumeSSE(stream, { onDelta, now = Date.now, started = no
     while (!done) {
       const part = await reader.read();
       bytes += part.value?.byteLength || 0;
+      if (part.value?.byteLength) {
+        transportChunks += 1;
+        if (firstChunkMs === null) firstChunkMs = Math.max(0, now() - started);
+      }
       if (bytes > 2 * 1024 * 1024) throw new Error('completion stream exceeds limit');
       pending += decoder.decode(part.value || new Uint8Array(), { stream: !part.done });
       const lines = pending.split(/\r?\n/);
@@ -167,6 +177,12 @@ export async function consumeSSE(stream, { onDelta, now = Date.now, started = no
     if (pending && !done) consumeLine(pending);
     if (!finished) throw new Error('incomplete completion stream');
   } finally {
+    try { onTrace?.({
+      transport_chunks: transportChunks, content_events: contentEvents,
+      first_chunk_ms: firstChunkMs, first_content_ms: firstTokenMs,
+      content_span_ms: firstTokenMs === null ? null : Math.max(0, lastTokenMs - firstTokenMs),
+      completed: finished,
+    }); } catch { /* Diagnostics never change inference/accounting. */ }
     try { await reader.cancel(); } catch {}
     reader.releaseLock();
   }
@@ -276,17 +292,39 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
   }
   const relays = Array.isArray(discovery.relays) && discovery.relays.length ? discovery.relays : undefined;
 
-  // Provider + model registry, lazily populated on first chat and refreshed
-  // every `refresh_minutes` (default 10) so model churn doesn't hard-code us to
-  // a stale catalog. `deps` seams keep `node --test` hermetic.
+  // Refresh ahead of expiry in production. Fresh entries remain usable during
+  // background work; expired prices are never silently treated as fresh.
   let catalog = [];
   let catalogAt = 0;
   let catalogPromise = null;
-  const refreshMs = (discovery.refresh_minutes ?? 10) * 60 * 1000;
+  let lastAttemptAt = null;
+  let lastRefreshMs = null;
+  let background = false;
+  let refreshTimer = null;
+  const cacheNow = deps.cacheNow || Date.now;
+  const schedule = deps.setTimeout || setTimeout;
+  const cancel = deps.clearTimeout || clearTimeout;
+  const configuredRefresh = discovery.refresh_minutes ?? 10;
+  const refreshMs = Number.isFinite(configuredRefresh) && configuredRefresh > 0
+    ? Math.max(60000, configuredRefresh * 60000) : 600000;
+  const fresh = () => catalog.length > 0 && cacheNow() - catalogAt < refreshMs;
 
-  async function ensureCatalog() {
-    if (catalog.length && Date.now() - catalogAt < refreshMs) return catalog;
+  function discoveryStatus() {
+    return {
+      ready: fresh(), refreshing: catalogPromise !== null,
+      age_ms: catalog.length ? Math.max(0, cacheNow() - catalogAt) : null,
+      refresh_ms: lastRefreshMs,
+      providers: catalog.length,
+      models: catalog.reduce((n, p) => n + p.models.length, 0),
+    };
+  }
+
+  async function ensureCatalog({ force = false } = {}) {
+    if (!force && fresh()) return catalog;
     if (catalogPromise) return catalogPromise;
+    // Negative caching prevents offline bursts from repeatedly probing relays.
+    if (!force && lastAttemptAt !== null && cacheNow() - lastAttemptAt < 10000) return [];
+    lastAttemptAt = cacheNow();
     catalogPromise = (async () => {
       try {
         let providers;
@@ -304,8 +342,10 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
           timeoutMs: discovery.catalog_timeout_ms,
           fetchFn: deps.fetchFn || fetch,
         });
-        catalog = fetched.filter((e) => Array.isArray(e.models) && e.models.length > 0);
-        catalogAt = Date.now();
+        const next = fetched.filter((e) => Array.isArray(e.models) && e.models.length > 0);
+        // A failed/empty early refresh must not destroy a still-valid catalogue.
+        // Do not renew its timestamp: expired data remains unusable for pricing.
+        if (next.length) { catalog = next; catalogAt = cacheNow(); }
         const modelCount = catalog.reduce((n, p) => n + p.models.length, 0);
         if (catalog.length) {
           log.info(`[routstr] discovery: ${catalog.length} reachable provider(s), ${modelCount} model(s)`);
@@ -315,11 +355,39 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       } catch (e) {
         log.warn(`[routstr] discovery failed: ${e.message}`);
       } finally {
+        lastRefreshMs = Math.max(0, cacheNow() - lastAttemptAt);
         catalogPromise = null;
       }
-      return catalog;
+      return fresh() ? catalog : [];
     })();
     return catalogPromise;
+  }
+
+  function armRefresh() {
+    if (!background) return;
+    // Refresh while prices are still valid, leaving time for slow discovery.
+    const delay = fresh()
+      ? Math.max(10000, catalogAt + refreshMs * 0.75 - cacheNow())
+      : 30000;
+    refreshTimer = schedule(() => {
+      refreshTimer = null;
+      if (background) void ensureCatalog({ force: true }).finally(armRefresh);
+    }, delay);
+    refreshTimer?.unref?.();
+  }
+
+  function startDiscovery() {
+    if (background) return catalogPromise || Promise.resolve(fresh() ? catalog : []);
+    background = true;
+    const warming = ensureCatalog();
+    void warming.finally(armRefresh);
+    return warming;
+  }
+
+  function stopDiscovery() {
+    background = false;
+    if (refreshTimer !== null) cancel(refreshTimer);
+    refreshTimer = null;
   }
 
   /**
@@ -419,7 +487,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
           streamed = await consumeSSE(res.body, { onDelta: delta => {
             if (firstDelta === null) firstDelta = now();
             hooks.onDelta?.(delta);
-          }, now, started });
+          }, onTrace: trace => hooks.telemetry?.upstream(trace), now, started });
         } finally {
           hooks.telemetry?.add('provider_wait', (firstDelta ?? now()) - readStarted);
           if (firstDelta !== null) hooks.telemetry?.add('generation', now() - firstDelta);
@@ -527,9 +595,9 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
    * one). Returns [{ baseUrl, model, providerName }].
    */
   async function resolveCandidates(modelId) {
-    await ensureCatalog();
+    const available = await ensureCatalog();
     const matches = [];
-    for (const provider of catalog) {
+    for (const provider of available) {
       for (const m of provider.models) {
         if (modelId && m.id !== modelId) continue;
         matches.push({ baseUrl: provider.baseUrl, model: m, providerName: provider.name });
@@ -655,5 +723,5 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     return attempt;
   }
 
-  return { chat, refreshCatalog: ensureCatalog };
+  return { chat, refreshCatalog: ensureCatalog, startDiscovery, stopDiscovery, discoveryStatus };
 }

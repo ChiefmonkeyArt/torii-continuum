@@ -1,10 +1,14 @@
 // Incremental UTF-8/SSE reader. EOF without a terminal event is NOT success.
-export async function readChatEvents(response, onEvent) {
+export async function readChatEvents(response, onEvent, { started = performance.now(), now = () => performance.now() } = {}) {
   if (!response.body?.getReader) throw new Error('missing chat stream');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let size = 0;
+  let firstEventMs = null;
+  let firstTextMs = null;
+  let lastTextMs = null;
+  let deltaEvents = 0;
   try {
     while (true) {
       const part = await reader.read();
@@ -18,6 +22,23 @@ export async function readChatEvents(response, onEvent) {
         const data = frame.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trim()).join('\n');
         if (!data) continue;
         const event = JSON.parse(data);
+        const elapsed = Math.max(0, now() - started);
+        if (firstEventMs === null) firstEventMs = elapsed;
+        if (event.type === 'delta' && typeof event.delta === 'string' && event.delta) {
+          if (firstTextMs === null) firstTextMs = elapsed;
+          lastTextMs = elapsed;
+          deltaEvents += 1;
+        }
+        if (event.type === 'done' || event.type === 'error') {
+          event.timings = {
+            ...event.timings,
+            browser_first_event_ms: Math.round(firstEventMs),
+            browser_first_text_ms: firstTextMs === null ? null : Math.round(firstTextMs),
+            browser_text_span_ms: firstTextMs === null ? null : Math.round(lastTextMs - firstTextMs),
+            browser_delta_events: deltaEvents,
+            browser_total_ms: Math.round(elapsed),
+          };
+        }
         onEvent?.(event);
         if (event.type === 'done') return { ok: true, data: event };
         if (event.type === 'error') return { ok: false, reason: event.error || 'Chat failed.', code: event.code, data: event };
@@ -49,5 +70,12 @@ export function timingLabel(t) {
       .filter(([key]) => Number.isFinite(t[`${key}_ms`]))
       .map(([key, label]) => `${label} ${seconds(t[`${key}_ms`])}`),
     Number.isFinite(t.attempts) ? `Attempts ${t.attempts}` : null,
+    ...(Array.isArray(t.upstream_attempts) ? t.upstream_attempts.slice(-1).flatMap(a => [
+      `Upstream chunks ${a.transport_chunks ?? 0}`,
+      `Text events ${a.content_events ?? 0}`,
+      a.content_span_ms == null ? null : `Upstream text spread ${seconds(a.content_span_ms)}`,
+    ]) : []),
+    t.browser_first_text_ms == null ? null : `Browser first text ${seconds(t.browser_first_text_ms)}`,
+    t.browser_text_span_ms == null ? null : `Browser text spread ${seconds(t.browser_text_span_ms)}`,
   ].filter(Boolean).join(' · ');
 }

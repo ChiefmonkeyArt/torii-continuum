@@ -39,6 +39,12 @@ let thinking = false;
 let preview = null;
 let turnGeneration = 0;
 let previewPaint = null;
+let previewClock = null;
+function previewStatus() {
+  if (!preview) return '';
+  if (preview.text) return 'Receiving reply…';
+  return `${preview.phase} · ${Math.floor(Math.max(0, performance.now() - preview.started) / 1000)}s`;
+}
 function schedulePreviewPaint() {
   if (previewPaint !== null) return;
   previewPaint = setTimeout(() => {
@@ -48,7 +54,7 @@ function schedulePreviewPaint() {
     const status = logEl.querySelector('.chat-thinking');
     if (preview?.key === activeKey && preview.token === getStoredToken() && bubble && status) {
       bubble.textContent = preview.text;
-      status.textContent = preview.text ? 'Receiving reply…' : preview.phase;
+      status.textContent = previewStatus();
       logEl.scrollTop = logEl.scrollHeight;
     } else renderLog();
   }, 50);
@@ -141,6 +147,8 @@ export function mountChat(root) {
 
 /** Drop every in-memory thread. Storage is cleared by the sign-out path. */
 export function resetThreads() {
+  clearInterval(previewClock);
+  previewClock = null;
   turnGeneration += 1;
   preview = null;
   thinking = false;
@@ -339,11 +347,15 @@ function renderLog() {
     const bubble = el.querySelector('.bubble');
     bubble.textContent = m.text;
     if (m.timingText) {
-      const detail = document.createElement('small');
+      const detail = document.createElement('details');
       detail.className = 'chat-timing';
       detail.dataset.testid = 'chat-timing';
-      detail.textContent = m.timingText;
       detail.title = 'Measured by your agent, including failed provider attempts. Total also includes preparation and completion work.';
+      const summary = document.createElement('summary');
+      summary.textContent = m.timingText.split(' · ').slice(0, 2).join(' · ') + ' · Timing details';
+      const breakdown = document.createElement('div');
+      breakdown.textContent = m.timingText;
+      detail.append(summary, breakdown);
       el.appendChild(detail);
     }
     if (m.action === 'topup') {
@@ -370,7 +382,7 @@ function renderLog() {
     const t = document.createElement('div');
     t.className = 'chat-thinking';
     t.dataset.testid = 'chat-stream-status';
-    t.textContent = preview.text ? 'Receiving reply…' : preview.phase;
+    t.textContent = previewStatus();
     logEl.appendChild(t);
   }
   logEl.scrollTop = logEl.scrollHeight;
@@ -403,7 +415,8 @@ async function send() {
   if (!expanded) setExpanded(true);
 
   thinking = true;
-  preview = { key: turnKey, token: turnToken, text: '', phase: 'Preparing', timingText: '' };
+  preview = { key: turnKey, token: turnToken, text: '', phase: 'Preparing', timingText: '', started: performance.now() };
+  previewClock = setInterval(schedulePreviewPaint, 1000);
   renderLog();
   const reply = await getReply(text, buildContext(), event => {
     if (generation !== turnGeneration || turnToken !== getStoredToken()) return;
@@ -416,6 +429,8 @@ async function send() {
   });
   if (generation !== turnGeneration) return;
   const timingText = preview?.timingText;
+  clearInterval(previewClock);
+  previewClock = null;
   clearTimeout(previewPaint);
   previewPaint = null;
   preview = null;

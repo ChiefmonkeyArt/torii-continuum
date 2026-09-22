@@ -2,6 +2,12 @@
 
 Living document. This will change as we learn.
 
+**Discovery outside the chat path (2026-09-22):** preload read-only model metadata
+on startup and refresh before expiry. Prefer still-fresh cached metadata while
+refresh runs, never stale-price extension. Diagnose upstream versus downstream
+batching using bounded numeric arrival traces; do not simulate typing or change
+DeepSeek to mask delivery latency. See `docs/adr-background-discovery-trace.md`.
+
 **Chat responsiveness (2026-09-22, CONT-CHAT-STREAM-1):** stream safe response
 text end to end before completion, while keeping actions and durable replies
 behind complete-response validation. Measure discovery, payment, provider wait,

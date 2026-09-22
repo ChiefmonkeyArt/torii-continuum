@@ -1,6 +1,28 @@
 # Continuum — Session Handover
 
-## Current release: v0.2.179-alpha / Suite remains v0.9.23-alpha
+## Current release: v0.2.180-alpha / Suite remains v0.9.23-alpha
+
+The owner requested the discovery speed fix first, keeping DeepSeek unchanged.
+Background preload begins after production HTTP startup; a timer refreshes at
+75% of the existing TTL without blocking fresh reads. Failed refresh never
+extends stale pricing. A coarse public health flag reports catalogue readiness
+and refreshing; detailed counts/age stay behind the existing admin model-health
+route. No private endpoints, keys or model names are added to public health.
+
+Transport traces now identify upstream body chunks, content events and spread,
+and the browser adds its own arrival timings. `Timing details` is expandable;
+waiting labels show actual elapsed seconds. Use the next owner turn to determine
+whether text reached the agent grouped or became grouped downstream. The real
+local nginx stream test passes. No paid probe or model switch is part of tests.
+See `docs/adr-background-discovery-trace.md`.
+
+Rollout: merge PR, tag merged main, wait for artifact, deploy v0.2.180-alpha.
+Leave Suite input empty. Verify frontend/agent/main/tag and wait for public
+`provider_discovery.ready: true` before asking the owner to retry chat.
+Do not promise instant cold starts if every metadata source is unavailable.
+The in-app updater consumer and existing Project-file mirror edits stay untouched.
+
+## Previous release: v0.2.179-alpha / Suite remains v0.9.23-alpha
 
 CONT-CHAT-STREAM-1 adds authenticated POST SSE on `/api/chat` with `stream:true`.
 The production dock opts in; old JSON clients do not change. Content arrives

@@ -2,6 +2,19 @@
 
 An app builder, project engine and marketplace for bot work — a gateway into the Torii ecosystem.
 
+## v0.2.180-alpha: background discovery and buffering diagnostics
+
+Provider metadata is preloaded after the agent starts and refreshed at 75% of
+its cache lifetime. Chats use fresh cached metadata while refresh runs; stale
+pricing is not extended after a failed refresh. Startup remains responsive and
+background discovery makes no inference calls or wallet allocations.
+
+Chat now shows a real elapsed waiting time and collapsible timing details.
+Upstream chunk/content-event counts and arrival spread, compared with browser
+arrival measurements, distinguish batching before the agent from buffering
+after it. DeepSeek selection, routing policy and payment limits are unchanged.
+See [the discovery and trace decision](docs/adr-background-discovery-trace.md).
+
 ## v0.2.179-alpha: live chat text and timing breakdown
 
 Owner chat displays model text as it arrives rather than waiting for the full

@@ -301,6 +301,7 @@ async function req(method, path, body, { timeoutMs = DEFAULT_CLIENT_TIMEOUT_MS, 
   });
 
   let res;
+  const requestStarted = performance.now();
   try {
     res = await fetch(`${base}${path}`, {
       method,
@@ -330,7 +331,7 @@ async function req(method, path, body, { timeoutMs = DEFAULT_CLIENT_TIMEOUT_MS, 
           throw new Error('session changed');
         }
         onEvent(event);
-      });
+      }, { started: requestStarted });
       return result;
     } catch (_e) {
       if (timedOut) return clientTimeout();
