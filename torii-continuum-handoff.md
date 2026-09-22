@@ -1,6 +1,29 @@
 # Continuum — Session Handover
 
-## Current release: v0.2.178-alpha / Suite v0.9.23-alpha
+## Current release: v0.2.179-alpha / Suite remains v0.9.23-alpha
+
+CONT-CHAT-STREAM-1 adds authenticated POST SSE on `/api/chat` with `stream:true`.
+The production dock opts in; old JSON clients do not change. Content arrives
+incrementally, but fenced action blocks, persistence and writes remain guarded
+by final completion. Numeric `chat.timing` logs and the dock breakdown distinguish
+discovery/payment/wait/generation/settlement. First-text is agent-side, not
+browser round-trip latency. See `docs/adr-chat-streaming-timings.md`.
+
+Rollout: merge PR, tag the merged main commit, await artifact, deploy
+`tag=v0.2.179-alpha` using **Deploy to VPS** (leave `suite_tag` empty). Verify
+frontend/agent/main/tag alignment. The existing Suite v0.9.23-alpha proxy respects
+`X-Accel-Buffering: no`; this change needs no Suite or operator `.env` changes.
+Do not make a paid test request without operator approval. Ask the owner to
+send one message and inspect the timings; do not claim the model itself is faster.
+
+Update-All scope: code/tests, root and agent package/lock versions, README,
+all four continuity docs and ADR updated. No independent src/config.js VERSION,
+public/sw.js cache marker or regression-check version exists here. Index labels
+derive from the package version. Quest, Suite, wallet settings, user keys and
+model routing are intentionally unchanged. The Project file mirror is not the
+canonical GitHub source and still has pre-existing edits; do not overwrite them.
+
+## Previous release: v0.2.178-alpha / Suite v0.9.23-alpha
 
 CONT-CHAT-PROXY-1 repairs the Suite-owned `/agent/` 60-second timeout that
 interrupted chat before the existing 100-second provider budget finished.

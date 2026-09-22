@@ -221,8 +221,25 @@
     padding: 10px 12px;
   }
 }
+@media (max-width: 480px) {
+  .chat-input-row { display: grid; grid-template-columns: minmax(0, 1fr) max-content 28px; }
+  .chat-context { grid-column: 1; max-width: 100%; justify-self: start; }
+  .chat-mode { grid-column: 2 / 4; justify-self: end; }
+  .chat-input { grid-column: 1; grid-row: 2; min-width: 0; width: 100%; }
+  .chat-send { grid-column: 2; grid-row: 2; }
+  .chat-toggle { grid-column: 3; grid-row: 2; justify-self: end; }
+}
 
 /* Respect reduced-motion: no height/shadow easing for users who opt out. */
 @media (prefers-reduced-motion: reduce) {
   .chat-dock { transition: none; }
 }
+.chat-timing {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+  overflow-wrap: anywhere;
+}
+.chat-msg.ai { flex-direction: column; }

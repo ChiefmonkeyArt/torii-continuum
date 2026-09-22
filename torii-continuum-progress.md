@@ -9,6 +9,30 @@ Companion source-of-truth files (per the `Torii` Space instructions, one set per
 - `torii-continuum-progress.md` — this file, release log.
 - `torii-continuum-handoff.md` — developer entry point / resume point.
 
+## v0.2.179-alpha: streaming owner chat and latency measurements (2026-09-22)
+
+Routstr content now flows incrementally through an authenticated POST SSE response
+to the chat dock; Ollama fallback supports the same path. The dock coalesces
+paints, pins previews to their original owner/thread, resets on provider retry,
+and replaces previews with the validated terminal reply or error. Action fences
+stay hidden until complete-response parsing; partial replies are never persisted.
+
+Agent numeric timings separate provider discovery, payment, model waiting,
+generation and settlement, with first-text/total duration and attempt count.
+Stage sums include failed attempts; total additionally includes finalization.
+Measurements contain no message bodies, credentials or owner identifiers.
+Provider selection and payment policy are unchanged.
+
+Coverage includes actual Fastify HTTP streaming before completion, auth/input
+guards, split UTF-8, malformed/truncated/error streams, bounded output, hidden
+action fences, deferred writes, provider reset, payment/refund invariants,
+legacy JSON, client deadlines, live DOM navigation/logout, and desktop/mobile
+browser review with synthetic responses. Local gates: 1,134 frontend tests
+across 68 files, 636 agent tests, all 17 ops test suites and production build.
+No paid inference is used for tests.
+See `docs/adr-chat-streaming-timings.md`. Release/live proof follows the merged
+tag deployment; owner-paid acceptance is explicitly not inferred from mocks.
+
 ## v0.2.178-alpha: Suite-owned chat proxy timeout rollout (2026-09-22)
 
 The observed `POST /agent/api/chat` 504 is recorded in nginx's error log at

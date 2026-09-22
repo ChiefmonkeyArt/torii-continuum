@@ -33,6 +33,8 @@ import {
   ERROR_CODES, classifyHttpFailure, classifyThrownError, providerFailure,
 } from '../lib/provider-errors.mjs';
 import { sliceForProvider, worthAttempting } from '../lib/timeout-budget.mjs';
+import { consumeSSE } from './routstr.mjs';
+import { measure } from '../lib/chat-stream.mjs';
 
 function modelForSkill(cfg, skill) {
   const explicit = cfg.ollama?.models?.[skill];
@@ -81,7 +83,7 @@ export function createOllama(cfg, log) {
    * 180s `ollama.timeout_ms` from outliving nginx's 120s read timeout. Omitting
    * it keeps the configured timeout, so the provider still works standalone.
    */
-  async function chat({ skill = 'chat', messages, budget_ms = null }) {
+  async function chat({ skill = 'chat', messages, budget_ms = null, onDelta = null, telemetry = null }) {
     if (!enabled) return providerFailure(ERROR_CODES.PROVIDER_DISABLED, 'ollama disabled');
     if (!Array.isArray(messages) || messages.length === 0) {
       return providerFailure(ERROR_CODES.BAD_REQUEST, 'messages must be a non-empty array');
@@ -97,13 +99,14 @@ export function createOllama(cfg, log) {
 
     const model = modelForSkill(cfg, skill);
     const started = Date.now();
+    telemetry?.attempt('ollama');
 
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), timeoutMs);
 
     let res;
     try {
-      res = await fetch(`${endpoint}/v1/chat/completions`, {
+      res = await measure(telemetry, 'provider_wait', () => fetch(`${endpoint}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         // Ollama's OpenAI-compat endpoint tolerates a missing Authorization
@@ -114,7 +117,7 @@ export function createOllama(cfg, log) {
           max_tokens: maxTokens,
           // Deterministic-ish. Chat is not creative writing.
           temperature: cfg.ollama?.temperature ?? 0.4,
-          stream: false,
+          stream: typeof onDelta === 'function',
           // Keep the model resident in RAM between requests. On a CPU-only VPS
           // the model load is the slow part (2-8s cold-start); with Routstr
           // as the primary and Ollama as the fallback path, we don't want to
@@ -133,7 +136,7 @@ export function createOllama(cfg, log) {
           },
         }),
         signal: ctl.signal,
-      });
+      }));
     } catch (e) {
       clearTimeout(t);
       const failure = classifyThrownError(e, { timeoutMs, provider: 'ollama' });
@@ -173,7 +176,21 @@ export function createOllama(cfg, log) {
         return failure;
       }
 
-      const parsed = await res.json();
+      let parsed;
+      if (typeof onDelta === 'function') {
+        const readStarted = Date.now();
+        let firstDelta = null;
+        try {
+          const result = await consumeSSE(res.body, { onDelta: delta => {
+            if (firstDelta === null) firstDelta = Date.now();
+            onDelta(delta);
+          } });
+          parsed = { choices: [{ message: { content: result.content } }], usage: result.usage };
+        } finally {
+          telemetry?.add('provider_wait', (firstDelta ?? Date.now()) - readStarted);
+          if (firstDelta !== null) telemetry?.add('generation', Date.now() - firstDelta);
+        }
+      } else parsed = await res.json();
       const content = parsed.choices?.[0]?.message?.content;
       if (!content) {
         // Defensive: a qwen3 (thinking) model over Ollama's OpenAI-compat

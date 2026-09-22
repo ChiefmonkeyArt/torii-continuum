@@ -19,21 +19,21 @@
  *      actually cost.
  *   6. Log to cost log. Return content + usage (sats_spent net of the refund).
  *
- * If the primary provider fails AND cfg.routstr.fallback.enabled === true,
- * walk the fallback ladder for the skill. Each ladder attempt gets its own
- * Cashu token (rollback the previous one first).
+ * Retryable failures may try another catalog provider within the turn budget.
+ * Every attempt gets a fresh token; a dispatched token is NEVER rolled back.
  *
  * We stream (stream: true) because Routstr's NON-streaming path returns a
  * Cloudflare 520 for every model — the melt succeeds but the response builder
- * crashes. Streaming returns a real SSE reply (HTTP 200). We still buffer the
- * whole stream and hand the chat handler a plain string, so rollback semantics
- * are unchanged: the payment is committed the moment the request is dispatched.
+ * crashes. Streaming returns a real SSE reply (HTTP 200). Emit visible deltas
+ * while accumulating the authoritative result. Payment remains committed at
+ * dispatch; previews do not change refund or rollback semantics.
  */
 
 import { appendFile, mkdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, resolve, join } from 'node:path';
 import { agentRoot } from './config.mjs';
+import { measure } from '../lib/chat-stream.mjs';
 import {
   ERROR_CODES, isRetryableCode, classifyHttpFailure, classifyThrownError, providerFailure, looksLikeHtml,
 } from '../lib/provider-errors.mjs';
@@ -91,7 +91,7 @@ function readRefundHeader(res) {
  * comments, blank keep-alives, a Cloudflare HTML error body) are skipped, so a
  * garbage 200 body simply yields empty content.
  */
-function parseSSE(body) {
+export function parseSSE(body) {
   let content = '';
   let usage = null;
   if (typeof body !== 'string') return { content, usage };
@@ -110,6 +110,67 @@ function parseSSE(body) {
     if (chunk.usage) usage = chunk.usage;
   }
   return { content, usage };
+}
+
+/**
+ * Consume an OpenAI-compatible SSE body without buffering the completion.
+ * `onDelta` is best-effort UI progress only; the returned content remains the
+ * authoritative completion used for refunds, actions and persistence.
+ */
+export async function consumeSSE(stream, { onDelta, now = Date.now, started = now() } = {}) {
+  if (!stream || typeof stream.getReader !== 'function') return { content: '', usage: null, first_token_ms: null };
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  let content = '';
+  let usage = null;
+  let firstTokenMs = null;
+  let finished = false;
+  let bytes = 0;
+
+  const consumeLine = (rawLine) => {
+    const line = rawLine.trim();
+    if (!line.startsWith('data:')) return false;
+    const data = line.slice(5).trim();
+    if (!data) return false;
+    if (data === '[DONE]') { finished = true; return true; }
+    let chunk;
+    try { chunk = JSON.parse(data); } catch { throw new Error('malformed completion stream'); }
+    if (chunk.error) throw new Error('upstream completion stream failed');
+    if (chunk.choices?.[0]?.finish_reason) finished = true;
+    const delta = chunk.choices?.[0]?.delta?.content;
+    if (typeof delta === 'string' && delta.length > 0) {
+      if (firstTokenMs === null) firstTokenMs = Math.max(0, now() - started);
+      content += delta;
+      if (typeof onDelta === 'function') {
+        try { onDelta(delta); } catch { /* UI observers never alter payment handling. */ }
+      }
+    }
+    if (chunk.usage) usage = chunk.usage;
+    return false;
+  };
+
+  let done = false;
+  try {
+    while (!done) {
+      const part = await reader.read();
+      bytes += part.value?.byteLength || 0;
+      if (bytes > 2 * 1024 * 1024) throw new Error('completion stream exceeds limit');
+      pending += decoder.decode(part.value || new Uint8Array(), { stream: !part.done });
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() || '';
+      for (const line of lines) {
+        if (consumeLine(line)) { done = true; break; }
+      }
+      if (part.done) break;
+    }
+    if (pending && !done) consumeLine(pending);
+    if (!finished) throw new Error('incomplete completion stream');
+  } finally {
+    try { await reader.cancel(); } catch {}
+    reader.releaseLock();
+  }
+  return { content, usage, first_token_ms: firstTokenMs };
 }
 
 /**
@@ -309,8 +370,9 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     }
   }
 
-  async function callOnceAt(baseUrl, model, messages, sats, timeoutMs = chatTimeoutMs, allowRetry = true) {
-    const send = await wallet.send(sats);
+  async function callOnceAt(baseUrl, model, messages, sats, timeoutMs = chatTimeoutMs, allowRetry = true, hooks = {}) {
+    hooks.telemetry?.attempt('routstr');
+    const send = await measure(hooks.telemetry, 'payment', () => wallet.send(sats));
     if (!send.ok) {
       // A dry / floor-blocked wallet is a payment-path failure: structured so the
       // router can downgrade to the free local model and the SPA can offer top-up.
@@ -325,12 +387,12 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     // Retained for refund reclaim. NOT used to roll back into spendable balance.
     const paymentToken = send.token;
     const url = `${baseUrl}/v1/chat/completions`;
-    const started = Date.now();
-    let res, body;
+    const started = now();
+    let res, body = '', streamed = null;
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {
-      res = await fetch(url, {
+      res = await measure(hooks.telemetry, 'provider_wait', () => fetch(url, {
         method: 'POST',
         signal: ac.signal,
         headers: {
@@ -346,16 +408,31 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
           max_tokens: maxTokens,
           // Routstr's non-streaming path 520s for every model (the melt
           // succeeds, then the response builder crashes). Streaming returns a
-          // real SSE reply. We buffer the whole stream below.
+          // real SSE reply, consumed incrementally below.
           stream: true,
         }),
-      });
-      body = await res.text();
-      debugProbe(log, res, body, send.token);
+      }));
+      if (res.ok && res.body?.getReader) {
+        const readStarted = now();
+        let firstDelta = null;
+        try {
+          streamed = await consumeSSE(res.body, { onDelta: delta => {
+            if (firstDelta === null) firstDelta = now();
+            hooks.onDelta?.(delta);
+          }, now, started });
+        } finally {
+          hooks.telemetry?.add('provider_wait', (firstDelta ?? now()) - readStarted);
+          if (firstDelta !== null) hooks.telemetry?.add('generation', now() - firstDelta);
+        }
+        body = streamed.content;
+      } else {
+        body = await res.text();
+        debugProbe(log, res, body, send.token);
+      }
     } catch (e) {
       // AFTER dispatch: the token is spent/unknown — NEVER roll it back into
       // spendable balance. Try to reclaim a lost refund instead.
-      await tryRefundReclaim(baseUrl, paymentToken);
+      await measure(hooks.telemetry, 'settlement', () => tryRefundReclaim(baseUrl, paymentToken));
       return classifyThrownError(e, { timeoutMs, provider: 'routstr' });
     } finally {
       clearTimeout(timer);
@@ -369,7 +446,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
         if (typeof send.markSpent === 'function') await send.markSpent();
         if (allowRetry) {
           log.warn('[routstr] token_already_spent — quarantined stale proofs, retrying once with fresh');
-          return callOnceAt(baseUrl, model, messages, sats, timeoutMs, false);
+          return callOnceAt(baseUrl, model, messages, sats, timeoutMs, false, hooks);
         }
         return providerFailure(
           ERROR_CODES.TOKEN_ALREADY_SPENT,
@@ -379,24 +456,23 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       }
       // A 5xx/520 (or an HTML edge error page) likely dropped the X-Cashu-Refund
       // — attempt refund reclaim before reporting.
-      if (res.status >= 500 || looksLikeHtml(body)) await tryRefundReclaim(baseUrl, paymentToken);
+      if (res.status >= 500 || looksLikeHtml(body)) await measure(hooks.telemetry, 'settlement', () => tryRefundReclaim(baseUrl, paymentToken));
       // Structured + sanitised: the raw upstream body (often a Cloudflare HTML
       // page) is classified, never spliced into the client-visible reason.
       return classifyHttpFailure({ status: res.status, body, provider: 'routstr' });
     }
 
-    // Streaming: the 200 body is a text/event-stream. Accumulate the delta
-    // content into a single reply string (the chat handler expects a plain
-    // string). We buffer the full body via res.text() rather than reading the
-    // stream incrementally — replies are short and buffering keeps the payment
-    // rollback contract unchanged (the token is committed at dispatch time).
-    const { content, usage: streamUsage } = parseSSE(body);
+    // Keep a completed authoritative string for validation/persistence after
+    // emitting preview deltas. Text-only response doubles retain compatibility.
+    const { content, usage: streamUsage } = streamed
+      ? { content: streamed.content, usage: streamed.usage }
+      : parseSSE(body);
     if (!content) {
       // 200 with no usable SSE content. Two distinct cases, both retryable but
       // worth telling apart: a proxy served an HTML error page under a 200
       // status, or the stream really was empty. The token is already handed off
       // — do NOT roll back; try to reclaim any lost refund instead.
-      await tryRefundReclaim(baseUrl, paymentToken);
+      await measure(hooks.telemetry, 'settlement', () => tryRefundReclaim(baseUrl, paymentToken));
       if (looksLikeHtml(body)) {
         return classifyHttpFailure({ status: res.status, body, provider: 'routstr' });
       }
@@ -408,7 +484,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     }
 
     const usage = streamUsage || {};
-    const durationMs = Date.now() - started;
+    const durationMs = now() - started;
 
     // Reclaim change. Routstr consumes only what the request cost and returns
     // the unused sats as a Cashu token in X-Cashu-Refund. We receive() it back
@@ -419,7 +495,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     const refundToken = readRefundHeader(res);
     if (refundToken) {
       try {
-        const claim = await wallet.receive(refundToken);
+        const claim = await measure(hooks.telemetry, 'settlement', () => wallet.receive(refundToken));
         if (claim.ok) {
           refundedSats = claim.added_sats || 0;
           if (refundedSats > 0) log.info(`[routstr] reclaimed ${refundedSats} sats of change`);
@@ -488,7 +564,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
    * provider serves (stale config, e.g. the retired deepseek-v3.2) degrades to
    * the cheapest available model — loudly — rather than dead-ending chat.
    */
-  async function chat({ skill = 'chat', messages, budget_ms = null }) {
+  async function chat({ skill = 'chat', messages, budget_ms = null, onDelta = null, telemetry = null }) {
     if (!Array.isArray(messages) || messages.length === 0) {
       return providerFailure(ERROR_CODES.BAD_REQUEST, 'messages must be a non-empty array');
     }
@@ -499,10 +575,10 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     const remaining = () => (budget ? budget.remainingMs() : null);
     const sliceNow = () => sliceForProvider(chatTimeoutMs, remaining());
 
-    let candidates = await resolveCandidates(requested);
+    let candidates = await measure(telemetry, 'discovery', () => resolveCandidates(requested));
     if (requested && candidates.length === 0) {
       log.warn(`[routstr] configured model "${requested}" is not served by any reachable provider — degrading to cheapest available`);
-      candidates = await resolveCandidates(null);
+      candidates = await measure(telemetry, 'discovery', () => resolveCandidates(null));
     }
 
     if (candidates.length === 0) {
@@ -512,7 +588,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       // Nothing reachable. Fall back to a directly-configured legacy endpoint
       // (offline / discovery-disabled operator) before failing closed.
       if (legacyEndpoint) {
-        const attempt = await callOnceAt(legacyEndpoint, wanted, messages, satsFor(null, messages), sliceNow());
+        const attempt = await callOnceAt(legacyEndpoint, wanted, messages, satsFor(null, messages), sliceNow(), true, { onDelta, telemetry });
         await appendCostLog(cfg, {
           at: new Date().toISOString(), skill, model: wanted,
           ok: attempt.ok,
@@ -555,7 +631,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
         break;
       }
       reservedSats += sats;
-      attempt = await callOnceAt(cand.baseUrl, cand.model.id, messages, sats, sliceNow());
+      attempt = await callOnceAt(cand.baseUrl, cand.model.id, messages, sats, sliceNow(), true, { onDelta, telemetry });
       if (attempt.ok) break;
       log.warn(`[routstr] ${cand.model.id}@${cand.baseUrl} failed: ${attempt.reason}`);
       // Stop before another paid request on a terminal (non-retryable) failure.

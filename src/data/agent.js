@@ -13,6 +13,8 @@
  * mockup UX keeps working without the daemon behind it.
  */
 
+import { readChatEvents } from '../chat-stream.js';
+
 const TOKEN_KEY = 'continuum.session.v1';
 // The onboarding wizard (preview-assets/onboarding-*) writes its session here.
 // It is a JSON envelope { token, expires_at, pubkey, method, created_at } — the
@@ -262,7 +264,7 @@ export const CHAT_CLIENT_TIMEOUT_MS = 115000;
 /** Default deadline for ordinary agent calls (auth, memory, projects). */
 const DEFAULT_CLIENT_TIMEOUT_MS = 30000;
 
-async function req(method, path, body, { timeoutMs = DEFAULT_CLIENT_TIMEOUT_MS } = {}) {
+async function req(method, path, body, { timeoutMs = DEFAULT_CLIENT_TIMEOUT_MS, onEvent = null } = {}) {
   const base = agentUrl();
   // Null means "no agent transport" (offline demo). An empty-string base is a
   // valid root mount and must NOT be short-circuited as offline (FE-06).
@@ -316,6 +318,28 @@ async function req(method, path, body, { timeoutMs = DEFAULT_CLIENT_TIMEOUT_MS }
   }
 
   let json = null;
+  if (res.ok && onEvent && res.headers?.get('content-type')?.includes('text/event-stream')) {
+    const sessionChanged = () => {
+      if (epoch !== authEpochNow() || tok !== getStoredToken()) ctl?.abort();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('continuum:session-changed', sessionChanged);
+    try {
+      const result = await readChatEvents(res, event => {
+        if (epoch !== authEpochNow() || tok !== getStoredToken()) {
+          ctl?.abort();
+          throw new Error('session changed');
+        }
+        onEvent(event);
+      });
+      return result;
+    } catch (_e) {
+      if (timedOut) return clientTimeout();
+      return { ok: false, code: 'stream_interrupted', reason: 'The reply was interrupted. It may have been charged; do not automatically retry.' };
+    } finally {
+      if (typeof document !== 'undefined') document.removeEventListener('continuum:session-changed', sessionChanged);
+      if (timer) clearTimeout(timer);
+    }
+  }
   try { json = await res.json(); } catch (_e) {}
   if (timer) clearTimeout(timer);
   if (timedOut) return clientTimeout();
@@ -538,10 +562,10 @@ export async function discardDraft(file) {
 
 // ─── Chat ───────────────────────────────────────────────────
 
-export async function chat({ message, context }) {
+export async function chat({ message, context, onEvent }) {
   // Longer than any other call: a chat turn legitimately waits on a model.
   // See CHAT_CLIENT_TIMEOUT_MS for the agent/nginx ordering this has to respect.
-  return req('POST', '/api/chat', { message, context }, { timeoutMs: CHAT_CLIENT_TIMEOUT_MS });
+  return req('POST', '/api/chat', { message, context, ...(onEvent ? { stream: true } : {}) }, { timeoutMs: CHAT_CLIENT_TIMEOUT_MS, onEvent });
 }
 
 // ─── Sessions (OWNER-UI-1) ────────────────────────────────────

@@ -77,7 +77,7 @@ function cap(text, max = MAX_FRAGMENT_CHARS) {
  * @param {import('../lib/reflect.mjs').createReflector extends (...a:any) => infer R ? R : never} deps.reflector
  */
 export function createChatSkill(router, log, { memory, reflector } = {}) {
-  async function handle({ message, context, constitution }) {
+  async function handle({ message, context, constitution, onDelta, telemetry }) {
     // Code-side guards (procedural, kind 30095 with guard === "code-only")
     // run BEFORE we spend a satoshi on the model.
     if (memory) {
@@ -108,7 +108,7 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
     const started = Date.now();
     // Router decides between Routstr (paid, sovereign) and Ollama (local, free).
     // Same return shape as routstr.chat — plus a `provider` field on success.
-    const result = await router.chat({ skill: 'chat', messages });
+    const result = await router.chat({ skill: 'chat', messages, onDelta, telemetry });
     const duration = Date.now() - started;
 
     if (!result.ok) {
