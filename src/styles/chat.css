@@ -190,22 +190,31 @@
 }
 
 .chat-thinking {
-  font-size: 11.5px;
-  color: hsl(var(--muted-foreground));
-  padding: 2px 2px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: hsl(var(--foreground));
+  padding: 12px 14px;
+  border: 1px solid hsl(var(--primary) / .35);
+  border-radius: 10px;
+  background: hsl(var(--primary) / .1);
   font-family: var(--font-sans);
 }
-.chat-thinking::after {
+.chat-thinking::before {
   content: '';
-  display: inline-block;
-  width: 6px; height: 6px; border-radius: 50%;
-  background: hsl(var(--primary));
-  margin-left: 8px;
-  animation: pulse 1.2s var(--ease) infinite;
+  flex: 0 0 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid hsl(var(--primary) / .2);
+  border-top-color: hsl(var(--primary));
+  animation: chat-wait-spin 1s linear infinite;
 }
-@keyframes pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
+@keyframes chat-wait-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .chat-thinking::before { animation: none; }
 }
 
 /* Mobile: the floating composer goes full-width with small side margins and

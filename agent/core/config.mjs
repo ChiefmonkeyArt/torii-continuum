@@ -54,6 +54,10 @@ export function loadConfig(path) {
 
   // Validate invariants
   const errors = [];
+  if (cfg.routstr?.payment_mode != null &&
+      !['x_cashu', 'ephemeral_bearer'].includes(cfg.routstr.payment_mode)) {
+    errors.push('routstr.payment_mode must be x_cashu or ephemeral_bearer');
+  }
 
   // admin_npub: empty/absent => first-touch bootstrap mode (allowed). If set,
   // it must be a real npub1 and not the example placeholder.

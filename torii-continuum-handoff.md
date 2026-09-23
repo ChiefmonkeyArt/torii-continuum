@@ -1,5 +1,24 @@
 # Continuum — Session Handover
 
+## Prepared branch: v0.2.181-alpha, not deployed
+
+The owner's measurements locate batching upstream of Continuum; published
+Routstr X-Cashu handling buffers before returning change. The new opt-in
+`ephemeral_bearer` payment mode uses one capped balance per request, bearer
+streaming, and an independent refund. Legacy `x_cashu` remains the default.
+DeepSeek and all live configuration remain unchanged.
+
+No per-question consent dialog: ordinary signed-in chat is authorized within
+existing limits. Do not send automated paid tests. Run contract/regression/UI
+tests, review provider compatibility and recovery limitations in
+`docs/adr-routstr-streaming-payment.md`, then arrange a separate rollout.
+Source tests cannot prove the deployed upstream supports the new contract.
+
+Pending refund claims are encrypted as `memory/secrets/rrefund_*.enc` and recover
+on startup/each minute. Do not delete those records or restore dispatched
+proofs to spendable balance. A failed/ambiguous claim blocks further deposits.
+No release tag is permitted before this PR merges.
+
 ## Current release: v0.2.180-alpha / Suite remains v0.9.23-alpha
 
 The owner requested the discovery speed fix first, keeping DeepSeek unchanged.

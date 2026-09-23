@@ -2,6 +2,19 @@
 
 An app builder, project engine and marketplace for bot work — a gateway into the Torii ecosystem.
 
+## Prepared v0.2.181-alpha: streaming-compatible payment
+
+An opt-in `routstr.payment_mode: ephemeral_bearer` path separates completion
+streaming from refund settlement. It funds one capped request, streams with a
+short-lived provider balance, and recovers unused funds separately. Encrypted
+recovery blocks further deposits when settlement is uncertain. DeepSeek and
+operator spending limits are unchanged; ordinary signed-in chat needs no extra
+approval prompt. Existing installs remain on `x_cashu` until explicit rollout.
+
+The waiting state is now a visible status panel with elapsed time and duplicate
+submission prevention. See `docs/adr-routstr-streaming-payment.md` for security,
+provider compatibility, recovery limitations and live acceptance requirements.
+
 ## v0.2.180-alpha: background discovery and buffering diagnostics
 
 Provider metadata is preloaded after the agent starts and refreshed at 75% of

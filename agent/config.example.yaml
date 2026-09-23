@@ -113,6 +113,11 @@ cashu:
 # to allow automatic downgrade to the next entry when the primary fails.
 #
 routstr:
+  # Optional streaming-compatible payment flow (requires provider support).
+  # x_cashu preserves legacy behavior. ephemeral_bearer funds one request,
+  # streams via bearer balance, then refunds; no per-question approval prompt.
+  # Enable only after provider compatibility and recovery tests pass.
+  payment_mode: x_cashu
   # ── Provider discovery (Routstr Core v0.1.0, RIP-03) ──
   # Providers are found at runtime, not hard-coded. Live nodes announce
   # themselves as Nostr kind-38421 events; the agent merges them with the

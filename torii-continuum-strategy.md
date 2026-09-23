@@ -2,6 +2,13 @@
 
 Living document. This will change as we learn.
 
+**Streaming payment boundary (2026-09-23):** decouple refunds from visible text
+through opt-in per-request bearer balances, retaining the unchanged model and
+existing spending ceiling. An ordinary signed-in chat carries spending consent;
+do not add per-question approval prompts. Unknown payments block further
+deposits and retain encrypted recovery. No paid experiments or silent migration.
+See `docs/adr-routstr-streaming-payment.md`.
+
 **Discovery outside the chat path (2026-09-22):** preload read-only model metadata
 on startup and refresh before expiry. Prefer still-fresh cached metadata while
 refresh runs, never stale-price extension. Diagnose upstream versus downstream

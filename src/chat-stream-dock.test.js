@@ -39,6 +39,24 @@ test('dock shows partial text before final, never persists preview, then renders
   expect(text()).toContain('First text 0.1s');
 });
 
+test('waiting is explicit, disables duplicate submission, and clears on completion', async () => {
+  const { send } = await setup();
+  const button = document.querySelector('.chat-send');
+  expect(button.disabled).toBe(true);
+  expect(button.textContent).toBe('Waiting…');
+  expect(button.getAttribute('aria-busy')).toBe('true');
+  expect(document.querySelector('textarea').placeholder).toBe('Reply in progress…');
+  expect(document.querySelector('[data-testid="chat-stream-status"]').getAttribute('role')).toBe('status');
+  send({ type: 'phase', phase: 'provider_wait' });
+  await sleep(70);
+  expect(document.querySelector('.chat-thinking').textContent).toContain('Waiting for model');
+  send({ type: 'done', reply: 'gm' });
+  await sleep(70);
+  expect(button.disabled).toBe(false);
+  expect(button.textContent).toBe('Send');
+  expect(document.querySelector('.chat-thinking')).toBeNull();
+});
+
 test('dock clears failed-provider partials when the fallback begins', async () => {
   const { send, text } = await setup();
   send({ type: 'delta', delta: 'Failed provider text' });

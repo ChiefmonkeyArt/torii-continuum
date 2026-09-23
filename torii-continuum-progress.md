@@ -1,5 +1,20 @@
 # Torii Continuum — Progress log
 
+## Prepared v0.2.181-alpha: per-request bearer streaming (2026-09-23)
+
+Implements an opt-in payment path separating response streaming from refund
+settlement, with encrypted pre-dispatch recovery claims, bounded refund-only
+recovery and fail-closed prevention of duplicate funding. Keeps legacy default,
+DeepSeek selection and spending limits unchanged. Adds a prominent waiting
+panel, elapsed feedback, accessible status and duplicate-submit protection.
+No per-question approval prompts. No paid test or production activation.
+Local verification: 661 agent tests (including 17 new payment/configuration
+tests), 1,136 frontend tests across 68 files, all 17 ops suites, and production
+build pass. Desktop/mobile browser checks verified the visible 5-second waiting
+state, no-text-yet explanation, disabled duplicate submission, partial text
+before terminal completion, and controls restored afterwards. The 375px
+viewport has no horizontal overflow. PR checks and live acceptance are separate.
+
 Living release log for the `torii-continuum` repo. Newest first. One entry per release. Longer slice reports live alongside as `torii-continuum-v0.2.N-<slice>-report.md` when a release warrants deeper narration; this file is the fast scan.
 
 Companion source-of-truth files (per the `Torii` Space instructions, one set per project):
