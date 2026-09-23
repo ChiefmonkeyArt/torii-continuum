@@ -34,6 +34,7 @@ import { createHash } from 'node:crypto';
 import { dirname, resolve, join } from 'node:path';
 import { agentRoot } from './config.mjs';
 import { measure } from '../lib/chat-stream.mjs';
+import { createRoutstrPayment } from './routstr-payment.mjs';
 import {
   ERROR_CODES, isRetryableCode, classifyHttpFailure, classifyThrownError, providerFailure, looksLikeHtml,
 } from '../lib/provider-errors.mjs';
@@ -262,6 +263,9 @@ async function appendCostLog(cfg, entry) {
 }
 
 export function createRoutstr(cfg, wallet, log, deps = {}) {
+  // Explicit operator choice. Existing installs retain X-Cashu until rollout.
+  const bearerPayments = cfg.routstr.payment_mode === 'ephemeral_bearer'
+    ? createRoutstrPayment(cfg, wallet, deps.payment || {}) : null;
   // Injectable clock so the turn-budget boundary is deterministic in tests.
   // model-router threads its clock the same way; a direct routstr.chat() call
   // was the one path still using the real wall clock, which made the
@@ -439,6 +443,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
   }
 
   async function callOnceAt(baseUrl, model, messages, sats, timeoutMs = chatTimeoutMs, allowRetry = true, hooks = {}) {
+    if (bearerPayments) return callBearerAt(baseUrl, model, messages, sats, timeoutMs, hooks);
     hooks.telemetry?.attempt('routstr');
     const send = await measure(hooks.telemetry, 'payment', () => wallet.send(sats));
     if (!send.ok) {
@@ -587,6 +592,54 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     };
   }
 
+  async function callBearerAt(baseUrl, model, messages, sats, timeoutMs, hooks) {
+    hooks.telemetry?.attempt('routstr');
+    const started = now();
+    const handle = await measure(hooks.telemetry, 'payment', () => bearerPayments.begin(baseUrl, sats));
+    if (!handle.ok) return { ...handle, retryable: false };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs - (now() - started)));
+    let result;
+    try {
+      if (now() - started >= timeoutMs) throw new Error('turn deadline reached');
+      const res = await measure(hooks.telemetry, 'provider_wait', () => fetch(`${baseUrl}/v1/chat/completions`, {
+        method: 'POST', signal: controller.signal, redirect: 'error',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${handle.key}` },
+        body: JSON.stringify({ model, messages, max_tokens: maxTokens, stream: true, stream_options: { include_usage: true } }),
+      }));
+      if (!res.ok) {
+        try { await res.body?.cancel(); } catch {}
+        throw new Error('provider request failed');
+      }
+      let first = null;
+      const reading = now();
+      let stream;
+      try {
+        stream = await consumeSSE(res.body, {
+          now, started,
+          onDelta(delta) { if (first === null) first = now(); hooks.onDelta?.(delta); },
+          onTrace: trace => hooks.telemetry?.upstream(trace),
+        });
+      } finally {
+        hooks.telemetry?.add('provider_wait', (first ?? now()) - reading);
+        if (first !== null) hooks.telemetry?.add('generation', now() - first);
+      }
+      if (!stream.content) throw new Error('empty completion');
+      result = { ok: true, content: stream.content, model,
+        tokens_in: stream.usage?.prompt_tokens || 0, tokens_out: stream.usage?.completion_tokens || 0 };
+    } catch {
+      // Never silently send another paid request after an ambiguous deposit.
+      result = { ok: false, code: 'payment_recovery_required',
+        reason: 'Streaming request failed. No second payment was sent; any remaining balance is being recovered.', retryable: false };
+    } finally {
+      clearTimeout(timer);
+    }
+    const settlement = await measure(hooks.telemetry, 'settlement', () => bearerPayments.finish(handle));
+    if (settlement.pending) hooks.telemetry?.refundPending?.();
+    return { ...result, sats_spent: Math.max(0, sats - settlement.refunded),
+      sats_refunded: settlement.refunded, refund_pending: settlement.pending, duration_ms: now() - started };
+  }
+
   /**
    * Resolve the candidate list for `modelId` — ordered cheapest first by each
    * provider's declared max_cost_sats — so a primary failure fails over to the
@@ -723,5 +776,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     return attempt;
   }
 
-  return { chat, refreshCatalog: ensureCatalog, startDiscovery, stopDiscovery, discoveryStatus };
+  return { chat, refreshCatalog: ensureCatalog, startDiscovery, stopDiscovery, discoveryStatus,
+    startPaymentRecovery: () => bearerPayments?.start(),
+    stopPaymentRecovery: () => bearerPayments?.stop() };
 }

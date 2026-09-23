@@ -11,6 +11,14 @@
 
 ### Active tasks
 
+- **CONT-BEARER-STREAM (v0.2.181-alpha):** opt-in per-request funding,
+  incremental bearer completion, separate refund and encrypted restart recovery.
+  DeepSeek and caps unchanged. Full tests and browser checks pass.
+  One-time rollout approved. Current DeepSeek provider contracts verified
+  without funding. Guarded activation helper added; await merge/tag/deploy
+  gates and independent model/limit/mode verification. Owner-initiated live
+  acceptance remains required. No per-question approvals.
+
 - **CONT-DISCOVERY-PREFETCH (v0.2.180-alpha):** startup preload, refresh-ahead,
   single-flight, failure cooldown and shutdown implemented. Verify readiness on
   the live server after rollout; normal chats should reuse a fresh catalogue.

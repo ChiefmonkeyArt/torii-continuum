@@ -177,7 +177,7 @@ const auth = deps.auth ?? createAuth(cfg, {
 });
 const wallet = await createWallet(cfg, app.log);
 const routstr = createRoutstr(cfg, wallet, app.log);
-app.addHook('onClose', async () => routstr.stopDiscovery());
+app.addHook('onClose', async () => { routstr.stopDiscovery(); routstr.stopPaymentRecovery(); });
 
 // Read-only project-source adapters (v0.2.47-alpha, CONT-KANBAN-SYNC). Imports
 // local Markdown to-do files + public GitHub issues into per-project Kanban
@@ -1711,6 +1711,7 @@ try {
   // Catalogue discovery is read-only: no wallet allocation or inference.
   // Start after binding so readiness/login never waits for remote catalogues.
   if (mainCfg.model_router?.strategy !== 'ollama_only') void routstr.startDiscovery();
+  routstr.startPaymentRecovery(); // Refund-only recovery, never inference or funding.
   app.log.info(`torii-continuum-agent listening on http://${host}:${port}`);
   app.log.info(
     auth.isClaimed()

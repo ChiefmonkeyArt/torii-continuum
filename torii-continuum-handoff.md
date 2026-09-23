@@ -1,5 +1,29 @@
 # Continuum — Session Handover
 
+## v0.2.181-alpha: one-time rollout approved, verification pending
+
+The owner's measurements locate batching upstream of Continuum; published
+Routstr X-Cashu handling buffers before returning change. The new opt-in
+`ephemeral_bearer` payment mode uses one capped balance per request, bearer
+streaming, and an independent refund. Legacy `x_cashu` remains the default.
+DeepSeek and spending limits must remain unchanged during activation.
+
+No per-question consent dialog: ordinary signed-in chat is authorized within
+existing limits. Do not send automated paid tests. Run contract/regression/UI
+tests and review recovery limitations in `docs/adr-routstr-streaming-payment.md`.
+The owner has approved the rollout; live discovery and non-funded contract
+probes verified both currently available DeepSeek providers expose POST
+creation and bearer refunds. The primary declared revision also supports
+persisted refund replay. This is not paid inference acceptance.
+After merge/tag/artifact gates, dispatch deploy with `payment_mode:
+ephemeral_bearer` and blank Suite input. The guarded activation helper preserves
+all non-mode config and reverts mode on failed restart/health.
+
+Pending refund claims are encrypted as `memory/secrets/rrefund_*.enc` and recover
+on startup/each minute. Do not delete those records or restore dispatched
+proofs to spendable balance. A failed/ambiguous claim blocks further deposits.
+No release tag is permitted before this PR merges.
+
 ## Current release: v0.2.180-alpha / Suite remains v0.9.23-alpha
 
 The owner requested the discovery speed fix first, keeping DeepSeek unchanged.

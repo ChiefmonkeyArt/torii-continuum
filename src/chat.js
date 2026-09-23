@@ -42,8 +42,12 @@ let previewPaint = null;
 let previewClock = null;
 function previewStatus() {
   if (!preview) return '';
+  if (preview.phase === 'Finishing payment') return 'Reply received. Returning unused payment…';
   if (preview.text) return 'Receiving reply…';
-  return `${preview.phase} · ${Math.floor(Math.max(0, performance.now() - preview.started) / 1000)}s`;
+  const seconds = Math.floor(Math.max(0, performance.now() - preview.started) / 1000);
+  const hint = seconds >= 5 && preview.phase === 'Waiting for model'
+    ? ' · No reply text received yet' : '';
+  return `${preview.phase} · ${seconds}s${hint}`;
 }
 function schedulePreviewPaint() {
   if (previewPaint !== null) return;
@@ -161,7 +165,7 @@ export function resetThreads() {
 // the "(mock responses)" qualifier would be a lie.
 function updatePlaceholder() {
   if (!inputEl) return;
-  inputEl.placeholder = !isSessionLive() && mockRepliesAllowed()
+  inputEl.placeholder = thinking ? 'Reply in progress…' : !isSessionLive() && mockRepliesAllowed()
     ? 'Ask Continuum anything… (mock responses)'
     : 'Ask Continuum anything…';
 }
@@ -339,6 +343,10 @@ async function persistServerSession(key) {
 }
 
 function renderLog() {
+  sendBtn.disabled = thinking;
+  sendBtn.textContent = thinking ? 'Waiting…' : 'Send';
+  sendBtn.setAttribute('aria-busy', String(thinking));
+  updatePlaceholder();
   logEl.innerHTML = '';
   for (const m of currentMessages()) {
     const el = document.createElement('div');
@@ -382,6 +390,7 @@ function renderLog() {
     const t = document.createElement('div');
     t.className = 'chat-thinking';
     t.dataset.testid = 'chat-stream-status';
+    t.setAttribute('role', 'status');
     t.textContent = previewStatus();
     logEl.appendChild(t);
   }

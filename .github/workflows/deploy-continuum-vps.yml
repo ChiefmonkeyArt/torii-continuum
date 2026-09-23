@@ -29,6 +29,11 @@ on:
         required: false
         default: ''
         type: string
+      payment_mode:
+        description: 'Optional operator-approved payment mode; blank preserves config'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   # Never run two VPS deploys at once — the installer holds no external lock
@@ -48,11 +53,16 @@ jobs:
         env:
           TAG: ${{ inputs.tag }}
           SUITE_TAG: ${{ inputs.suite_tag }}
+          PAYMENT_MODE: ${{ inputs.payment_mode }}
         run: |
           set -euo pipefail
           # Mirror ops/deploy-unattended.sh CONTINUUM_TAG_RE exactly.
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::tag '$TAG' is not a valid vX.Y.Z[-pre] release tag"
+            exit 1
+          fi
+          if [[ -n "$PAYMENT_MODE" && "$PAYMENT_MODE" != x_cashu && "$PAYMENT_MODE" != ephemeral_bearer ]]; then
+            echo "::error::invalid payment_mode"
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_ENV"
@@ -167,6 +177,39 @@ jobs:
           # -E is silently dropped by policy on this box, so use --preserve-env=<list>.
           sudo -n --preserve-env=TORII_DOMAIN,LETSENCRYPT_EMAIL,CONTINUUM_ADMIN_NPUB,CONTINUUM_AGENT_PORT,OLLAMA_MODE,OLLAMA_URL,OLLAMA_AUTH_HEADER,OLLAMA_MODELS,INSTALL_OLLAMA,OLLAMA_BIND,CONTINUUM_SESSION_TTL_SEC,CONTINUUM_RATE_LIMIT_ENABLED,CONTINUUM_RATE_LIMIT_CHALLENGE_PER_MIN,CONTINUUM_RATE_LIMIT_VERIFY_PER_MIN,CONTINUUM_RATE_LIMIT_MAX_CHALLENGES,SUITE_WORK_DIR,APPS_ROOT,TORII_CONTINUUM_REF \
             /opt/torii-suite/checkout/installers/install-continuum.sh
+          REMOTE
+
+      - name: Activate explicitly approved payment mode
+        if: inputs.payment_mode != ''
+        env:
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+          PAYMENT_MODE: ${{ inputs.payment_mode }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_HOST" sudo -n bash -s -- "$PAYMENT_MODE" <<'REMOTE'
+          set -euo pipefail
+          mode="$1"
+          helper=/apps/continuum/agent/repo/agent/ops/set-payment-mode.mjs
+          result="$(node "$helper" "$mode")"
+          previous="$(printf '%s' "$result" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).previous))')"
+          printf '%s\n' "$result"
+          if ! systemctl restart continuum-agent.service; then
+            node "$helper" "$previous"
+            systemctl restart continuum-agent.service || true
+            echo "Payment activation restart failed; previous mode restored" >&2
+            exit 1
+          fi
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 5 http://127.0.0.1:8787/api/health >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          # No paid acceptance probe: restore only the previous mode on failed boot.
+          node "$helper" "$previous"
+          systemctl restart continuum-agent.service
+          echo "Payment activation health check failed; previous mode restored" >&2
+          exit 1
           REMOTE
 
       - name: Verify live version matches

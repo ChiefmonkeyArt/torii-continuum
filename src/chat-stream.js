@@ -70,6 +70,7 @@ export function timingLabel(t) {
       .filter(([key]) => Number.isFinite(t[`${key}_ms`]))
       .map(([key, label]) => `${label} ${seconds(t[`${key}_ms`])}`),
     Number.isFinite(t.attempts) ? `Attempts ${t.attempts}` : null,
+    t.refund_pending === true ? 'Refund pending; recovery retained' : null,
     ...(Array.isArray(t.upstream_attempts) ? t.upstream_attempts.slice(-1).flatMap(a => [
       `Upstream chunks ${a.transport_chunks ?? 0}`,
       `Text events ${a.content_events ?? 0}`,
