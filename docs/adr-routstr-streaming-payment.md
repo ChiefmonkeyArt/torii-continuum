@@ -1,6 +1,6 @@
 # ADR: opt-in per-request bearer payment for real streaming
 
-Status: prepared for v0.2.181-alpha; not activated on production.
+Status: rollout approved for v0.2.181-alpha; activation requires passing checks.
 Date: 2026-09-23.
 
 ## Evidence
@@ -75,6 +75,28 @@ the existing provider boundary, not a new DNS-pinning claim.
 
 ## UI and acceptance
 
+On 2026-09-23 the operator approved the one-time rollout, not paid automated
+test messages. VPS-side discovery found DeepSeek on GitHappens2Routstr and
+Privacy Maxi. Both rejected empty POST balance creation with the expected 422
+missing `initial_balance_token`, and unauthenticated refunds with 401; no funds
+or credentials were supplied. The primary provider's published OpenAPI reports
+`0.4.7+g2e9f550`, POST body creation and bearer refunds. Source at its declared
+revision confirms the deterministic balance identity, separate incremental
+bearer streaming and persisted refund replay. These checks validate the
+declared contract, not a paid end-to-end acceptance test.
+[Provider preflight](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/35804718931)
+[Declared revision](https://github.com/Routstr/routstr-core/commit/2e9f550e344922acd86772fe1cd2c8a6d4cd2e9e)
+
+The primary provider describes itself as experimental and recommends X-Cashu
+for immediate refunds. The bearer flow therefore retains fail-closed recovery;
+API presence does not remove third-party custody or operational risk.
+
+The release workflow's optional payment-mode input uses a reviewed helper:
+reject unknown modes, YAML errors, symlinks and public backup directories;
+back up the entire private configuration outside git; compare all non-mode
+fields; preserve ownership; atomically replace and flush. Restart/health
+failure restores the previous mode. No in-app per-question approval is added.
+
 Replace the tiny waiting dot with a contrasting status panel, real elapsed
 seconds, motion respecting reduced-motion settings, explicit no-text-yet
 feedback, and a disabled duplicate-submit button. Completion, errors and
@@ -86,7 +108,7 @@ rollback/redeposit, encrypted recovery, restart recovery, bounded responses,
 unsafe-target rejection and duplicate settlement protection. Existing auth,
 thread isolation, legacy payment, refund and ops tests must remain green.
 
-Production remains v0.2.180-alpha until a separate reviewed rollout.
-Before activation, confirm the selected provider supports POST balance/create
-and replayable bearer refunds. Live paid acceptance must be an owner-initiated
+Production remains v0.2.180-alpha until this reviewed rollout completes.
+The selected providers' declared POST creation/refund contracts have been
+checked without payment. Live paid acceptance must be an owner-initiated
 chat or an explicitly approved bounded test, never inferred from mocks.
