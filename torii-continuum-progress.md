@@ -1,5 +1,32 @@
 # Torii Continuum — Progress log
 
+## v0.2.182-alpha: fractional refund deadlock (2026-09-24)
+
+The owner reported immediate payment errors after sign-in. Read-only server
+inspection found one retained 1-sat claim from September 23; provider info
+confirmed 617 msats remaining, no reserved balance, one request and 383 msats
+spent. The previous adapter treated unrefundable dust as uncertain forever and
+blocked every new chat before funding.
+[Evidence](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/36023790441).
+
+The repair requires exact dust classification and an independently checked
+matching balance identity, zero reservations and integer 1–999 msats. It flushes
+an encrypted archive before removing the active claim, never refunds fictitious
+money, never automatically tops up/reuses dust and never makes another paid
+request during recovery. Unknown and whole-satoshi balances retain the old
+blocking safety boundary. Timing details expose retained fractional value;
+pre-deposit refusals accurately say no new payment was sent.
+
+Local verification: 676 agent tests, 1,137 frontend tests across 68 files,
+all 17 ops suites and the production build pass. Payment tests use synthetic
+funds only; the live inspection was read-only. No paid model test was sent.
+
+Update-All scope: code/tests, root/agent package and lock versions, README,
+strategy/todo/progress/handoff and payment ADR. Other apps, Suite, deployment
+workflow, config, models, limits and unrelated dirty Project mirrors are
+unchanged. Repository-specific absent version markers are not introduced.
+Merge/tag/artifact/deploy verification is required before calling this shipped.
+
 ## v0.2.181-alpha: per-request bearer streaming (2026-09-23)
 
 Implements an opt-in payment path separating response streaming from refund

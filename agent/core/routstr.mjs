@@ -636,8 +636,10 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     }
     const settlement = await measure(hooks.telemetry, 'settlement', () => bearerPayments.finish(handle));
     if (settlement.pending) hooks.telemetry?.refundPending?.();
+    if (settlement.dust_msats) hooks.telemetry?.refundDust?.(settlement.dust_msats);
     return { ...result, sats_spent: Math.max(0, sats - settlement.refunded),
-      sats_refunded: settlement.refunded, refund_pending: settlement.pending, duration_ms: now() - started };
+      sats_refunded: settlement.refunded, refund_pending: settlement.pending,
+      refund_dust_msats: settlement.dust_msats || 0, duration_ms: now() - started };
   }
 
   /**

@@ -11,6 +11,15 @@ const encode = text => new TextEncoder().encode(text);
 const frame = content => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
 const log = { info() {}, warn() {}, error() {} };
 
+test('dust telemetry accepts only whole millisatoshi remainders smaller than one sat', () => {
+  const telemetry = createChatTelemetry();
+  for (const value of [0, -1, 1000, 0.5, NaN, '617']) telemetry.refundDust(value);
+  assert.equal(telemetry.snapshot().refund_dust_msats, 0);
+  telemetry.refundDust(617);
+  assert.equal(telemetry.snapshot().refund_dust_msats, 617);
+  assert.equal(telemetry.snapshot().refund_pending, false);
+});
+
 test('SSE emits text before completion across byte boundaries, excludes reasoning', async () => {
   let controller;
   const stream = new ReadableStream({ start(c) { controller = c; } });

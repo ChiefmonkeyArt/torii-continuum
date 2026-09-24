@@ -12,6 +12,7 @@ import { safeRemoteBaseUrl } from './routstr-discovery.mjs';
 const PREFIX = 'rrefund_';
 const MAX_PENDING = 8;
 const MAX_JSON = 128 * 1024;
+const VERIFIED_DUST_RESPONSE = Symbol('verified-dust-response');
 const failure = () => new Error('Streaming payment could not be completed; recovery retained.');
 
 async function readJSON(response) {
@@ -71,6 +72,8 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
       if (!response.ok) {
         if (path === '/v1/balance/refund' && response.status === 400 &&
             body?.detail === 'No balance to refund') return { empty: true };
+        if (path === '/v1/balance/refund' && response.status === 400 &&
+            body?.detail === 'Balance too small to refund') return VERIFIED_DUST_RESPONSE;
         throw failure();
       }
       return body;
@@ -103,6 +106,23 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
           await store.remove(name);
           return { pending: false, refunded: 0 };
         }
+        if (refund === VERIFIED_DUST_RESPONSE) {
+          // Whole-satoshi Cashu cannot withdraw a fractional satoshi. Confirm
+          // the exact balance and absence of reservations before taking it out
+          // of the active recovery queue. Keep the encrypted claim permanently;
+          // never top it up, reuse it, or report it as money returned to wallet.
+          const info = await request(record.base, '/v1/balance/info', {
+            headers: { Authorization: `Bearer ${record.key}` },
+          });
+          if (info.api_key !== record.key || info.reserved !== 0 ||
+              !Number.isSafeInteger(info.balance) || info.balance < 1 ||
+              info.balance >= 1000) throw failure();
+          await persist(name.replace(PREFIX, 'rdust_'), {
+            ...record, dust_msats: info.balance, archived_at: new Date().toISOString(),
+          });
+          await store.remove(name);
+          return { pending: false, refunded: 0, dust_msats: info.balance };
+        }
         if (typeof refund.token !== 'string' || !/^cashu[AB][A-Za-z0-9_+=/-]+$/.test(refund.token)) throw failure();
         // Provider refund endpoint is replayable. If receive fails or the
         // process exits, keep the original encrypted claim and retry later.
@@ -130,7 +150,10 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
       const names = (await store.list()).filter(n => n.startsWith(PREFIX));
       // Unsettled older requests block further deposits rather than silently
       // accumulating provider custody. Concurrent active turns remain bounded.
-      if (names.length >= MAX_PENDING || names.some(n => !active.has(n))) throw failure();
+      if (names.length >= MAX_PENDING || names.some(n => !active.has(n))) {
+        return { ok: false, code: 'payment_recovery_required',
+          reason: 'An earlier payment is awaiting recovery. No new payment was sent.' };
+      }
       sent = await wallet.send(sats);
       if (!sent.ok) return { ok: false, code: sent.code || 'insufficient_funds', reason: 'Wallet cannot fund this request.' };
       name = PREFIX + randomBytes(10).toString('hex');

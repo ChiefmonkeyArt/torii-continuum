@@ -2,6 +2,16 @@
 
 An app builder, project engine and marketplace for bot work — a gateway into the Torii ecosystem.
 
+## v0.2.182-alpha: fractional refund recovery
+
+Verified sub-satoshi remainders no longer block every subsequent chat. Only the
+provider's exact dust response plus a matching balance identity, zero reserved
+funds and 1–999 millisatoshis permits archival. The encrypted claim is retained
+as `memory/secrets/rdust_*.enc`; it is not topped up, reused, or reported as
+refunded. Unknown or larger balances still block new deposits. Timing details
+show the remainder, and blocked requests accurately say no new payment was sent.
+DeepSeek, request ceilings and normal sign-in consent are unchanged.
+
 ## v0.2.181-alpha: streaming-compatible payment
 
 An opt-in `routstr.payment_mode: ephemeral_bearer` path separates completion

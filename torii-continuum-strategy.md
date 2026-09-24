@@ -2,6 +2,14 @@
 
 Living document. This will change as we learn.
 
+**Fractional refund boundary (2026-09-24):** distinguish a verified fractional
+satoshi remainder from uncertain payment recovery. Retain its encrypted claim
+without repeated polling, top-ups or blocking future owner-requested chats.
+Count the full unrefunded allocation as spent; never invent a wallet refund.
+Only exact provider dust classification plus a matching balance identity,
+integer 1–999 millisatoshis and no reserved balance may leave the active queue.
+Unknown, malformed, in-flight and whole-satoshi balances remain fail-closed.
+
 **Streaming payment boundary (2026-09-23):** decouple refunds from visible text
 through opt-in per-request bearer balances, retaining the unchanged model and
 existing spending ceiling. An ordinary signed-in chat carries spending consent;

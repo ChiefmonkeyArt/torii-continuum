@@ -78,6 +78,14 @@ test('timing summary labels measured first text, total and stage durations', () 
     .toBe('First text 1.2s · Total 3.0s · Payment 0.1s · Attempts 1');
 });
 
+test('timing details distinguish retained dust from a pending refund and hide invalid values', () => {
+  expect(timingLabel({ total_ms: 10, refund_dust_msats: 617 }))
+    .toBe('Total 0.0s · Unrefundable remainder 0.617 sat; claim retained');
+  for (const value of [0, -1, '617', 617.5, Infinity])
+    expect(timingLabel({ total_ms: 10, refund_dust_msats: value })).not.toContain('Unrefundable');
+  expect(timingLabel({ total_ms: 10, refund_pending: true })).toBe('Total 0.0s · Refund pending; recovery retained');
+});
+
 test('browser timings include connection wait and distinguish spaced chunks', async () => {
   let clock = 100;
   const chunks = [

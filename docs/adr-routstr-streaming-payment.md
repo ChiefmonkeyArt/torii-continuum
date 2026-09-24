@@ -1,7 +1,7 @@
 # ADR: opt-in per-request bearer payment for real streaming
 
-Status: rollout approved for v0.2.181-alpha; activation requires passing checks.
-Date: 2026-09-23.
+Status: v0.2.181-alpha deployed; fractional-remainder amendment v0.2.182-alpha.
+Date: 2026-09-24.
 
 ## Evidence
 
@@ -63,13 +63,14 @@ backup, health-check and key-rotation boundaries.
 - A successful answer may show a pending-refund warning in timing details.
   The displayed spent amount remains conservative until settlement.
 - No-balance is accepted only for the contract's exact HTTP 400 message;
-  in-flight, dust, unknown and malformed responses remain pending.
+  in-flight, unknown and malformed responses remain pending. Verified dust
+  follows the amendment below.
 
 Known limits: wallet allocation already has a crash window between removing
 proofs and returning its token; this change does not claim to eliminate it.
 A crash after a successful wallet import but before record deletion can leave
 an already-redeemed refund requiring reconciliation. An unknown deposit,
-provider-version mismatch, or unrefundable dust remains blocked for operator
+provider-version mismatch, or unverified dust remains blocked for operator
 review rather than silently risking another payment. DNS-resolution policy is
 the existing provider boundary, not a new DNS-pinning claim.
 
@@ -108,7 +109,41 @@ rollback/redeposit, encrypted recovery, restart recovery, bounded responses,
 unsafe-target rejection and duplicate settlement protection. Existing auth,
 thread isolation, legacy payment, refund and ops tests must remain green.
 
-Production remains v0.2.180-alpha until this reviewed rollout completes.
+Production reached v0.2.181-alpha through merged PR #217 and its matching tag.
 The selected providers' declared POST creation/refund contracts have been
 checked without payment. Live paid acceptance must be an owner-initiated
 chat or an explicitly approved bounded test, never inferred from mocks.
+
+## Fractional remainder amendment (v0.2.182-alpha)
+
+Read-only inspection found the owner-triggered request had left 617 msats from
+a 1-sat allocation, zero reserved, one model request and 383 msats spent.
+The recurring refund returned unrefundable dust and every later turn was
+blocked before payment. This was a protocol-model mismatch: a whole-sat
+Cashu wallet cannot import less than one sat.
+[Live balance evidence](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/36023790441)
+
+Only HTTP 400 with exact `Balance too small to refund` plus GET
+`/v1/balance/info` confirming the same derived API identity, reserved exactly
+zero and safe-integer balance 1–999 msats permits archival. Any other status,
+body, missing field, identity mismatch, reservation or balance remains pending.
+The balance lookup uses the existing credential at its recorded HTTPS endpoint,
+with redirects disabled, timeout and response-size bounds; it does not fund.
+
+Write and fsync `rdust_<same-id>.enc` in the existing encrypted secret store,
+including the original claim, amount and archive timestamp, before removing
+the active `rrefund_` entry. Any storage failure keeps the active claim blocking.
+Archived claims remain in backups and the existing at-rest-key/health boundary.
+They are not polled every minute, topped up, reused, or automatically deleted.
+No human private keys or passwords are introduced.
+
+Cost accounting deliberately keeps the entire unrefunded allocation as spent.
+The UI separately labels the exact fractional remainder as unrefundable with
+claim retained. This is not a promise that a third-party provider preserves
+balances forever or can later redeem them. Per-request ceilings and floors
+remain unchanged; no new automatic payment or per-question prompt is added.
+
+Tests include the live 617-msat case, restart recovery without spending,
+encrypted archive permissions, archive/removal failures, invalid identity and
+amounts, unknown info errors, sequential owner turns and preserved DeepSeek.
+Paid end-to-end streaming acceptance remains outstanding.
