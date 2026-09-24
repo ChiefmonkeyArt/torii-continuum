@@ -11,11 +11,22 @@
 
 ### Active tasks
 
+- **CONT-PROVIDER-ISOLATION / CONT-COMPARISON-FOLLOWUP (v0.2.185-alpha):** owner
+  approved explicit Redshift isolation, retaining its original encrypted claim.
+  Deploy with `quarantine_provider=https://ai.redsh1ft.com`, then run the
+  `comparison_followup` target: two trials each of cheap DeepSeek V4 Flash and
+  Qwen3.5 9B. Four additional allocations maximum, within six total for this
+  authorized comparison. Saved DeepSeek v3.2 and limits stay unchanged.
+  Verify held claim unchanged, healthy provider chat path works, main/tag/live
+  agree, and publish honest first-text/stream/cost measurements.
+  Browser-visible streaming and the disputed 2-sat refund remain separate work.
+
 - **CONT-REFUND-KEYSET / CONT-FAST-CONTROL (v0.2.184-alpha):** accept valid
   modern short-keyset Cashu-B refunds only through loaded whitelisted mint
-  validation, recover the retained 2 sats, then run two isolated cheap Llama
-  control trials without repeating DeepSeek. Compare results and ask before any
-  saved-model or routing change.
+  validation. Decoding is fixed but the proof is SPENT and no wallet credit
+  was observed; do not call this recovered. The Llama control made zero paid
+  calls because the catalog truncated before model index 443. Superseded by
+  the explicitly approved isolation/comparison follow-up above.
 
 - **CONT-STREAM-BENCHMARK (v0.2.183-alpha):** owner explicitly approved bounded
   paid testing on September 24. Compare two DeepSeek providers twice, optional

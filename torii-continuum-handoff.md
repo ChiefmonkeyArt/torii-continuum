@@ -1,5 +1,30 @@
 # Continuum — Session Handover
 
+## v0.2.185-alpha: operator-approved isolation and remaining comparison
+
+This section supersedes the v184 recovery expectation below. v184 is deployed
+but the disputed Redshift refund is NOT recovered. Native decode/prepare works;
+mint proof state is SPENT, wallet unchanged. Encrypted `rrefund_*.enc` must remain
+byte-for-byte intact. No new payment or rollback may be sent to that provider.
+
+Owner explicitly approved isolating the provider and finishing the test within
+its existing budget. v185 introduces `routstr.quarantined_providers` and an
+atomic private-backed workflow helper. Apply only `https://ai.redsh1ft.com`.
+Held records remain encrypted in place, but no longer globally block healthy
+providers. Recovery does not poll held origins. All other guards remain.
+
+The prior Llama control had no rows and no spending (model index443 was beyond
+the first200 catalog entries). Targeted model filtering now preserves the
+existing cap; incomplete plans fail visibly. Use `comparison_followup` for
+two DeepSeek V4 Flash and two Qwen3.5 9B trials, with the existing same prompt,
+2-sat per-call cap and stop-on-first-failure. Together with two prior trials
+this is at most six paid calls. No saved model/limit changes.
+
+Verify health, original claim unchanged, quarantine exact, healthy candidate
+available, main/tag/live SHA, and sanitized paid report. The one successful
+v3.2 baseline was 19.776s first answer and 7.378s answer spread. Do not claim
+browser-visible streaming or a statistical winner from one/two samples.
+
 ## v0.2.184-alpha: refund compatibility + remaining fast control
 
 The first live benchmark proved GitHappens DeepSeek is genuinely streaming in

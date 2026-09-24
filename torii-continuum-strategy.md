@@ -2,6 +2,14 @@
 
 Living document. This will change as we learn.
 
+**Explicit provider isolation (2026-09-24):** the owner approved isolating the
+failed Redshift provider while retaining its disputed 2-sat claim and finishing
+the existing bounded comparison. Only an explicit origin quarantine may exempt
+that origin's validated claim from the global new-payment block; it also blocks
+routing, deposits and automatic recovery polling to that origin. Do not discard
+claims, invent refunds, auto-isolate failures, or retry a failed paid turn.
+Other uncertain records and the pending-record cap remain fail-closed.
+
 **Thinking versus answer streaming (2026-09-24):** distinguish private model
 reasoning activity from user-visible answer text. DeepSeek produced reasoning
 events from 6.9–19.8s, then genuinely streamed answer text for 7.4s in the direct

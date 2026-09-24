@@ -113,6 +113,25 @@ test('unknown benchmark targets fail before allocating funds', async () => {
   await assert.rejects(benchmark(cfg, deps), /invalid_target/);
   assert.deepEqual(deps.count(), { sends: 0, requests: 0 });
 });
+test('comparison follow-up alternates two available cheap models twice, skips held providers and preserves config', async()=>{
+  const deps={...seams(),target:'comparison_followup',catalog:async()=>[
+    {baseUrl:'https://held.example',models:[model('deepseek-v4-flash'),model('qwen3-5-9b')]},
+    {baseUrl:'https://a.example',models:[model('deepseek-v4-flash'),model('qwen3-5-9b')]},
+  ]};
+  const config={...cfg,routstr:{...cfg.routstr,quarantined_providers:['https://held.example']}};
+  const before=JSON.stringify(config),result=await benchmark(config,deps);
+  assert.deepEqual(result.rows.map(r=>r.model),['deepseek-v4-flash','qwen3-5-9b','deepseek-v4-flash','qwen3-5-9b']);
+  assert.ok(result.rows.every(r=>r.provider==='https://a.example'));
+  assert.equal(deps.count().sends,4);
+  assert.equal(JSON.stringify(config),before);
+});
+test('empty or incomplete comparison fails loudly before funding, not a successful zero-row report',async()=>{
+  for(const target of ['fast_control','comparison_followup']){
+    const deps={...seams(),target,catalog:async()=>[]};
+    await assert.rejects(benchmark(cfg,deps),/no_eligible_comparison/);
+    assert.equal(deps.count().sends,0);
+  }
+});
 test('workflow makes benchmark opt-in, stops the daemon for wallet isolation and restores it on exit', async () => {
   const workflow = await readFile(new URL('../../.github/workflows/deploy-continuum-vps.yml', import.meta.url), 'utf8');
   assert.match(workflow, /if: inputs\.benchmark == true/);

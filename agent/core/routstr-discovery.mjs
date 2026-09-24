@@ -274,6 +274,7 @@ export async function fetchProviderCatalog(providers, {
   timeoutMs = DEFAULT_CATALOG_TIMEOUT_MS,
   fetchFn = fetch,
   concurrency = CATALOG_CONCURRENCY,
+  modelIds = null,
 } = {}) {
   const out = [];
   const list = (providers || []).slice(0, MAX_PROVIDERS);
@@ -299,6 +300,7 @@ export async function fetchProviderCatalog(providers, {
       try { j = JSON.parse(text); } catch { return; }
       const models = Array.isArray(j?.data)
         ? j.data
+            .filter(m => !modelIds || modelIds.slice(0, MAX_MODELS_PER_PROVIDER).includes(m?.id))
             .slice(0, MAX_MODELS_PER_PROVIDER)
             .filter((m) => typeof m?.id === 'string' && m.id)
             .map((m) => describeModel(m))
