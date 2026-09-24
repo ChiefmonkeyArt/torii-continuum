@@ -36,6 +36,7 @@ import { agentRoot } from './config.mjs';
 import { measure } from '../lib/chat-stream.mjs';
 import { createRoutstrPayment } from './routstr-payment.mjs';
 import { isQuarantined } from './provider-quarantine.mjs';
+import { validModelId } from './chat-model-settings.mjs';
 import {
   ERROR_CODES, isRetryableCode, classifyHttpFailure, classifyThrownError, providerFailure, looksLikeHtml,
 } from '../lib/provider-errors.mjs';
@@ -346,6 +347,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
         const fetched = await (deps.fetchCatalog || fetchProviderCatalog)(providers, {
           timeoutMs: discovery.catalog_timeout_ms,
           fetchFn: deps.fetchFn || fetch,
+          preferredModelIds: [deps.getChatModel?.(), cfg.routstr.models?.chat, 'deepseek-v4-flash'].filter(Boolean),
         });
         const next = fetched.filter((e) => Array.isArray(e.models) && e.models.length > 0);
         // A failed/empty early refresh must not destroy a still-valid catalogue.
@@ -696,13 +698,17 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       return providerFailure(ERROR_CODES.BAD_REQUEST, 'messages must be a non-empty array');
     }
 
-    const wanted = modelForSkill(cfg, skill);
+    const ownerChoice = skill === 'chat' ? deps.getChatModel?.() : null;
+    const wanted = ownerChoice || modelForSkill(cfg, skill);
     const requested = wanted === 'auto' ? null : wanted;
     const budget = budget_ms === null || budget_ms === undefined ? null : createBudget(budget_ms, { now });
     const remaining = () => (budget ? budget.remainingMs() : null);
     const sliceNow = () => sliceForProvider(chatTimeoutMs, remaining());
 
     let candidates = await measure(telemetry, 'discovery', () => resolveCandidates(requested));
+    if (ownerChoice && candidates.length === 0)
+      return providerFailure(ERROR_CODES.PROVIDER_DISABLED,
+        'Your selected chat model is unavailable. Choose another model on the Routstr page.');
     if (requested && candidates.length === 0) {
       log.warn(`[routstr] configured model "${requested}" is not served by any reachable provider — degrading to cheapest available`);
       candidates = await measure(telemetry, 'discovery', () => resolveCandidates(null));
@@ -782,7 +788,27 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     return attempt;
   }
 
-  return { chat, refreshCatalog: ensureCatalog, startDiscovery, stopDiscovery, discoveryStatus,
+  async function availableModels() {
+    const list = await ensureCatalog(), grouped = new Map();
+    for (const p of list) {
+      if (isQuarantined(cfg, p.baseUrl)) continue;
+      for (const m of p.models) {
+        if (!validModelId(m.id) || !m.pricing_sats) continue;
+        const input = m.pricing_sats.prompt, output = m.pricing_sats.completion;
+        if (![input, output].every(n => Number.isFinite(n) && n >= 0)) continue;
+        const row = grouped.get(m.id) || { id: m.id, name: m.name || m.id, providers: 0,
+          input_sats_per_1k: input * 1000, output_sats_per_1k: output * 1000 };
+        row.providers++;
+        row.input_sats_per_1k = Math.min(row.input_sats_per_1k, input * 1000);
+        row.output_sats_per_1k = Math.min(row.output_sats_per_1k, output * 1000);
+        grouped.set(m.id, row);
+      }
+    }
+    const priority = [deps.getChatModel?.(), cfg.routstr.models?.chat, 'deepseek-v4-flash'];
+    return [...grouped.values()].sort((a, b) =>
+      Number(priority.includes(b.id)) - Number(priority.includes(a.id)) || a.name.localeCompare(b.name)).slice(0, 500);
+  }
+  return { chat, availableModels, refreshCatalog: ensureCatalog, startDiscovery, stopDiscovery, discoveryStatus,
     startPaymentRecovery: () => bearerPayments?.start(),
     stopPaymentRecovery: () => bearerPayments?.stop() };
 }

@@ -1,5 +1,31 @@
 # Continuum — Session Handover
 
+## v0.2.186-alpha: real chat model selection
+
+Owner asked for DeepSeek V4 Flash selection on Routstr and approved a no-thinking
+speed probe. They now accept complete answers without typing animation when
+latency is good; the prior 7.2-second V4 Flash result is acceptable.
+
+New GET `/api/routstr/models` and POST `/api/routstr/model` are admin-gated,
+read/save only, no paid calls. Persisted `memory/chat-model.json` overrides
+only chat on the next turn, survives restart/deploy and never rewrites config,
+coding models or caps. Unknown/unavailable IDs cannot be saved. Explicitly
+selected unavailable models cannot silently downgrade to other remote models.
+The real Routstr page uses live catalog/rates/cap with Search and Use this model;
+the demo remains separate. No model is changed on rollout.
+
+`deepseek_no_thinking` benchmark target makes at most two paid calls, on the
+previously successful GitHappens/V3.2 and Bartly/V4 Flash routes only. Sets
+`reasoning.enabled:false` in that diagnostic request, never normal requests.
+Compatibility is measured, not assumed. Stop after the first failed/uncertain
+payment. Record first answer, reasoning-event count and total latency; never
+save hidden thought text. Existing two disputed claims stay quarantined.
+
+Run full CI/browser QA, tag merged main, deploy and independently verify
+health/SHA/auth, default unchanged and disputed records retained. Runtime
+evidence belongs on the final release PR; do not claim thinking-disabled
+compatibility, reduced latency or saved production selection before verified.
+
 ## v0.2.185-alpha: operator-approved isolation and remaining comparison
 
 This section supersedes the v184 recovery expectation below. v184 is deployed

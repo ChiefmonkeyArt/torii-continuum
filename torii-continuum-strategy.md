@@ -2,6 +2,13 @@
 
 Living document. This will change as we learn.
 
+**Fast answers over mandatory typing (2026-09-24):** the owner now accepts
+non-streamed answers when they return quickly; the measured 7.2-second DeepSeek
+V4 Flash response is acceptable. Preserve genuine streaming where available,
+but don't add fake typing or slow a complete answer to create an effect.
+Expose real owner-controlled Routstr chat-model selection, with server
+persistence, live availability and unchanged spending limits.
+
 **Explicit provider isolation (2026-09-24):** the owner approved isolating the
 failed Redshift provider while retaining its disputed 2-sat claim and finishing
 the existing bounded comparison. Only an explicit origin quarantine may exempt

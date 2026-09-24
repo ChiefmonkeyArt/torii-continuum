@@ -11,6 +11,17 @@
 
 ### Active tasks
 
+- **CONT-LIVE-MODEL-PICKER (v0.2.186-alpha):** implement genuine server-backed
+  chat-model selection on Routstr, including live DeepSeek V4 Flash availability.
+  Save only on owner click; retain default V3.2 at rollout. Test authenticated
+  routes, private restart persistence, next-turn routing, unavailable choice,
+  failure states and mobile/desktop UI. Complete approved two-call no-thinking
+  probe on known working routes. Check final PR evidence before further tests.
+
+- **CONT-DISPUTED-REFUNDS:** Redshift 2 sats and Cypherpunk 1 sat remain isolated
+  and preserved, not refunded. No automatic redeposit or proof rollback. The
+  unrelated healthy-provider guard is verified clear in v185.
+
 - **CONT-PROVIDER-ISOLATION / CONT-COMPARISON-FOLLOWUP (v0.2.185-alpha):** owner
   approved explicit Redshift isolation, retaining its original encrypted claim.
   Deploy with `quarantine_provider=https://ai.redsh1ft.com`, then run the

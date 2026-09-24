@@ -275,6 +275,7 @@ export async function fetchProviderCatalog(providers, {
   fetchFn = fetch,
   concurrency = CATALOG_CONCURRENCY,
   modelIds = null,
+  preferredModelIds = [],
 } = {}) {
   const out = [];
   const list = (providers || []).slice(0, MAX_PROVIDERS);
@@ -298,9 +299,15 @@ export async function fetchProviderCatalog(providers, {
       if (Buffer.byteLength(text) > MAX_CATALOG_BODY_BYTES) return;
       let j;
       try { j = JSON.parse(text); } catch { return; }
+      const wanted = new Set((modelIds || []).slice(0, MAX_MODELS_PER_PROVIDER));
+      const preferred = new Set(preferredModelIds.slice(0, MAX_MODELS_PER_PROVIDER));
+      const entries = Array.isArray(j?.data) ? j.data.filter(m => !modelIds || wanted.has(m?.id)) : [];
+      const ordered = preferred.size ? [
+        ...entries.filter(m => preferred.has(m?.id)),
+        ...entries.filter(m => !preferred.has(m?.id)),
+      ] : entries;
       const models = Array.isArray(j?.data)
-        ? j.data
-            .filter(m => !modelIds || modelIds.slice(0, MAX_MODELS_PER_PROVIDER).includes(m?.id))
+        ? ordered
             .slice(0, MAX_MODELS_PER_PROVIDER)
             .filter((m) => typeof m?.id === 'string' && m.id)
             .map((m) => describeModel(m))

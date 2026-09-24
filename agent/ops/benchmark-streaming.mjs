@@ -11,6 +11,15 @@ import { createChatTelemetry } from '../lib/chat-stream.mjs';
 import { isQuarantined } from '../core/provider-quarantine.mjs';
 
 const COMPARISON_MODELS = ['deepseek-v4-flash', 'qwen3-5-9b'];
+const NO_THINKING_ROUTES = [
+  { base: 'https://routstr.githappens.space', model: 'deepseek-v3.2' },
+  { base: 'https://bartly.eth64.de:17881', model: 'deepseek-v4-flash' },
+];
+
+export function requestWithoutThinking(init) {
+  const body = JSON.parse(init.body);
+  return { ...init, body: JSON.stringify({ ...body, reasoning: { enabled: false } }) };
+}
 
 export const MESSAGES = [
   { role: 'system', content: 'You are a helpful assistant. Answer the request directly.' },
@@ -95,12 +104,17 @@ export function needsAlternative(rows) {
 
 export async function benchmark(cfg, deps = {}) {
   if (cfg.routstr.payment_mode !== 'ephemeral_bearer') throw new Error('benchmark_requires_bearer');
+  const target = deps.target || 'deepseek_first';
+  if (!['deepseek_first', 'fast_control', 'comparison_followup', 'deepseek_no_thinking'].includes(target))
+    throw new Error('benchmark_invalid_target');
   const cap = Math.min(2, cfg.routstr.limits.max_sats_per_request);
   if (!Number.isSafeInteger(cap) || cap < 1) throw new Error('benchmark_invalid_cap');
   const wallet = boundedWallet(deps.wallet || await createWallet(cfg, quiet), cap);
   const before = (await wallet.balance()).total;
   await (deps.recover || (() => createRoutstrPayment(cfg, wallet).recover()))();
-  const providers = await (deps.discover || discoverProviders)({
+  const providers = target === 'deepseek_no_thinking'
+    ? NO_THINKING_ROUTES.map(p => ({ baseUrl: p.base }))
+    : await (deps.discover || discoverProviders)({
     bootstrapEndpoints: [...(cfg.routstr.providers || []),
       ...(cfg.routstr.discovery?.bootstrap_endpoints || []), cfg.routstr.endpoint].filter(Boolean),
   });
@@ -109,11 +123,14 @@ export async function benchmark(cfg, deps = {}) {
   })).filter(p => !isQuarantined(cfg, p.baseUrl));
   const maxTokens = Math.min(2048, cfg.routstr.limits.max_tokens_out);
   const plan = selectPlan(catalog, maxTokens, cap);
-  const target = deps.target || 'deepseek_first';
-  if (!['deepseek_first', 'fast_control', 'comparison_followup'].includes(target)) throw new Error('benchmark_invalid_target');
-  const selected = target === 'comparison_followup' ? plan.comparison :
+  const noThinking = NO_THINKING_ROUTES.flatMap(route => {
+    const model = catalog.find(p => p.baseUrl === route.base)?.models.find(m => m.id === route.model);
+    const sats = model && estimateSatsForModel(model, maxTokens, MESSAGES);
+    return Number.isSafeInteger(sats) && sats >= 1 && sats <= cap ? [{ base: route.base, model, sats }] : [];
+  });
+  const selected = target === 'deepseek_no_thinking' ? noThinking : target === 'comparison_followup' ? plan.comparison :
     target === 'fast_control' ? plan.alternative : plan.deepseek;
-  if (!selected.length || target === 'comparison_followup' && selected.length !== 2)
+  if (!selected.length || ['comparison_followup', 'deepseek_no_thinking'].includes(target) && selected.length !== 2)
     throw new Error('benchmark_no_eligible_comparison');
   const rows = [];
   let halted = false;
@@ -127,8 +144,12 @@ export async function benchmark(cfg, deps = {}) {
     let first = null, last = null, events = 0;
     const savedFetch = globalThis.fetch;
     globalThis.fetch = async (url, init) => {
-      const response = await savedFetch(url, init);
       const path = new URL(typeof url === 'string' || url instanceof URL ? url : url.url).pathname;
+      if (deps.target === 'deepseek_no_thinking' && path.endsWith('/chat/completions')) {
+        init = requestWithoutThinking(init);
+        row.requested_reasoning_enabled = false;
+      }
+      const response = await savedFetch(url, init);
       return path.endsWith('/chat/completions')
         ? observeReasoning(response, row, started) : response;
     };
@@ -159,7 +180,9 @@ export async function benchmark(cfg, deps = {}) {
     rows.push(row);
     deps.onRow?.(row);
   };
-  if (target === 'comparison_followup') {
+  if (target === 'deepseek_no_thinking') {
+    for (const choice of noThinking) await run(choice);
+  } else if (target === 'comparison_followup') {
     for (let repeat = 0; repeat < 2; repeat++) for (const choice of plan.comparison) await run(choice);
   } else if (target === 'fast_control') {
     for (let repeat = 0; repeat < 2; repeat++) for (const choice of plan.alternative) await run(choice);

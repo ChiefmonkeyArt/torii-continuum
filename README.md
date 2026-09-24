@@ -2,6 +2,19 @@
 
 An app builder, project engine and marketplace for bot work — a gateway into the Torii ecosystem.
 
+## v0.2.186-alpha: real Routstr chat-model selection
+
+Routstr → Chat model now loads live priced models, including DeepSeek V4 Flash.
+Search, select, then choose **Use this model**. The authenticated agent validates
+availability and persists the choice privately in `memory/chat-model.json`.
+It applies on the next chat without a restart and survives deployments. No
+selection is changed by installing this release; coding models, caps, provider
+quarantines and payment settings remain unchanged.
+
+Loading/saving a model is free. Rates are provider-declared, not fixed quotes.
+An unavailable explicitly selected model fails clearly instead of silently
+switching to another remote model. The demo picker remains simulated.
+
 ## v0.2.185-alpha: explicit provider isolation and valid comparisons
 
 An owner-approved `routstr.quarantined_providers` list prevents routing, funding

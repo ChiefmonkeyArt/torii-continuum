@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, mkdtemp, stat, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { benchmark, boundedWallet, selectPlan, observeReasoning, needsAlternative, claimRun } from '../ops/benchmark-streaming.mjs';
+import { benchmark, boundedWallet, selectPlan, observeReasoning, needsAlternative, claimRun, requestWithoutThinking } from '../ops/benchmark-streaming.mjs';
 const model = id => ({ id, max_cost_sats: 10, pricing_sats: { request: 0, prompt: 0.000001, completion: 0.00001 } });
 const catalog = ['https://a.example', 'https://b.example'].map(baseUrl => ({
   baseUrl, models: [model('deepseek-v3.2'), model('llama-3.1-8b-instruct')],
@@ -112,6 +112,23 @@ test('unknown benchmark targets fail before allocating funds', async () => {
   const deps = { ...seams(), target: 'anything' };
   await assert.rejects(benchmark(cfg, deps), /invalid_target/);
   assert.deepEqual(deps.count(), { sends: 0, requests: 0 });
+});
+test('no-thinking request changes only the approved reasoning flag and preserves streamed model request',()=>{
+ const init={method:'POST',headers:{Authorization:'Bearer synthetic'},body:JSON.stringify({model:'deepseek-v3.2',stream:true,max_tokens:2048,messages:[{role:'user',content:'test'}]})};
+ const copy=JSON.stringify(init),next=requestWithoutThinking(init);
+ assert.equal(JSON.stringify(init),copy);
+ const body=JSON.parse(next.body);assert.deepEqual(body.reasoning,{enabled:false});delete body.reasoning;
+ assert.deepEqual(body,JSON.parse(init.body));assert.equal(next.headers,init.headers);
+});
+test('no-thinking target funds at most two known successful routes, not the cheapest unknown provider',async()=>{
+ const deps={...seams(),target:'deepseek_no_thinking',catalog:async()=>[
+  {baseUrl:'https://routstr.githappens.space',models:[model('deepseek-v3.2')]},
+  {baseUrl:'https://bartly.eth64.de:17881',models:[model('deepseek-v4-flash')]},
+  {baseUrl:'https://unknown.example',models:[model('deepseek-v3.2'),model('deepseek-v4-flash')]},
+ ]};
+ const result=await benchmark(cfg,deps);
+ assert.deepEqual(result.rows.map(r=>r.provider),['https://routstr.githappens.space','https://bartly.eth64.de:17881']);
+ assert.equal(deps.count().sends,2);
 });
 test('comparison follow-up alternates two available cheap models twice, skips held providers and preserves config', async()=>{
   const deps={...seams(),target:'comparison_followup',catalog:async()=>[

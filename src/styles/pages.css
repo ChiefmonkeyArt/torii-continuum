@@ -270,6 +270,10 @@
   letter-spacing: 0;
 }
 
+.live-model-picker input,
+.live-model-picker select,
+.live-model-picker button { min-height: 44px; }
+.live-model-picker button:disabled { opacity: .5; cursor: default; }
 .model-list { display: flex; flex-direction: column; gap: 8px; }
 .model {
   display: flex; align-items: center; gap: 12px;

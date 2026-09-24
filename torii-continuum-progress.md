@@ -1,5 +1,30 @@
 # Torii Continuum — Progress log
 
+## v0.2.186-alpha: live model picker and approved no-thinking probe (2026-09-24)
+
+The existing Routstr picker changed only browser preferences despite claiming
+to control chat. The replacement reads the agent's actual catalog and selection,
+shows declared rates/cap, searches model names/IDs, and saves only after the owner
+clicks Use this model. Authenticated routes validate current priced availability;
+private atomic persistence survives restarts, and the next chat uses the choice.
+Explicit unavailable selections never silently downgrade to another remote model.
+
+The owner approved testing DeepSeek with extended thinking disabled and said
+streaming is optional if replies are fast (7.2 seconds is acceptable). A new
+explicit diagnostic target sends at most two requests with `reasoning.enabled:
+false`, one each to previously successful V3.2/GitHappens and V4 Flash/Bartly
+routes. It does not modify saved settings, log reasoning text, or introduce
+paid retries. Unknown/new cheapest providers are not selected.
+
+Prior v185 is verified: two failed providers isolated; original encrypted
+2-sat claim unchanged, second 1-sat claim retained, healthy-provider guard clear.
+Saved model remains V3.2. [Verification](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/36036576578).
+
+Update-All: model-settings/server/router/UI/benchmark/workflow + tests, four
+package markers, README, strategy/todo/progress/handoff and new selection ADR.
+Suite, other apps, unrelated version markers and Project mirrors unaffected.
+CI, browser QA, merge/tag/deploy and approved live-test outcomes pending.
+
 ## v0.2.185-alpha: approved provider isolation and comparison repair (2026-09-24)
 
 Independent verification of v184 found one pending Redshift claim. Its refund
