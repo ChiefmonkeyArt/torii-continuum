@@ -11,6 +11,20 @@
 
 ### Active tasks
 
+- **CONT-WORKSPACE-HISTORY (v0.2.187-alpha):** navigation/profile restructuring,
+  independent encrypted history, private pins/titles, search and project
+  workspace layout implemented. Complete full CI, desktop/mobile checks, merge,
+  tag, deploy and independent live verification before calling shipped. Baseline
+  rollback: v0.2.186-alpha at f81ae2ad8a30e937ef9bd9b4c8141d0ecc5e0177.
+  Runtime completion evidence belongs on the release PR.
+- **CONT-PROJECT-ENGINE-NEXT:** isolated build/edit/preview jobs, checkpoints,
+  reviewed publication and rollback are not implemented by the layout release.
+  Team sharing must wait for real server-side roles and permission-filtered
+  access; preserving the Team screen does not authorize sharing private chats.
+- **CONT-NEW-INSTALL-MODEL:** example config plus Ansible template now select
+  DeepSeek V4 Flash for chat; standalone/Suite copy the example on first install.
+  Existing config and saved overrides remain unchanged.
+
 - **CONT-LIVE-MODEL-PICKER (v0.2.186-alpha):** implement genuine server-backed
   chat-model selection on Routstr, including live DeepSeek V4 Flash availability.
   Save only on owner click; retain default V3.2 at rollout. Test authenticated

@@ -1,5 +1,22 @@
 # Torii Continuum — Progress log
 
+## v0.2.187-alpha: conversation workspace and private history
+
+Implementation prepared on 2026-09-24 under explicit owner approval. Added
+conversation-first navigation, upward profile tools, independent session IDs,
+encrypted title/pin/project metadata, search, project context/tasks/files/chats,
+and mobile detail disclosure. Existing chat transport and payment behavior are
+reused, not duplicated. Session writes now serialize and support stale-digest
+conflict rejection. Sign-out invalidates delayed private-history results.
+
+Pre-change version check: main/tag f81ae2ad8a30e937ef9bd9b4c8141d0ecc5e0177,
+v0.2.186-alpha, matching public health. New-install chat templates use V4 Flash;
+existing config, saved model and caps are preserved. Local checks: 1,150 frontend
+tests, 708 agent tests, all ops suites, production build and release-artifact
+validation pass. Browser checks cover reload/pins, new project sessions, tabs,
+search and mobile fit. CI and runtime evidence must be attached to the release
+PR before marking rollout complete.
+
 ## v0.2.186-alpha: live model picker and approved no-thinking probe (2026-09-24)
 
 The existing Routstr picker changed only browser preferences despite claiming

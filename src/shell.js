@@ -4,7 +4,8 @@
  */
 
 import { navigate, currentRoute } from './router.js';
-import { listProjects } from './data/store.js';
+import { listProjects, subscribe } from './data/store.js';
+import { sessionLibrary, historyTitle } from './chat.js';
 import { isSessionLive, startLogin, cancelLogin, endSession } from './auth.js';
 import { isAgentConfigured, versionInfo, requestUpdate } from './data/agent.js';
 import { describeVersionState, updateTargetTag } from './data/release.js';
@@ -41,6 +42,18 @@ export function mountShell(root) {
 
   renderSidebar();
   window.addEventListener('hashchange', renderSidebar);
+  document.addEventListener('continuum:history-changed', renderHistory);
+  subscribe(() => renderSidebar());
+  document.addEventListener('click', e => {
+    const menu = sidebarEl?.querySelector('.profile-menu');
+    if (menu?.open && !menu.contains(e.target)) menu.open = false;
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    const menu = sidebarEl?.querySelector('.profile-menu');
+    if (menu?.open) { menu.open = false; menu.querySelector('summary')?.focus(); }
+    sidebarEl?.classList.remove('mobile-open');
+  });
 }
 
 export function mainContent() { return mainEl; }
@@ -53,6 +66,8 @@ export function appVersion() {
 }
 
 export function renderSidebar() {
+  if (!sidebarEl) return;
+  sidebarEl.classList.remove('mobile-open');
   const projectCount = listProjects().length;
   const active = getActiveNav();
   // Read the authoritative auth state ONCE per render and derive the control's
@@ -71,8 +86,24 @@ export function renderSidebar() {
       </div>
     </div>
 
-    <div class="nav-section">Workspace</div>
-    ${NAV_ITEMS.map((n) => `
+    <button class="mobile-nav-toggle" type="button" aria-label="Toggle workspace navigation" aria-expanded="false">Menu</button>
+    <a class="nav-item new-chat-link" href="${demoAware('#/chat')}" data-path="/chat"><span>+ New chat</span></a>
+    <a class="nav-item" href="${demoAware('#/sessions')}" data-path="/sessions"><span>Search conversations</span></a>
+    <div class="workspace-nav-scroll">
+      <div class="nav-section">Pinned</div>
+      <div data-pinned-history></div>
+      <div class="nav-section nav-section-row"><a class="nav-item" data-path="/projects" href="${demoAware('#/projects')}">Projects</a><span>${projectCount}</span></div>
+      <div data-project-links></div>
+      <div class="nav-section">Recent chats</div>
+      <div data-recent-history></div>
+      <a class="nav-item" href="${demoAware('#/sessions')}">All conversations</a>
+    </div>
+    <div class="sidebar-footer">
+      <details class="profile-menu">
+      <summary class="profile-trigger"><span class="profile-avatar">C</span><span>${authed ? 'Your workspace' : 'Continuum'}<small>${authed ? 'Signed in · Settings' : 'Settings & tools'}</small></span><span class="profile-chevron">⌃</span></summary>
+      <div class="profile-popover">
+      <div class="nav-section">Settings & tools</div>
+    ${NAV_ITEMS.filter(n => !['projects', 'sessions'].includes(n.id)).map((n) => `
       <a class="nav-item ${active === n.id ? 'active' : ''}" href="${demoAware('#' + n.path)}" data-path="${n.path}">
         <span class="nav-icon">${n.icon()}</span>
         <span>${n.label}</span>
@@ -80,7 +111,7 @@ export function renderSidebar() {
       </a>
     `).join('')}
 
-    <div class="nav-section">Signals</div>
+    <div class="nav-section">Activity</div>
     <a class="nav-item" href="${demoAware('#/marketplace?ours=1')}" data-path="/marketplace?ours=1">
       <span class="nav-icon">${iconStar()}</span>
       <span>Our tasks</span>
@@ -90,10 +121,6 @@ export function renderSidebar() {
       <span>Usage</span>
     </a>
 
-    <div class="sidebar-footer">
-      <div class="footer-note">
-        <b>Local-first.</b> Continuum stores your projects as nostr-shaped events — portable, signable, yours.
-      </div>
       <div class="sidebar-version" data-app-version></div>
       <div class="sidebar-update" data-sidebar-update hidden></div>
       <div class="sidebar-login-status" data-login-status role="status" aria-live="polite"></div>
@@ -104,8 +131,23 @@ export function renderSidebar() {
         </button>
         <button class="theme-toggle" data-theme-toggle title="Toggle theme" aria-label="Toggle theme">${currentTheme() === 'light' ? iconMoon() : iconSun()}</button>
       </div>
+      </div>
+      </details>
     </div>
   `;
+  sidebarEl.querySelector('.mobile-nav-toggle').addEventListener('click', e => {
+    e.currentTarget.setAttribute('aria-expanded', String(sidebarEl.classList.toggle('mobile-open')));
+  });
+  const projectLinks = sidebarEl.querySelector('[data-project-links]');
+  for (const project of listProjects().filter(p => p?.content?.slug).slice(0, 12)) {
+    const a = document.createElement('a');
+    a.className = 'nav-item project-nav-link';
+    a.href = demoAware('#/projects/' + encodeURIComponent(project.content.slug));
+    a.textContent = project.content.name || project.content.slug;
+    projectLinks.append(a);
+  }
+  if (!projectLinks.childElementCount) projectLinks.textContent = 'Your projects will appear here.';
+  renderHistory();
   // Build-time version stamp so every deploy self-identifies. Rendered via
   // textContent (never innerHTML) even though __APP_VERSION__ is a trusted
   // build constant. Visible to logged-in and demo/unauthenticated users alike.
@@ -147,6 +189,33 @@ export function renderSidebar() {
   // version + an Update button in the footer. Non-blocking; failures are silent
   // (the version stamp always shows). Only meaningful with a configured agent.
   refreshSidebarVersion();
+}
+
+function renderHistory() {
+  if (!sidebarEl) return;
+  const records = isSessionLive() ? sessionLibrary.rows() : [];
+  const state = sessionLibrary.status();
+  for (const [selector, pinned] of [['[data-pinned-history]', true], ['[data-recent-history]', false]]) {
+    const host = sidebarEl.querySelector(selector);
+    if (!host) continue;
+    host.replaceChildren();
+    const rows = records.filter(r => !!r.metadata?.pinned === pinned).slice(0, pinned ? 8 : 12);
+    for (const row of rows) {
+      const a = document.createElement('a');
+      a.className = 'nav-item history-nav-link';
+      a.href = '#/sessions/' + encodeURIComponent(row.id);
+      a.textContent = historyTitle(row);
+      a.title = historyTitle(row);
+      if (window.location.hash === a.getAttribute('href')) a.setAttribute('aria-current', 'page');
+      host.append(a);
+    }
+    if (!rows.length) {
+      const p = document.createElement('p'); p.className = 'history-empty';
+      p.textContent = pinned ? 'Keep important chats close.' : state.loading ? 'Loading your history…' :
+        state.error ? 'History unavailable. Open All conversations to retry.' : 'Your conversations will appear here.';
+      host.append(p);
+    }
+  }
 }
 
 // Fetch the version summary and, when logged in AND a newer release is known,

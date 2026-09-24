@@ -169,7 +169,7 @@ describe('project detail route (/projects/:slug) does not crash', () => {
   });
 
   it('renders the Sessions stat correctly instead of throwing (the exact regression)', async () => {
-    const w = makeWindow({ hash: '#/projects/torii-bazaar' });
+    const w = makeWindow({ hash: '#/projects/torii-bazaar/overview' });
     const s = await boot(w);
     expect(s.routeError, `unexpected route error: ${s.routeErrorText}`).toBe(false);
     expect(s.pageTitle).toBe('Torii Bazaar');
@@ -177,7 +177,7 @@ describe('project detail route (/projects/:slug) does not crash', () => {
   });
 
   it('opens a project whose optional fields (description/source/sourceUrl/tags) are missing', async () => {
-    const w = makeWindow({ hash: '#/projects/ghost-project' });
+    const w = makeWindow({ hash: '#/projects/ghost-project/overview' });
     const s = await boot(w);
     expect(s.routeError, `unexpected route error: ${s.routeErrorText}`).toBe(false);
     expect(s.pageTitle).toBe('Ghost Project');

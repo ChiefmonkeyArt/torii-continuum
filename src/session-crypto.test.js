@@ -57,6 +57,12 @@ describe('sanitizeMessages', () => {
 });
 
 describe('sealSession / unsealSession', () => {
+  it('round-trips bounded private title, pin and project metadata without changing legacy blobs', async () => {
+    const metadata = { title: '  My project  ', pinned: true, project: 'torii' };
+    const ct = await sealSession({ encrypt: fakeEncrypt, pubkey: PUB }, { threadKey: 'session-a', messages: [], metadata });
+    const value = await unsealSession({ decrypt: fakeDecrypt, pubkey: PUB }, ct);
+    expect(value.metadata).toEqual({ title: 'My project', pinned: true, project: 'torii' });
+  });
   it('round-trips threadKey + messages through seal and unseal', async () => {
     const msgs = [{ who: 'user', text: 'hello', at: 1 }, { who: 'ai', text: 'hi', at: 2 }];
     const ct = await sealSession({ encrypt: fakeEncrypt, pubkey: PUB }, { threadKey: 'project:torii', messages: msgs });

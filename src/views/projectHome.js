@@ -99,7 +99,7 @@ export function renderProjectHome(mount, slug, opts = {}) {
   mount.appendChild(cols);
 }
 
-function renderMilestones(slug, S) {
+export function renderMilestones(slug, S) {
   const ms = S.milestonesFor(slug);
   const list = h('div', { class: 'milestone-list' });
   for (const m of ms) {
@@ -146,7 +146,7 @@ function renderSessions(slug, S) {
   ]);
 }
 
-function renderTodos(slug, S, opts) {
+export function renderTodos(slug, S, opts = {}) {
   const demo = isDemo(opts);
   const todos = S.todosFor(slug);
   const list = h('div', { class: 'todo-list' });
@@ -157,7 +157,7 @@ function renderTodos(slug, S, opts) {
         checked: t.content.done ? 'checked' : false,
         onChange: () => {
           if (demo) { goToLogin(); return; }
-          store.toggleTodo(t); renderTodos.refresh?.(slug);
+          store.toggleTodo(t); if (opts.onRefresh) opts.onRefresh(); else renderTodos.refresh?.(slug);
         },
       }),
       h('div', { class: 'text', text: t.content.text }),
@@ -176,7 +176,7 @@ function renderTodos(slug, S, opts) {
         if (!v) return;
         store.addTodo(slug, v);
         addInput.value = '';
-        renderTodos.refresh?.(slug);
+        if (opts.onRefresh) opts.onRefresh(); else renderTodos.refresh?.(slug);
       }
     },
   });
@@ -193,7 +193,7 @@ function renderTodos(slug, S, opts) {
   return card;
 }
 
-function renderFiles(slug, S) {
+export function renderFiles(slug, S) {
   const files = S.filesFor(slug);
   const list = h('div', { class: 'file-list' });
   for (const f of files) {
@@ -232,7 +232,8 @@ export function renderProjectTabs(slug, active, opts = {}) {
     return h('a', attrs, [label]);
   };
   return h('nav', { class: 'view-tabs', 'aria-label': 'Project views' }, [
-    tab('overview', 'Overview', `/projects/${slug}`),
+    tab('workspace', 'Workspace', `/projects/${slug}`),
+    tab('overview', 'Overview', `/projects/${slug}/overview`),
     tab('board', 'Board', `/projects/${slug}/board`),
   ]);
 }

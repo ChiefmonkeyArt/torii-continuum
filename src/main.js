@@ -13,7 +13,7 @@
 import { initStore } from './data/store.js';
 import { mountShell, mainContent, renderSidebar, applyStoredTheme } from './shell.js';
 import { route, startRouter, navigate, currentRoute, resolveCurrent, setRouteErrorHandler } from './router.js';
-import { mountChat } from './chat.js';
+import { mountChat, releaseChatWorkspace } from './chat.js';
 import { isSessionLive, endSession, isSignoutBroadcast, rehydrateSession, SIGNOUT_SENTINEL_KEY } from './auth.js';
 import { rootTarget, guardRedirect, sessionChangeTarget, restoreTarget, demoRedirect, ROOT_PATH } from './nav-guard.js';
 import { demoStore } from './demo/demo-fixtures.js';
@@ -32,8 +32,10 @@ import { renderGenesis } from './views/genesis.js';
 import { renderMemory } from './views/memory.js';
 import { renderNoticeboard } from './views/noticeboard.js';
 import { renderSessions } from './views/sessions.js';
+import { renderWorkspace, renderNewChat } from './views/workspace.js';
 
 function setLandingMode(on) {
+  releaseChatWorkspace();
   const app = document.getElementById('app');
   if (!app) return;
   app.classList.toggle('landing-mode', !!on);
@@ -127,7 +129,10 @@ function boot() {
   // Sales/marketing content (`/about`) is isolated and gated like the rest.
   route('/about', guarded('/about', () => { setLandingMode(true); renderAbout(mainContent()); }));
   route('/projects', guarded('/projects', () => { setLandingMode(false); renderProjects(mainContent()); renderSidebar(); }));
-  route('/projects/:slug', guarded('/projects/:slug', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug); renderSidebar(); }));
+  route('/projects/:slug', guarded('/projects/:slug', ({ slug }) => { setLandingMode(false); renderWorkspace(mainContent(), { project: slug }); renderSidebar(); }));
+  route('/projects/:slug/overview', guarded('/projects/:slug/overview', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug); renderSidebar(); }));
+  route('/chat', guarded('/chat', () => { setLandingMode(false); renderNewChat(mainContent()); renderSidebar(); }));
+  route('/sessions/:id', guarded('/sessions/:id', ({ id }) => { setLandingMode(false); renderWorkspace(mainContent(), { id }); renderSidebar(); }));
   route('/projects/:slug/board', guarded('/projects/:slug/board', ({ slug }) => { setLandingMode(false); renderBoard(mainContent(), slug); renderSidebar(); }));
   route('/marketplace', guarded('/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent()); renderSidebar(); }));
   route('/routstr', guarded('/routstr', () => { setLandingMode(false); renderRoutstr(mainContent()); renderSidebar(); }));
@@ -146,6 +151,9 @@ function boot() {
   route('/demo/dashboard', demoRoute('/demo/dashboard', () => { setLandingMode(false); renderDashboard(mainContent(), demoOpts); renderSidebar(); }));
   route('/demo/projects', demoRoute('/demo/projects', () => { setLandingMode(false); renderProjects(mainContent(), demoOpts); renderSidebar(); }));
   route('/demo/projects/:slug', demoRoute('/demo/projects/:slug', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug, demoOpts); renderSidebar(); }));
+  route('/demo/projects/:slug/overview', demoRoute('/demo/projects/:slug/overview', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug, demoOpts); renderSidebar(); }));
+  route('/demo/chat', demoRoute('/demo/chat', () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'New chat' }); renderSidebar(); }));
+  route('/demo/sessions', demoRoute('/demo/sessions', () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Conversations' }); renderSidebar(); }));
   route('/demo/marketplace', demoRoute('/demo/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent(), demoOpts); renderSidebar(); }));
   route('/demo/routstr', demoRoute('/demo/routstr', () => { setLandingMode(false); renderRoutstr(mainContent(), demoOpts); renderSidebar(); }));
   route('/demo/team', demoRoute('/demo/team', () => { setLandingMode(false); renderTeam(mainContent(), demoOpts); renderSidebar(); }));

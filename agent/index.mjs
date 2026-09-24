@@ -1320,8 +1320,9 @@ app.get('/api/sessions', { preHandler: requireAdmin }, async (req, reply) => {
 
 // POST /api/sessions — create or replace a sealed session blob. { id, ciphertext }
 app.post('/api/sessions', { preHandler: requireAdmin }, async (req, reply) => {
-  const r = await sessionStore.upsert(req.session.npub, { id: req.body?.id, ciphertext: req.body?.ciphertext });
-  if (!r.ok) return reply.code(400).send({ error: r.reason });
+  const r = await sessionStore.upsert(req.session.npub, { id: req.body?.id, ciphertext: req.body?.ciphertext,
+    expected_sha256: req.body?.expected_sha256 });
+  if (!r.ok) return reply.code(r.code === 'conflict' ? 409 : 400).send({ error: r.reason, code: r.code });
   return r;
 });
 

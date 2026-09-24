@@ -31,14 +31,14 @@ describe('sessionLabel', () => {
 
 describe('sessions view — list/delete surface', () => {
   it('lists sessions from the agent and deletes via the session API', () => {
-    expect(viewSrc).toMatch(/listSessions\(\)/);
-    expect(viewSrc).toMatch(/deleteSession\(s\.id\)/);
+    expect(viewSrc).toMatch(/sessionLibrary\.load\(\)/);
+    expect(viewSrc).toMatch(/sessionLibrary\.remove\(s\.id\)/);
   });
 
   it('gates deletion behind an explicit confirm()', () => {
     // The delete button handler must not fire deleteSession without a confirm.
     const confirmIdx = viewSrc.indexOf('window.confirm');
-    const deleteIdx = viewSrc.indexOf('deleteSession(s.id)');
+    const deleteIdx = viewSrc.indexOf('sessionLibrary.remove(s.id)');
     expect(confirmIdx).not.toBe(-1);
     expect(deleteIdx).toBeGreaterThan(confirmIdx);
   });
