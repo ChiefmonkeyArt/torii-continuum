@@ -11,6 +11,12 @@
 
 ### Active tasks
 
+- **CONT-STREAM-BENCHMARK (v0.2.183-alpha):** owner explicitly approved bounded
+  paid testing on September 24. Compare two DeepSeek providers twice, optional
+  cheap Llama control twice, using real first-text/stream/cost metrics. No saved
+  model change. Deploy with explicit benchmark input after tests; record the
+  live report and recommend from measured results, not mocked SSE.
+
 - **CONT-DUST-RECOVERY (v0.2.182-alpha):** fix the verified 617-msat remainder
   blocking all chat after one successful paid request. Preserve claims in an
   encrypted dust archive, keep conservative spending accounting and add honest

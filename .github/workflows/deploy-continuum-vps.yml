@@ -34,6 +34,11 @@ on:
         required: false
         default: ''
         type: string
+      benchmark:
+        description: 'Explicitly approved paid streaming comparison: up to 6 calls, 12 sats allocated plus mint fees; briefly stops chat'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   # Never run two VPS deploys at once — the installer holds no external lock
@@ -210,6 +215,31 @@ jobs:
           systemctl restart continuum-agent.service
           echo "Payment activation health check failed; previous mode restored" >&2
           exit 1
+          REMOTE
+
+      - name: Run explicitly approved bounded streaming benchmark
+        if: inputs.benchmark == true
+        env:
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+          BENCHMARK_RUN: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_HOST" sudo -n bash -s -- "$BENCHMARK_RUN" <<'REMOTE'
+          set -euo pipefail
+          run="$1"
+          [[ "$run" =~ ^[0-9]+$ ]]
+          systemctl is-active --quiet continuum-agent.service
+          # The wallet mutex is in-process. Never let a standalone benchmark
+          # race the live daemon's wallet writer. Restore service on every exit.
+          trap 'systemctl start continuum-agent.service' EXIT
+          systemctl stop continuum-agent.service
+          if systemctl is-active --quiet continuum-agent.service; then exit 1; fi
+          cd /apps/continuum/agent/repo/agent
+          timeout --signal=TERM --kill-after=10s 360s \
+            runuser -u continuum -- env CONTINUUM_BENCHMARK_APPROVED=1 \
+            CONTINUUM_AGENT_STOPPED=1 node ops/benchmark-streaming.mjs "$run"
           REMOTE
 
       - name: Verify live version matches

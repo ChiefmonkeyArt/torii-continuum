@@ -2,6 +2,15 @@
 
 An app builder, project engine and marketplace for bot work — a gateway into the Torii ecosystem.
 
+## v0.2.183-alpha: bounded streaming comparison
+
+The manual deployment workflow optionally runs an explicitly approved paid
+benchmark. It compares two DeepSeek providers first, at most six requests,
+with a 12-sat provider-allocation ceiling plus mint fees. It records real
+first-text and streaming timings, not simulated typing, and never changes
+saved models or spending limits. Chat is temporarily stopped to prevent wallet
+writer races and restored on exit. See `docs/adr-bounded-stream-benchmark.md`.
+
 ## v0.2.182-alpha: fractional refund recovery
 
 Verified sub-satoshi remainders no longer block every subsequent chat. Only the

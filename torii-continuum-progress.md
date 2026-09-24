@@ -1,5 +1,27 @@
 # Torii Continuum — Progress log
 
+## v0.2.183-alpha: bounded streaming test tooling (2026-09-24)
+
+The owner explicitly requested a paid comparison after reporting persistent
+20-second waits and all-at-once answers. Added DeepSeek-first sequential
+provider comparison, optional cheap control, hard allocation/attempt limits,
+no automatic paid retries and unchanged saved settings. A transparent
+byte-preserving observer counts reasoning events but never stores their text.
+
+Manual workflow execution isolates the wallet by stopping the daemon and
+restarting it on exit. Private durable run markers prevent duplicate paid
+reruns. Reports contain only timing/cost/stream metadata for a synthetic prompt.
+See `docs/adr-bounded-stream-benchmark.md`; live results remain pending until
+the explicitly approved workflow executes.
+
+Local gates: 684 agent tests, 1,137 frontend tests across 68 files, 17 ops
+suites and production build pass. Benchmark tests use mocks, not real funds.
+
+Update-All: benchmark/workflow/tests, root and agent package/lock markers,
+README, strategy/todo/progress/handoff and ADR updated. Runtime chat behavior,
+operator configuration, other apps and unrelated Project mirrors are unchanged.
+Merge/tag/artifact/deploy/live alignment and result evidence remain release gates.
+
 ## v0.2.182-alpha: fractional refund deadlock (2026-09-24)
 
 The owner reported immediate payment errors after sign-in. Read-only server

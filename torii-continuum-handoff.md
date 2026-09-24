@@ -1,5 +1,25 @@
 # Continuum — Session Handover
 
+## v0.2.183-alpha: explicitly approved live streaming comparison
+
+The owner still observes about 20 seconds followed by a complete answer and
+has now explicitly requested paid speed testing, prioritizing DeepSeek's cost
+and intelligence. This replaces the earlier no-paid-test constraint for this
+bounded diagnostic only. No saved provider/model/cap changes are approved.
+
+The release adds an optional `benchmark: true` deploy input. It stops the
+daemon to isolate the single-process wallet, runs as continuum, and restores
+service on exit. Max six allocations, 2 sats each/12 aggregate plus mint fees,
+all still under configured caps and wallet floor. Alternate two trials for each
+of two priced DeepSeek providers; optional two Llama speed-control trials only
+if no fast progressive DeepSeek result is found. Halt on failure/pending refund.
+
+Private report: `agent/memory/benchmarks/<workflow-run-id>.json`.
+Actions prints only sanitized metrics, never prompt context, keys, answer text
+or reasoning content. An exclusive durable marker refuses repeat charging for
+the same run. Report real first text, spread and costs with two-sample caveats.
+Do not imply provider-direct results prove the browser path. See benchmark ADR.
+
 ## v0.2.182-alpha: repair dust-induced global chat block
 
 The v181 rollout completed through PR #217 and the owner tried normal chat.
