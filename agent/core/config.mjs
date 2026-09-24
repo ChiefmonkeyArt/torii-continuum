@@ -22,6 +22,7 @@ import { readFileSync, openSync, writeSync, fsyncSync, fchmodSync, closeSync } f
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, isAbsolute } from 'node:path';
 import { parse } from 'yaml';
+import { validQuarantine } from './provider-quarantine.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENT_ROOT = resolve(__dirname, '..');
@@ -54,6 +55,8 @@ export function loadConfig(path) {
 
   // Validate invariants
   const errors = [];
+  if (!validQuarantine(cfg.routstr?.quarantined_providers ?? []))
+    errors.push('routstr.quarantined_providers must be at most 8 safe HTTPS origins');
   if (cfg.routstr?.payment_mode != null &&
       !['x_cashu', 'ephemeral_bearer'].includes(cfg.routstr.payment_mode)) {
     errors.push('routstr.payment_mode must be x_cashu or ephemeral_bearer');

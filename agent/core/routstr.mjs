@@ -35,6 +35,7 @@ import { dirname, resolve, join } from 'node:path';
 import { agentRoot } from './config.mjs';
 import { measure } from '../lib/chat-stream.mjs';
 import { createRoutstrPayment } from './routstr-payment.mjs';
+import { isQuarantined } from './provider-quarantine.mjs';
 import {
   ERROR_CODES, isRetryableCode, classifyHttpFailure, classifyThrownError, providerFailure, looksLikeHtml,
 } from '../lib/provider-errors.mjs';
@@ -443,6 +444,8 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
   }
 
   async function callOnceAt(baseUrl, model, messages, sats, timeoutMs = chatTimeoutMs, allowRetry = true, hooks = {}) {
+    if (isQuarantined(cfg, baseUrl)) return { ok: false, code: 'payment_recovery_required',
+      reason: 'This provider is isolated by the owner. No payment was sent.', retryable: false };
     if (bearerPayments) return callBearerAt(baseUrl, model, messages, sats, timeoutMs, hooks);
     hooks.telemetry?.attempt('routstr');
     const send = await measure(hooks.telemetry, 'payment', () => wallet.send(sats));
@@ -653,6 +656,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     const available = await ensureCatalog();
     const matches = [];
     for (const provider of available) {
+      if (isQuarantined(cfg, provider.baseUrl)) continue;
       for (const m of provider.models) {
         if (modelId && m.id !== modelId) continue;
         matches.push({ baseUrl: provider.baseUrl, model: m, providerName: provider.name });

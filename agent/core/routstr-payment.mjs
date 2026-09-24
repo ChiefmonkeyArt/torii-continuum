@@ -8,6 +8,7 @@ import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createSecretStore } from '../lib/secretstore.mjs';
 import { safeRemoteBaseUrl } from './routstr-discovery.mjs';
+import { isQuarantined } from './provider-quarantine.mjs';
 
 const PREFIX = 'rrefund_';
 const MAX_PENDING = 8;
@@ -97,6 +98,9 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
         const raw = await store.get(name);
         if (!raw) return { pending: false, refunded: 0 };
         const record = validate(JSON.parse(raw));
+        // Explicit operator hold: preserve the encrypted claim byte-for-byte.
+        // Do not poll, spend again, write it off or call it recovered.
+        if (isQuarantined(cfg, record.base)) return { pending: true, refunded: 0, quarantined: true };
         const refund = await request(record.base, '/v1/balance/refund', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${record.key}` },
@@ -148,9 +152,20 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
       if (safeRemoteBaseUrl(base) !== base || new URL(base).search || new URL(base).hash ||
           !Number.isSafeInteger(sats) || sats < 1) throw failure();
       const names = (await store.list()).filter(n => n.startsWith(PREFIX));
+      if (isQuarantined(cfg, base)) return { ok: false, code: 'payment_recovery_required',
+        reason: 'This provider is isolated by the owner. No payment was sent.' };
+      let unresolved = false;
+      for (const n of names) {
+        if (active.has(n)) continue;
+        if (!validName(n)) throw failure();
+        const record = validate(JSON.parse(await store.get(n)));
+        // Only an explicit quarantine may lift the global guard for a claim.
+        // Unknown/corrupt claims and non-quarantined failures still fail closed.
+        if (!isQuarantined(cfg, record.base)) unresolved = true;
+      }
       // Unsettled older requests block further deposits rather than silently
       // accumulating provider custody. Concurrent active turns remain bounded.
-      if (names.length >= MAX_PENDING || names.some(n => !active.has(n))) {
+      if (names.length >= MAX_PENDING || unresolved) {
         return { ok: false, code: 'payment_recovery_required',
           reason: 'An earlier payment is awaiting recovery. No new payment was sent.' };
       }

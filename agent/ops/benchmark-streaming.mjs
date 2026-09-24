@@ -8,6 +8,9 @@ import { createRoutstr } from '../core/routstr.mjs';
 import { createRoutstrPayment } from '../core/routstr-payment.mjs';
 import { discoverProviders, fetchProviderCatalog, estimateSatsForModel, safeRemoteBaseUrl } from '../core/routstr-discovery.mjs';
 import { createChatTelemetry } from '../lib/chat-stream.mjs';
+import { isQuarantined } from '../core/provider-quarantine.mjs';
+
+const COMPARISON_MODELS = ['deepseek-v4-flash', 'qwen3-5-9b'];
 
 export const MESSAGES = [
   { role: 'system', content: 'You are a helpful assistant. Answer the request directly.' },
@@ -49,6 +52,7 @@ export function selectPlan(catalog, maxTokens, cap) {
   return {
     deepseek: unique(candidates('deepseek-v3.2')).slice(0, 2),
     alternative: unique(candidates('llama-3.1-8b-instruct')).slice(0, 1),
+    comparison: COMPARISON_MODELS.flatMap(id => unique(candidates(id)).slice(0, 1)),
   };
 }
 
@@ -100,11 +104,17 @@ export async function benchmark(cfg, deps = {}) {
     bootstrapEndpoints: [...(cfg.routstr.providers || []),
       ...(cfg.routstr.discovery?.bootstrap_endpoints || []), cfg.routstr.endpoint].filter(Boolean),
   });
-  const catalog = await (deps.catalog || fetchProviderCatalog)(providers);
+  const catalog = (await (deps.catalog || fetchProviderCatalog)(providers, {
+    modelIds: ['deepseek-v3.2', 'llama-3.1-8b-instruct', ...COMPARISON_MODELS],
+  })).filter(p => !isQuarantined(cfg, p.baseUrl));
   const maxTokens = Math.min(2048, cfg.routstr.limits.max_tokens_out);
   const plan = selectPlan(catalog, maxTokens, cap);
   const target = deps.target || 'deepseek_first';
-  if (!['deepseek_first', 'fast_control'].includes(target)) throw new Error('benchmark_invalid_target');
+  if (!['deepseek_first', 'fast_control', 'comparison_followup'].includes(target)) throw new Error('benchmark_invalid_target');
+  const selected = target === 'comparison_followup' ? plan.comparison :
+    target === 'fast_control' ? plan.alternative : plan.deepseek;
+  if (!selected.length || target === 'comparison_followup' && selected.length !== 2)
+    throw new Error('benchmark_no_eligible_comparison');
   const rows = [];
   let halted = false;
   const run = async target => {
@@ -149,7 +159,9 @@ export async function benchmark(cfg, deps = {}) {
     rows.push(row);
     deps.onRow?.(row);
   };
-  if (target === 'fast_control') {
+  if (target === 'comparison_followup') {
+    for (let repeat = 0; repeat < 2; repeat++) for (const choice of plan.comparison) await run(choice);
+  } else if (target === 'fast_control') {
     for (let repeat = 0; repeat < 2; repeat++) for (const choice of plan.alternative) await run(choice);
   } else {
     // Alternate providers rather than doing every warm run on one node first.

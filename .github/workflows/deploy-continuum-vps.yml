@@ -39,6 +39,11 @@ on:
         required: false
         default: false
         type: boolean
+      quarantine_provider:
+        description: 'Optional explicitly approved HTTPS provider origin to isolate; claims are preserved'
+        required: false
+        default: ''
+        type: string
       benchmark_target:
         description: 'Benchmark set: DeepSeek providers first, or the cheap fast-model control only'
         required: false
@@ -47,6 +52,7 @@ on:
         options:
           - deepseek_first
           - fast_control
+          - comparison_followup
 
 concurrency:
   # Never run two VPS deploys at once — the installer holds no external lock
@@ -225,6 +231,28 @@ jobs:
           exit 1
           REMOTE
 
+      - name: Isolate explicitly approved provider
+        if: inputs.quarantine_provider != ''
+        env:
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+          QUARANTINE_PROVIDER: ${{ inputs.quarantine_provider }}
+        run: |
+          set -euo pipefail
+          [[ "$QUARANTINE_PROVIDER" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]
+          ssh -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_HOST" sudo -n bash -s -- "$QUARANTINE_PROVIDER" <<'REMOTE'
+          set -euo pipefail
+          node /apps/continuum/agent/repo/agent/ops/quarantine-provider.mjs "$1"
+          systemctl restart continuum-agent.service
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 5 http://127.0.0.1:8787/api/health >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          echo "Provider isolated but health check failed; do not run paid tests" >&2
+          exit 1
+          REMOTE
+
       - name: Run explicitly approved bounded streaming benchmark
         if: inputs.benchmark == true
         env:
@@ -240,7 +268,7 @@ jobs:
           run="$1"
           target="$2"
           [[ "$run" =~ ^[0-9]+$ ]]
-          [[ "$target" == deepseek_first || "$target" == fast_control ]]
+          [[ "$target" == deepseek_first || "$target" == fast_control || "$target" == comparison_followup ]]
           systemctl is-active --quiet continuum-agent.service
           # The wallet mutex is in-process. Never let a standalone benchmark
           # race the live daemon's wallet writer. Restore service on every exit.

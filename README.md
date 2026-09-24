@@ -2,12 +2,28 @@
 
 An app builder, project engine and marketplace for bot work — a gateway into the Torii ecosystem.
 
+## v0.2.185-alpha: explicit provider isolation and valid comparisons
+
+An owner-approved `routstr.quarantined_providers` list prevents routing, funding
+and automatic refund polling for those HTTPS origins. Their encrypted disputed
+claims remain untouched and are not counted as recovered. Other uncertain or
+corrupt claims still block new deposits, and the eight-record ceiling remains.
+The deploy workflow can apply a single explicitly approved provider isolation,
+with a private config backup and no model/limit changes.
+
+The bounded comparison can target cheap DeepSeek V4 Flash and Qwen3.5 9B
+twice each. It excludes held providers and finds selected models beyond a
+catalog's first 200 entries while retaining body/output limits. Empty plans
+now fail visibly instead of reporting a misleading successful zero-row test.
+
 ## v0.2.184-alpha: modern refund recovery and isolated speed control
 
 Cashu-B refunds with shortened v2 keyset identifiers are now identified from
 metadata, then decoded by the loaded, whitelisted mint wallet with its full
 keyset map. Mint whitelist, sat-unit, proof validation and encrypted recovery
-remain enforced. This fixes a valid 2-sat benchmark refund that was retained.
+remain enforced. This fixes decoding of the retained 2-sat benchmark refund,
+not its settlement: later verification found its proof spent and no wallet
+credit. Its encrypted claim remains disputed; the cause is not established.
 
 The manual benchmark can separately run only the cheap fast-model control,
 without repeating DeepSeek/provider trials or changing the saved model.

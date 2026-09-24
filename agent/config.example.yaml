@@ -118,6 +118,9 @@ routstr:
   # streams via bearer balance, then refunds; no per-question approval prompt.
   # Enable only after provider compatibility and recovery tests pass.
   payment_mode: x_cashu
+  # Explicit operator hold only. Retains disputed refunds; no polling/payment
+  # to these origins. Other uncertain claims still block new funding.
+  quarantined_providers: []
   # ── Provider discovery (Routstr Core v0.1.0, RIP-03) ──
   # Providers are found at runtime, not hard-coded. Live nodes announce
   # themselves as Nostr kind-38421 events; the agent merges them with the

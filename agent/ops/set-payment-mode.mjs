@@ -5,12 +5,12 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { parseDocument } from 'yaml';
 import { isDeepStrictEqual } from 'node:util';
+import { validQuarantine } from '../core/provider-quarantine.mjs';
 
-export async function setPaymentMode(mode, {
+async function updateField(field, update, {
   path = '/apps/continuum/agent/repo/agent/config.yaml',
   backupDir = '/root/continuum-payment-backups',
 } = {}) {
-  if (!['x_cashu', 'ephemeral_bearer'].includes(mode)) throw new Error('Invalid payment mode');
   const info = await lstat(path);
   if (!info.isFile() || info.isSymbolicLink()) throw new Error('Config must be a regular file');
   const original = await readFile(path, 'utf8');
@@ -19,14 +19,14 @@ export async function setPaymentMode(mode, {
   const before = doc.toJS();
   if (!before?.routstr || typeof before.routstr !== 'object' || Array.isArray(before.routstr))
     throw new Error('Missing routstr configuration');
-  const previous = before.routstr.payment_mode || 'x_cashu';
-  if (!['x_cashu', 'ephemeral_bearer'].includes(previous)) throw new Error('Unknown current payment mode');
-  if (previous === mode) return { changed: false, previous, mode };
-  doc.setIn(['routstr', 'payment_mode'], mode);
+  const previous = before.routstr[field];
+  const value = update(previous);
+  if (isDeepStrictEqual(previous, value)) return { changed: false, previous, value };
+  doc.setIn(['routstr', field], value);
   const output = String(doc);
   const after = parseDocument(output).toJS();
-  delete before.routstr.payment_mode;
-  delete after.routstr.payment_mode;
+  delete before.routstr[field];
+  delete after.routstr[field];
   if (!isDeepStrictEqual(before, after)) throw new Error('Refusing unrelated config change');
 
   await mkdir(backupDir, { recursive: true, mode: 0o700 });
@@ -59,7 +59,26 @@ export async function setPaymentMode(mode, {
   } finally {
     await unlink(temporary).catch(e => { if (e.code !== 'ENOENT') throw e; });
   }
-  return { changed: true, previous, mode, backup };
+  return { changed: true, previous, value, backup };
+}
+
+export async function setPaymentMode(mode, options) {
+  if (!['x_cashu', 'ephemeral_bearer'].includes(mode)) throw new Error('Invalid payment mode');
+  const { value, previous, ...result } = await updateField('payment_mode', current => {
+    if (!['x_cashu', 'ephemeral_bearer'].includes(current || 'x_cashu')) throw new Error('Unknown current payment mode');
+    return mode;
+  }, options);
+  return { ...result, previous: previous || 'x_cashu', mode: value };
+}
+
+export async function quarantineProvider(base, options) {
+  if (!validQuarantine([base])) throw new Error('Invalid provider origin');
+  const { value, ...result } = await updateField('quarantined_providers', current => {
+    const list = [...new Set([...(current || []), base])];
+    if (!validQuarantine(list)) throw new Error('Invalid provider quarantine');
+    return list;
+  }, options);
+  return { ...result, providers: value };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

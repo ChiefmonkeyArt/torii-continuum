@@ -1,5 +1,29 @@
 # Torii Continuum — Progress log
 
+## v0.2.185-alpha: approved provider isolation and comparison repair (2026-09-24)
+
+Independent verification of v184 found one pending Redshift claim. Its refund
+decodes/prepares with the loaded native mint, but the mint reports its proof
+SPENT and the wallet remains at 51,043 sats, last written at the original second
+allocation. The consuming party/time is unknown. The owner approved isolation
+without deleting the claim, keeping DeepSeek unchanged, and finishing the
+existing test budget. [Diagnosis](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/36034073699),
+[wallet reconciliation](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/36034473950).
+
+Code adds opt-in origin quarantine to routing/funding/recovery; validated held
+claims no longer block healthy providers. Corrupt/non-held claims still block
+funding and all claims count toward the eight-record ceiling. A private-backed
+atomic helper preserves every unrelated setting. No proof or claim is removed.
+
+The prior fast-control run spent nothing: 582-model catalog, Llama at index443,
+200-model output cap. Targeted filtering before that cap and explicit empty-plan
+failure prevent this false success. The remaining comparison uses two available
+cheap models twice each, never changes saved DeepSeek, and excludes held origins.
+
+Update-All: code/tests/config-example/workflow, four package markers, README,
+strategy/todo/progress/handoff and benchmark ADR. Other apps/Suite and unrelated
+markers skipped. CI, merge/tag/deploy, held-claim checks and paid results pending.
+
 ## v0.2.184-alpha: refund keyset compatibility and control isolation (2026-09-24)
 
 Live benchmark: GitHappens DeepSeek sent 156 private-reasoning events from

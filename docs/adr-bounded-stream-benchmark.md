@@ -2,6 +2,38 @@
 
 Date: 2026-09-24. Scope: diagnostic tooling only.
 
+## Approved disputed-provider isolation, v185
+
+After v184, refund decoding succeeded but the mint reported the retained
+two-sat refund proof SPENT and wallet credit was not observed. Its spender/time
+are unknown. The owner explicitly approved isolating the failed provider,
+preserving its claim and finishing this comparison with DeepSeek unchanged.
+
+`routstr.quarantined_providers` contains at most eight validated public HTTPS
+origins. It defaults empty. An explicit hold prevents routing, deposits and
+automatic refund polling to the origin, including path variants and legacy
+fallback. Existing encrypted claims remain untouched, count toward the same
+eight-record cap, and are never reported recovered. Only validated held-origin
+records may be excluded from the global new-funding blocker. Unknown/corrupt
+records and any non-held pending payment remain fail-closed. No automatic
+quarantine, paid retry, top-up, dispatched-proof rollback or write-off is added.
+
+The guarded config helper takes an explicitly approved origin, saves a private
+exact backup, preserves unrelated fields/ownership and atomically replaces only
+the quarantine list. Removing a hold requires an explicit reviewed config
+change; it must not silently resume after a restart or successful catalog fetch.
+
+The Llama control was not a measurement: it ran zero calls because the model
+was at index443 in a582-model catalog capped at200 entries. Targeted benchmark
+IDs now filter before the existing output cap; body/time/provider/concurrency
+caps remain. Empty/incomplete benchmark plans fail instead of returning success.
+
+The follow-up selects available priced `deepseek-v4-flash` and `qwen3-5-9b`
+providers excluding held origins, alternating two trials per model. Four calls
+maximum, added to the two prior paid attempts, remains within the original
+six-call/12-sat allocation authorization. No claim of equal answer intelligence,
+robust latency guarantees, or proven browser rendering follows from these tests.
+
 The owner explicitly requested a speed test while retaining DeepSeek's
 intelligence and low cost as a priority. Prior consent excluded unattended paid
 test inference; this request authorizes this bounded comparison, not ongoing
