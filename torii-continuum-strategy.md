@@ -2,6 +2,13 @@
 
 Living document. This will change as we learn.
 
+**Benchmark before model changes (2026-09-24):** the owner now explicitly
+authorizes bounded paid response-speed testing. Prefer testing DeepSeek through
+different providers before a small fast-model control. Compare time to actual
+reply text, genuine text spread and cost; do not equate a spinner or replayed
+tokens with generation streaming. Preserve saved model/caps until a decision.
+See `docs/adr-bounded-stream-benchmark.md`.
+
 **Fractional refund boundary (2026-09-24):** distinguish a verified fractional
 satoshi remainder from uncertain payment recovery. Retain its encrypted claim
 without repeated polling, top-ups or blocking future owner-requested chats.
