@@ -2,6 +2,18 @@
 
 Living document. This will change as we learn.
 
+**Conversation-first workspace (2026-09-24):** Continuum's everyday interface
+centres on independent conversations and project work, not administrative
+navigation. New chat, search, pinned history and projects lead the sidebar;
+secondary tools stay reachable in the profile menu. Project workspaces pair
+conversation with context/tasks/files, retaining Overview and Board. Reuse the
+existing private agent and sealed session store. Ordinary signed-in chat keeps
+existing spending consent; publishing, deletion and sensitive actions retain
+their explicit approval boundaries. Real multi-user permission enforcement and
+isolated build/preview execution are subsequent phases, not cosmetic claims.
+New-install chat defaults to DeepSeek V4 Flash, preserving existing preferences.
+See `docs/adr-conversation-workspace.md`.
+
 **Fast answers over mandatory typing (2026-09-24):** the owner now accepts
 non-streamed answers when they return quickly; the measured 7.2-second DeepSeek
 V4 Flash response is acceptable. Preserve genuine streaming where available,

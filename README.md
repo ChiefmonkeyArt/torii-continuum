@@ -2,6 +2,21 @@
 
 An app builder, project engine and marketplace for bot work — a gateway into the Torii ecosystem.
 
+## v0.2.187-alpha: conversation-first project workspace
+
+New chat, search, private pins, projects and recent conversations now lead the
+sidebar. Existing tools are in the bottom-left profile menu. Project workspaces
+combine a full-height conversation with context, tasks, tracked files and chats;
+Overview and Board remain available. Pins/titles are sealed with messages and
+survive reloads. Saving failures and locked sessions are explicit, and stale-tab
+writes cannot silently replace newer history.
+
+New installs default chat to DeepSeek V4 Flash. Existing configured/saved models,
+wallet state, provider isolation and spending caps are unchanged. No new team
+sharing or code execution engine is claimed. See
+`docs/adr-conversation-workspace.md` for privacy, limits and rollback from the
+pre-change `v0.2.186-alpha` / `f81ae2ad8a30e937ef9bd9b4c8141d0ecc5e0177`.
+
 ## v0.2.186-alpha: real Routstr chat-model selection
 
 Routstr → Chat model now loads live priced models, including DeepSeek V4 Flash.

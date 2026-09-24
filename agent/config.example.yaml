@@ -157,7 +157,7 @@ routstr:
   # cheapest available model rather than dead-ending chat. Other skills
   # (summarise, routing, embed) default to "auto".
   models:
-    chat:   "auto"
+    chat:   "deepseek-v4-flash"
     coding: "auto"
 
   # Hard limits per request. Protects the float from prompt-injection cost bombs.

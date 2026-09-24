@@ -31,7 +31,7 @@ test('dock shows partial text before final, never persists preview, then renders
   send({ type: 'delta', delta: 'Live partial' });
   await sleep(70);
   expect(text()).toContain('Live partial');
-  expect(localStorage.getItem('continuum.chat.threads')).not.toContain('Live partial');
+  expect(localStorage.getItem('continuum.chat.threads')).toBeNull();
   send({ type: 'done', reply: 'Completed reply', timings: { first_text_ms: 100, total_ms: 300, attempts: 1 } });
   await sleep(70);
   expect(text()).not.toContain('Live partial');

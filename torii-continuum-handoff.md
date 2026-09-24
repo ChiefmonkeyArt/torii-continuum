@@ -1,5 +1,30 @@
 # Continuum — Session Handover
 
+## v0.2.187-alpha: navigation, history and project workspace
+
+Owner authorized implementation and requested a rollback version check first.
+Baseline was verified as v0.2.186-alpha, main/tag
+f81ae2ad8a30e937ef9bd9b4c8141d0ecc5e0177, with matching live health.
+
+New code: `src/session-library.js`, `src/views/workspace.js`,
+`src/styles/workspace.css`; existing shell, chat, sessions, crypto and server
+session-store integration updated. Pins/titles/project associations remain
+inside sealed blobs. Old messages are readable without migration. CAS and
+per-owner serialization prevent stale-tab overwrite and concurrent index loss.
+The main chat controller is reparented, never duplicated. Mobile project
+details collapse; tool routes remain accessible through the profile menu.
+
+New-install example/Ansible chat defaults become `deepseek-v4-flash`; Suite
+copies that example on first install. Existing model choices, wallet claims,
+provider isolation, payment mode and caps are untouched. No paid test is needed
+for this release. Team permissions and isolated coding execution remain future
+work. Finish CI/PR/tag/deploy and record independent verification on the PR;
+consult that runtime evidence before making further changes.
+
+Rollback details and acceptance contract: `docs/adr-conversation-workspace.md`.
+Keep current encrypted state backups before any emergency old-binary rollback;
+the older serializer can omit new optional metadata on later writes.
+
 ## v0.2.186-alpha: real chat model selection
 
 Owner asked for DeepSeek V4 Flash selection on Routstr and approved a no-thinking

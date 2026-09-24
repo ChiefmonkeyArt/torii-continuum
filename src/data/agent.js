@@ -586,8 +586,9 @@ export async function readSession(id) {
   return req('GET', `/api/sessions/${encodeURIComponent(id)}`);
 }
 
-export async function saveSession(id, ciphertext) {
-  return req('POST', '/api/sessions', { id, ciphertext });
+export async function saveSession(id, ciphertext, expectedSha) {
+  return req('POST', '/api/sessions', { id, ciphertext,
+    ...(expectedSha !== undefined ? { expected_sha256: expectedSha } : {}) });
 }
 
 export async function deleteSession(id) {

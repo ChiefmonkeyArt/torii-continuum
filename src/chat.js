@@ -15,13 +15,14 @@
  * the current project/page.
  */
 
-import { chat as agentChat, isAgentConfigured, getStoredToken, listSessions, readSession, saveSession } from './data/agent.js';
+import { chat as agentChat, isAgentConfigured, getStoredToken, authEpochNow, listSessions, readSession, saveSession, deleteSession } from './data/agent.js';
 import { hydrateFromServer } from './data/store.js';
 import { isSessionLive } from './auth.js';
 import { currentRoute } from './router.js';
 import { threadKeyFor, pageTypeFor, projectSlugFrom, trimThread, sanitizeThreads, THREAD_CAP, sessionIdFor } from './chat-threads.js';
 import { clampInputHeight, inputShouldScroll, reserveSpaceFor } from './chat-layout.js';
 import { sealSession, unsealSession } from './session-crypto.js';
+import { createSessionLibrary, historyTitle } from './session-library.js';
 import { phaseLabel, timingLabel } from './chat-stream.js';
 
 let logEl, inputEl, sendBtn, contextEl, modeEl, toggleEl, dockEl;
@@ -35,6 +36,43 @@ let mode = 'page'; // 'page' (default) | 'general'
 let context = { label: 'Continuum', where: 'projects' };
 let expanded = false;
 let thinking = false;
+let explicitThread = null;
+let threadMetadata = {};
+let persistenceError = '';
+let loadingHistory = false;
+let chatRoot = null;
+let inlineChat = false;
+let openGeneration = 0;
+const dirtyThreads = new Set();
+async function signerDeps() {
+  if (!serverSessionsAvailable()) throw new Error('Your signer is needed to unlock and save history.');
+  const pubkey = await window.nostr.getPublicKey();
+  const tokenKey = getStoredToken()?.split('.')[2];
+  if (tokenKey && /^[0-9a-f]{64}$/.test(tokenKey) && pubkey !== tokenKey) throw new Error('Signer identity does not match this session.');
+  return { pubkey,
+    encrypt: (p, text) => window.nostr.nip44.encrypt(p, text),
+    decrypt: (p, text) => window.nostr.nip44.decrypt(p, text) };
+}
+function historyIdentity() {
+  if (!isSessionLive()) return null;
+  const token = getStoredToken(), parts = token?.split('.') || [];
+  // Renewal preserves public key and original login time. This is only an
+  // in-memory cache key, never authorization; the agent still verifies tokens.
+  const login = parts.length === 5 && /^[0-9a-f]{64}$/.test(parts[2]) && /^\d+$/.test(parts[3])
+    ? `${parts[2]}:${parts[3]}` : token;
+  return `${authEpochNow()}:${login}`;
+}
+export const sessionLibrary = createSessionLibrary({
+  identity: historyIdentity,
+  list: () => listSessions(), read: id => readSession(id),
+  save: (id, blob, sha) => saveSession(id, blob, sha), remove: id => deleteSession(id),
+  seal: async value => sealSession(await signerDeps(), value),
+  unseal: async blob => unsealSession(await signerDeps(), blob),
+});
+sessionLibrary.subscribe(() => {
+  if (typeof document !== 'undefined') document.dispatchEvent(new CustomEvent('continuum:history-changed'));
+});
+export { historyTitle };
 // Preview is transient: never saved, sealed or mixed into another thread.
 let preview = null;
 let turnGeneration = 0;
@@ -92,11 +130,13 @@ export function isInsufficientFundsReply(result) {
 }
 
 export function mountChat(root) {
+  chatRoot = root;
   dockEl = document.createElement('div');
   dockEl.className = 'chat-dock collapsed';
   dockEl.setAttribute('role', 'region');
   dockEl.setAttribute('aria-label', 'Continuum chat');
   dockEl.innerHTML = `
+    <div class="chat-save-status" role="status" hidden></div>
     <div class="chat-log" role="log" aria-live="polite"></div>
     <div class="chat-input-row">
       <span class="chat-context" title="Chat context"></span>
@@ -145,6 +185,7 @@ export function mountChat(root) {
   // screen (and still saved back on the next turn) after signing out.
   document.addEventListener('continuum:session-changed', () => {
     if (!isSessionLive()) resetThreads();
+    else void hydrateServerSessions();
     updatePlaceholder();
   });
 }
@@ -157,6 +198,11 @@ export function resetThreads() {
   preview = null;
   thinking = false;
   threads = {};
+  threadMetadata = {};
+  explicitThread = null;
+  dirtyThreads.clear();
+  persistenceError = '';
+  sessionLibrary.reset();
   if (logEl) syncActiveThread();
 }
 
@@ -167,7 +213,7 @@ function updatePlaceholder() {
   if (!inputEl) return;
   inputEl.placeholder = thinking ? 'Reply in progress…' : !isSessionLive() && mockRepliesAllowed()
     ? 'Ask Continuum anything… (mock responses)'
-    : 'Ask Continuum anything…';
+    : inlineChat ? 'Ask your clanker…' : 'Ask Continuum anything…';
 }
 
 // Auto-grow the textarea with its content up to a sensible max, then let it
@@ -187,6 +233,7 @@ function autosize() {
 // (pre-layout) leaves the CSS fallback in place rather than collapsing content.
 function reserveSpace() {
   if (!dockEl || typeof document === 'undefined') return;
+  if (inlineChat) return;
   const reserve = reserveSpaceFor(dockEl.offsetHeight);
   const root = document.documentElement;
   if (!root || !root.style) return;
@@ -195,7 +242,7 @@ function reserveSpace() {
 
 function greet() {
   if (isSessionLive()) {
-    push('ai', 'Continuum online. Signed in. I can help plan projects, draft milestones, and reason across your Brain. Model calls are paid per request via Routstr + Cashu, with a local model as fallback.');
+    push('ai', 'What would you like to work on? Describe your idea, ask a question, or turn a project plan into clear next steps.');
     return;
   }
   push('ai', mockRepliesAllowed()
@@ -204,6 +251,7 @@ function greet() {
 }
 
 export function setChatContext(next) {
+  explicitThread = null;
   context = { ...context, ...next };
   syncActiveThread();
 }
@@ -224,7 +272,7 @@ function buildContext() {
     mode,
     route,
     pageType: pageTypeFor(r.pattern),
-    projectSlug: (r.params && r.params.slug) || projectSlugFrom(context) || null,
+    projectSlug: explicitThread ? threadMetadata[explicitThread]?.project || null : (r.params && r.params.slug) || projectSlugFrom(context) || null,
     columnId: null,
     cardId: null,
   };
@@ -233,7 +281,7 @@ function buildContext() {
 // Recompute the active thread key from the current context + mode, swap the
 // visible history to that thread, greet it if empty, and refresh the chrome.
 function syncActiveThread() {
-  activeKey = threadKeyFor(buildContext(), mode);
+  activeKey = explicitThread || threadKeyFor(buildContext(), mode);
   if (!Array.isArray(threads[activeKey])) threads[activeKey] = [];
   if (threads[activeKey].length === 0) greet();
   renderContext();
@@ -274,7 +322,8 @@ function push(who, text) {
 function loadThreads() {
   try {
     const raw = localStorage.getItem(THREADS_STORAGE_KEY);
-    if (raw) threads = sanitizeThreads(JSON.parse(raw), THREAD_CAP);
+    if (raw && !isAgentConfigured()) threads = sanitizeThreads(JSON.parse(raw), THREAD_CAP);
+    // Leave any legacy cache intact for recovery; never silently delete it.
   } catch (_e) { threads = {}; }
   // Server-stored sessions are the durable copy (OWNER-UI-1). Hydrate them
   // best-effort over the localStorage read so history survives a browser clear.
@@ -282,13 +331,14 @@ function loadThreads() {
 }
 
 function saveThreads() {
+  if (isAgentConfigured()) return; // Production history is sealed, never plaintext on disk.
   try {
     localStorage.setItem(THREADS_STORAGE_KEY, JSON.stringify(threads));
   } catch (_e) { /* quota / disabled storage — keep threads in-memory only */ }
 }
 
 // A session can only be sealed/unsealed when signed in AND a NIP-44 signer is
-// present. Otherwise the dock falls back to its in-browser (localStorage) copy.
+// present. Otherwise messages stay transient in memory, with a save warning.
 function serverSessionsAvailable() {
   return isSessionLive()
     && typeof window !== 'undefined'
@@ -299,29 +349,20 @@ function serverSessionsAvailable() {
 }
 
 // Best-effort: pull the owner's sealed sessions and merge them into threads.
-// Server wins over localStorage on the same thread key (it is the durable,
-// private-by-default store). A thread that fails to decrypt is treated as
+// Server is the durable, private-by-default store. A thread that fails to decrypt is treated as
 // foreign/corrupt and skipped, never allowed to crash the dock.
 async function hydrateServerSessions() {
   if (!serverSessionsAvailable()) return;
-  let pubkey;
-  try { pubkey = await window.nostr.getPublicKey(); } catch (_e) { return; }
-  const deps = { pubkey, decrypt: (p, c) => window.nostr.nip44.decrypt(p, c) };
+  const identity = historyIdentity();
   try {
-    const r = await listSessions();
-    if (!r.ok) return;
-    const sessions = (r.data && Array.isArray(r.data.sessions)) ? r.data.sessions : [];
-    for (const s of sessions) {
-      if (!s || typeof s.id !== 'string') continue;
-      const rr = await readSession(s.id);
-      if (!rr.ok || !rr.data?.ciphertext) continue;
-      let session;
-      try { session = await unsealSession(deps, rr.data.ciphertext); }
-      catch (_e) { continue; }
-      if (!session.threadKey) continue;
+    const sessions = await sessionLibrary.load();
+    if (identity !== historyIdentity()) return;
+    for (const session of sessions) {
+      if (!session.threadKey || session.locked || dirtyThreads.has(session.threadKey)) continue;
       threads[session.threadKey] = trimThread(session.messages, THREAD_CAP);
+      threadMetadata[session.threadKey] = session.metadata;
     }
-    if (Array.isArray(threads[activeKey])) renderLog();
+    if (logEl && Array.isArray(threads[activeKey])) renderLog();
   } catch (_e) { /* best-effort hydration */ }
 }
 
@@ -329,21 +370,41 @@ async function hydrateServerSessions() {
 // only thread (no user turn) is not persisted, so merely visiting a page does
 // not mint empty sessions. Seal/network failures never break the dock.
 async function persistServerSession(key) {
-  if (!serverSessionsAvailable()) return;
+  const identity = historyIdentity();
+  if (!serverSessionsAvailable()) {
+    if (isAgentConfigured() && threads[key]?.some(m => m.who === 'user')) {
+      persistenceError = 'History is not saved yet. Connect your signer and keep this tab open.';
+      renderSaveStatus();
+    }
+    return;
+  }
   if (!Array.isArray(threads[key])) return;
   if (!threads[key].some((m) => m && m.who === 'user')) return;
   try {
-    const pubkey = await window.nostr.getPublicKey();
-    const ciphertext = await sealSession(
-      { pubkey, encrypt: (p, pt) => window.nostr.nip44.encrypt(p, pt) },
-      { threadKey: key, messages: threads[key] },
-    );
-    await saveSession(sessionIdFor(key), ciphertext);
-  } catch (_e) { /* best-effort persistence */ }
+    const record = sessionLibrary.rows().find(r => r.id === sessionIdFor(key));
+    await sessionLibrary.save(key, threads[key].slice(), record ? undefined : threadMetadata[key]);
+    if (identity !== historyIdentity()) return;
+    persistenceError = '';
+  } catch (e) { if (identity !== historyIdentity()) return; persistenceError = e.message; }
+  renderSaveStatus();
+}
+
+function renderSaveStatus() {
+  const status = dockEl?.querySelector('.chat-save-status');
+  if (!status) return;
+  status.hidden = !persistenceError;
+  status.replaceChildren();
+  if (!persistenceError) return;
+  status.append(document.createTextNode(persistenceError + ' '));
+  const retry = document.createElement('button');
+  retry.type = 'button'; retry.textContent = 'Retry saving';
+  retry.addEventListener('click', () => void persistServerSession(activeKey));
+  status.append(retry);
 }
 
 function renderLog() {
-  sendBtn.disabled = thinking;
+  if (!logEl || !sendBtn) return;
+  sendBtn.disabled = thinking || loadingHistory;
   sendBtn.textContent = thinking ? 'Waiting…' : 'Send';
   sendBtn.setAttribute('aria-busy', String(thinking));
   updatePlaceholder();
@@ -417,6 +478,20 @@ async function send() {
   // or owner change is dropped rather than written into a different owner's
   // thread. The token is the complete identity (HMAC-bound to the npub).
   const turnToken = getStoredToken();
+  if (loadingHistory) return;
+  const turnContext = buildContext();
+  if (serverSessionsAvailable() && !sessionLibrary.status().loaded) {
+    loadingHistory = true;
+    renderLog();
+    await hydrateServerSessions();
+    loadingHistory = false;
+    if (turnToken !== getStoredToken() || turnKey !== activeKey) { renderLog(); return; }
+    const stored = sessionLibrary.rows().find(r => r.id === sessionIdFor(turnKey));
+    if (stored?.locked || sessionLibrary.status().error) {
+      persistenceError = 'History could not be opened safely. Reload or check your signer before continuing.';
+      renderSaveStatus(); renderLog(); return;
+    }
+  }
   const generation = ++turnGeneration;
   push('user', text);
   inputEl.value = '';
@@ -427,7 +502,7 @@ async function send() {
   preview = { key: turnKey, token: turnToken, text: '', phase: 'Preparing', timingText: '', started: performance.now() };
   previewClock = setInterval(schedulePreviewPaint, 1000);
   renderLog();
-  const reply = await getReply(text, buildContext(), event => {
+  const reply = await getReply(text, turnContext, event => {
     if (generation !== turnGeneration || turnToken !== getStoredToken()) return;
     if (event.type === 'reset') { preview.text = ''; preview.phase = 'Waiting for model'; }
     if (event.type === 'phase') preview.phase = phaseLabel(event.phase);
@@ -460,6 +535,7 @@ function pushTo(key, who, text, action, timingText) {
   if (!Array.isArray(threads[key])) threads[key] = [];
   threads[key].push({ who, text, at: Date.now(), ...(action ? { action } : {}), ...(timingText ? { timingText } : {}) });
   threads[key] = trimThread(threads[key], THREAD_CAP);
+  if (who === 'user') dirtyThreads.add(key);
   saveThreads();
   void persistServerSession(key);
   if (key === activeKey) renderLog();
@@ -605,6 +681,63 @@ This is a mock shell — real calls light up once Routstr is connected.`;
 }
 
 export function toggleChat() { setExpanded(!expanded); }
+
+/** Move the same live composer, never create a second payment/chat pipeline. */
+export function releaseChatWorkspace() {
+  openGeneration++;
+  if (!dockEl || !chatRoot) return;
+  chatRoot.appendChild(dockEl);
+  inlineChat = false;
+  dockEl.classList.remove('workspace-chat');
+  document.getElementById('main-content')?.classList.remove('workspace-main');
+  reserveSpace();
+}
+
+export function attachChatWorkspace(host) {
+  if (!dockEl || !host) return;
+  host.appendChild(dockEl);
+  inlineChat = true;
+  dockEl.classList.add('workspace-chat');
+  document.getElementById('main-content')?.classList.add('workspace-main');
+  setExpanded(true);
+  updatePlaceholder();
+}
+
+export function newConversation(project = null) {
+  const id = 'session-' + crypto.randomUUID();
+  const key = id;
+  threadMetadata[key] = { title: '', pinned: false, project };
+  threads[key] = [];
+  return id;
+}
+
+export async function openConversation(id, project = null) {
+  const opening = ++openGeneration;
+  const identity = historyIdentity();
+  const key = Object.keys(threads).find(k => sessionIdFor(k) === id);
+  if (key) {
+    explicitThread = key;
+  } else {
+    loadingHistory = true;
+    renderLog();
+    await hydrateServerSessions();
+    if (identity !== historyIdentity() || opening !== openGeneration) { loadingHistory = false; return false; }
+    const record = sessionLibrary.rows().find(r => r.id === id);
+    loadingHistory = false;
+    if (!record?.threadKey || record.locked) { renderLog(); return false; }
+    explicitThread = record.threadKey;
+  }
+  threadMetadata[explicitThread] ||= { title: '', pinned: false, project };
+  context = { label: project || 'Conversation', where: project ? 'project:' + project : 'chat' };
+  mode = 'page';
+  syncActiveThread();
+  setExpanded(true);
+  return true;
+}
+
+export function forgetConversation(record) {
+  if (record?.threadKey) { delete threads[record.threadKey]; delete threadMetadata[record.threadKey]; dirtyThreads.delete(record.threadKey); }
+}
 
 /**
  * Prefill the dock with a prepared turn WITHOUT sending it. Used by the board's

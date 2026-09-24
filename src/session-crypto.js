@@ -47,7 +47,8 @@ export async function sealSession(deps, session) {
   assertDeps(deps, 'encrypt');
   const threadKey = typeof (session && session.threadKey) === 'string' ? session.threadKey : '';
   const messages = session && session.messages;
-  const plaintext = JSON.stringify({ v: SESSION_BLOB_VERSION, threadKey, messages: sanitizeMessages(messages) });
+  const plaintext = JSON.stringify({ v: SESSION_BLOB_VERSION, threadKey, messages: sanitizeMessages(messages),
+    ...(session.metadata ? { metadata: sessionMetadata(session.metadata) } : {}) });
   return deps.encrypt(deps.pubkey, plaintext);
 }
 
@@ -76,6 +77,15 @@ export async function unsealSession(deps, ciphertext) {
   return {
     threadKey: typeof obj.threadKey === 'string' ? obj.threadKey : '',
     messages: sanitizeMessages(obj.messages),
+    ...(obj.metadata ? { metadata: sessionMetadata(obj.metadata) } : {}),
+  };
+}
+
+export function sessionMetadata(value = {}) {
+  return {
+    title: typeof value.title === 'string' ? value.title.trim().slice(0, 120) : '',
+    pinned: value.pinned === true,
+    project: typeof value.project === 'string' && value.project.length > 0 && value.project.length <= 160 && !/[\u0000-\u001f]/.test(value.project) ? value.project : null,
   };
 }
 

@@ -68,6 +68,13 @@ export function createSessionStore(deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : () => Math.floor(Date.now() / 1000);
 
   const ownersRoot = join(memoryRoot, 'owners');
+  const writes = new Map();
+  function serialize(owner, fn) {
+    const job = (writes.get(owner) || Promise.resolve()).catch(() => {}).then(fn);
+    writes.set(owner, job);
+    job.finally(() => { if (writes.get(owner) === job) writes.delete(owner); }).catch(() => {});
+    return job;
+  }
 
   function resolveOwner(ownerNpub) {
     const ownerHex = ownerHexFromNpub(ownerNpub);
@@ -110,7 +117,7 @@ export function createSessionStore(deps = {}) {
   }
 
   /** Create or replace a session blob + update its index entry. */
-  async function upsert(ownerNpub, { id, ciphertext }) {
+  async function upsert(ownerNpub, { id, ciphertext, expected_sha256 }) {
     const scope = resolveOwner(ownerNpub);
     if (!scope.ok) return { ok: false, code: 'scope', reason: scope.reason };
     const safeId = validSessionId(id);
@@ -128,27 +135,28 @@ export function createSessionStore(deps = {}) {
       return { ok: false, code: 'traversal', reason: 'resolved path escapes owner namespace' };
     }
 
+    const index = await readIndex(scope.dir);
+    if (index.corrupt) return { ok: false, code: 'integrity', reason: 'session index unreadable' };
+    const prev = index.sessions.find((s) => s.id === safeId);
+    if (expected_sha256 !== undefined && expected_sha256 !== (prev?.sha256 ?? null)) {
+      return { ok: false, code: 'conflict', reason: 'session changed; reload before saving' };
+    }
+    if (!prev && index.sessions.length >= maxSessions) {
+      return { ok: false, code: 'quota', reason: `session quota ${maxSessions} reached` };
+    }
     await mkdir(scope.dir, { recursive: true, mode: 0o700 });
     const tmp = join(scope.dir, `.${safeId}.${randomBytes(8).toString('hex')}.tmp`);
     await writeFile(tmp, ciphertext, { mode: 0o600 });
     await rename(tmp, file);
 
-    const index = await readIndex(scope.dir);
-    const existingCount = index.sessions.filter((s) => s.id !== safeId).length;
-    if (existingCount >= maxSessions) {
-      await unlink(file).catch(() => {}); // roll back the just-written blob
-      return { ok: false, code: 'quota', reason: `session quota ${maxSessions} reached` };
-    }
-
     const digest = sha256Hex(Buffer.from(ciphertext, 'utf8'));
     const ts = now();
-    const prev = index.sessions.find((s) => s.id === safeId);
     index.sessions = [
       ...index.sessions.filter((s) => s.id !== safeId),
       { id: safeId, created_at: prev?.created_at ?? ts, updated_at: ts, bytes: byteLen, sha256: digest },
     ];
     await writeIndexAtomic(scope.dir, index);
-    return { ok: true, id: safeId, created_at: prev?.created_at ?? ts, updated_at: ts, bytes: byteLen };
+    return { ok: true, id: safeId, created_at: prev?.created_at ?? ts, updated_at: ts, bytes: byteLen, sha256: digest };
   }
 
   /** Read a session's ciphertext (verified against the stored sha256). */
@@ -192,5 +200,10 @@ export function createSessionStore(deps = {}) {
     return { ok: true, removed: safeId };
   }
 
-  return { list, upsert, read, remove };
+  return {
+    list: owner => serialize(owner, () => list(owner)),
+    read: (owner, id) => serialize(owner, () => read(owner, id)),
+    upsert: (owner, value) => serialize(owner, () => upsert(owner, value)),
+    remove: (owner, id) => serialize(owner, () => remove(owner, id)),
+  };
 }

@@ -75,6 +75,30 @@ test('upsert with the same id replaces the blob and keeps created_at', async () 
   h.cleanup();
 });
 
+test('compare-and-swap refuses stale browser updates without replacing ciphertext', async () => {
+  const h = harness();
+  const first = await h.store.upsert(NPUB_A, { id: 's', ciphertext: 'ONE', expected_sha256: null });
+  assert.equal(first.ok, true);
+  const conflict = await h.store.upsert(NPUB_A, { id: 's', ciphertext: 'STALE', expected_sha256: 'wrong' });
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.code, 'conflict');
+  assert.equal((await h.store.read(NPUB_A, 's')).ciphertext, 'ONE');
+  const current = await h.store.upsert(NPUB_A, { id: 's', ciphertext: 'TWO', expected_sha256: first.sha256 });
+  assert.equal(current.ok, true);
+  assert.equal((await h.store.read(NPUB_A, 's')).ciphertext, 'TWO');
+  h.cleanup();
+});
+
+test('concurrent creates serialize index updates instead of losing one session', async () => {
+  const h = harness();
+  await Promise.all([
+    h.store.upsert(NPUB_A, { id: 'a', ciphertext: 'A', expected_sha256: null }),
+    h.store.upsert(NPUB_A, { id: 'b', ciphertext: 'B', expected_sha256: null }),
+  ]);
+  assert.deepEqual(new Set((await h.store.list(NPUB_A)).sessions.map(s => s.id)), new Set(['a', 'b']));
+  h.cleanup();
+});
+
 test('list sorts most-recently-updated first', async () => {
   const h = harness();
   await h.store.upsert(NPUB_A, { id: 'a', ciphertext: 'A' });
