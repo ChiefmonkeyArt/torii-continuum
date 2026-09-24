@@ -26,6 +26,7 @@ import { loadConfig, persistAdminNpub } from './core/config.mjs';
 import { createAuth } from './core/auth.mjs';
 import { createWallet } from './core/wallet.mjs';
 import { createRoutstr } from './core/routstr.mjs';
+import { createChatModelSettings, validModelId } from './core/chat-model-settings.mjs';
 import { createOllama } from './core/ollama.mjs';
 import { createModelRouter } from './core/model-router.mjs';
 import { createChatSkill } from './skills/chat.mjs';
@@ -176,7 +177,8 @@ const auth = deps.auth ?? createAuth(cfg, {
   persistAdmin: (npub) => persistAdminNpub(cfg._config_path, npub),
 });
 const wallet = await createWallet(cfg, app.log);
-const routstr = createRoutstr(cfg, wallet, app.log);
+const chatModelSettings = deps.chatModelSettings ?? await createChatModelSettings(cfg);
+const routstr = deps.routstr ?? createRoutstr(cfg, wallet, app.log, { getChatModel: chatModelSettings.override });
 app.addHook('onClose', async () => { routstr.stopDiscovery(); routstr.stopPaymentRecovery(); });
 
 // Read-only project-source adapters (v0.2.47-alpha, CONT-KANBAN-SYNC). Imports
@@ -461,7 +463,7 @@ app.get('/api/health/models', { preHandler: requireAdmin }, async () => {
     routstr: {
       enabled: true,
       endpoint: cfg.routstr?.endpoint || null,
-      model: cfg.routstr?.model || null,
+      model: chatModelSettings.current(),
       discovery: routstr.discoveryStatus(),
     },
     ollama: {
@@ -475,6 +477,22 @@ app.get('/api/health/models', { preHandler: requireAdmin }, async () => {
     },
     time: new Date().toISOString(),
   };
+});
+
+// Reading/saving a model is free. Only a subsequent owner chat spends funds.
+app.get('/api/routstr/models', { preHandler: requireAdmin }, async () => ({
+  ok: true, selected_model: chatModelSettings.current(),
+  models: await routstr.availableModels(),
+  max_sats_per_request: cfg.routstr.limits?.max_sats_per_request || 50,
+}));
+app.post('/api/routstr/model', { preHandler: requireAdmin,
+  config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  if (!req.body || Object.keys(req.body).length !== 1 || !validModelId(req.body.model))
+    return reply.code(400).send({ ok: false, error: 'Choose a valid model.' });
+  const available = await routstr.availableModels();
+  if (!available.some(m => m.id === req.body.model))
+    return reply.code(409).send({ ok: false, error: 'That model is unavailable. Refresh the model list.' });
+  return chatModelSettings.save(req.body.model);
 });
 
 // ─────────────────────────────────────────────────────────────

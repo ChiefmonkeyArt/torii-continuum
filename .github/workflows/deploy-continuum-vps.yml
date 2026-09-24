@@ -53,6 +53,7 @@ on:
           - deepseek_first
           - fast_control
           - comparison_followup
+          - deepseek_no_thinking
 
 concurrency:
   # Never run two VPS deploys at once — the installer holds no external lock
@@ -268,7 +269,7 @@ jobs:
           run="$1"
           target="$2"
           [[ "$run" =~ ^[0-9]+$ ]]
-          [[ "$target" == deepseek_first || "$target" == fast_control || "$target" == comparison_followup ]]
+          [[ "$target" == deepseek_first || "$target" == fast_control || "$target" == comparison_followup || "$target" == deepseek_no_thinking ]]
           systemctl is-active --quiet continuum-agent.service
           # The wallet mutex is in-process. Never let a standalone benchmark
           # race the live daemon's wallet writer. Restore service on every exit.

@@ -13,6 +13,7 @@ import {
   nwcStatus, nwcConnect, nwcTest, nwcDisconnect,
 } from '../data/agent.js';
 import { renderQR } from './qr.js';
+import { renderLiveModelPicker } from './routstr-model-picker.js';
 import { satsBurst } from '../effects/sats-burst.js';
 import { isSessionLive, startLogin } from '../auth.js';
 import { isDemo, demoSource, demoBanner, demoIntercept } from '../demo/demo-mode.js';
@@ -1035,6 +1036,7 @@ function openNwcConnectModal(body) {
 }
 
 function renderModelPicker(c, demo) {
+  if (!demo) return renderLiveModelPicker();
   const list = h('div', { class: 'model-list' });
   for (const m of c.models) {
     const row = h('div', { class: 'model ' + (m.id === c.selectedModel ? 'selected' : '') }, [
