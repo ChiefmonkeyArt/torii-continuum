@@ -11,6 +11,14 @@
 
 ### Active tasks
 
+- **CONT-DUST-RECOVERY (v0.2.182-alpha):** fix the verified 617-msat remainder
+  blocking all chat after one successful paid request. Preserve claims in an
+  encrypted dust archive, keep conservative spending accounting and add honest
+  timing/error text. Tests must cover restart, matching identity, bounds,
+  persistence failures and the next owner turn. Merge/tag/deploy and verify the
+  existing active claim moves to the archive without any new payment; owner
+  acceptance still determines end-to-end paid streaming quality.
+
 - **CONT-BEARER-STREAM (v0.2.181-alpha):** opt-in per-request funding,
   incremental bearer completion, separate refund and encrypted restart recovery.
   DeepSeek and caps unchanged. Full tests and browser checks pass.

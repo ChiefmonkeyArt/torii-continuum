@@ -47,9 +47,15 @@ function fixture(options = {}) {
     assert.equal(init.redirect, 'error');
     assert.ok(!url.includes('cashu'));
     if (url.endsWith('/create')) {
-      assert.equal(records.size, 1, 'durable recovery before deposit');
+      assert.equal([...records.keys()].filter(n => n.startsWith('rrefund_')).length, 1, 'durable recovery before deposit');
       if (options.createThrows) throw new Error('network echo ' + token);
       return options.createResponse?.() || json({ api_key: key, balance: 10000 });
+    }
+    if (url.endsWith('/info')) {
+      assert.equal(init.headers.Authorization, `Bearer ${key}`);
+      return options.infoResponse?.() || json({
+        api_key: key, balance: 617, reserved: 0, total_requests: 1, total_spent: 383,
+      });
     }
     assert.equal(init.headers.Authorization, `Bearer ${key}`);
     return options.refundResponse?.() || json({ token: 'cashuAREFUND' });
@@ -116,14 +122,114 @@ test('active inference is not refunded by the recovery sweep; settlement is sing
   assert.equal(f.count().receives, 1);
 });
 
-test('fully spent balance can close, but pending/dust/unknown errors cannot', async () => {
-  for (const detail of ['No balance to refund', 'Balance too small to refund', 'Cannot refund key. There are ongoing requests for this api key.']) {
+test('fully spent balance can close, but in-flight balances cannot', async () => {
+  for (const detail of ['No balance to refund', 'Cannot refund key. There are ongoing requests for this api key.']) {
     const f = fixture({ refundResponse: () => json({ detail }, 400) });
     const h = await f.payment.begin(base, 10);
     const result = await f.payment.finish(h);
     assert.equal(result.pending, detail !== 'No balance to refund');
     assert.equal(f.count().receives, 0);
   }
+});
+
+test('verified fractional-sat dust is archived without a second payment and no longer blocks chat', async () => {
+  const f = fixture({ refundResponse: () => json({ detail: 'Balance too small to refund' }, 400) });
+  const h = await f.payment.begin(base, 1);
+  const result = await f.payment.finish(h);
+  assert.deepEqual(result, { pending: false, refunded: 0, dust_msats: 617 });
+  assert.equal([...f.records.keys()].some(name => name.startsWith('rrefund_')), false);
+  assert.equal([...f.records.keys()].some(name => name.startsWith('rdust_')), true);
+  assert.deepEqual(f.count(), { sends: 1, receives: 0, rollbacks: 0 });
+  assert.equal((await f.payment.begin(base, 1)).ok, true);
+});
+
+test('dust remains pending unless provider confirms matching identity, no reservation and less than one sat', async () => {
+  const unsafe = [
+    { api_key: 'sk-other', balance: 617, reserved: 0 },
+    { api_key: key, balance: 617, reserved: 1 },
+    { api_key: key, balance: 1000, reserved: 0 },
+    { api_key: key, balance: 0, reserved: 0 },
+    { api_key: key, balance: 617.5, reserved: 0 },
+    { api_key: key, balance: '617', reserved: 0 },
+    { api_key: key, balance: -1, reserved: 0 },
+    { api_key: key, balance: 617 },
+  ];
+  for (const info of unsafe) {
+    const f = fixture({
+      refundResponse: () => json({ detail: 'Balance too small to refund' }, 400),
+      infoResponse: () => json(info),
+    });
+    const h = await f.payment.begin(base, 1);
+    assert.deepEqual(await f.payment.finish(h), { pending: true, refunded: 0 });
+    assert.equal([...f.records.keys()].some(name => name.startsWith('rrefund_')), true);
+    assert.equal(f.count().sends, 1);
+  }
+});
+
+test('restart recovery archives existing dust, skips archived claims and makes no deposit', async () => {
+  const f = fixture({ refundResponse: () => json({ detail: 'Balance too small to refund' }, 400) });
+  const h = await f.payment.begin(base, 1);
+  const restarted = createRoutstrPayment(cfg, f.wallet, { store: f.store, fetchFn: f.fetchFn });
+  await restarted.recover();
+  assert.equal(f.records.has(h.name), false);
+  const archive = JSON.parse(f.records.get(h.name.replace('rrefund_', 'rdust_')));
+  assert.equal(archive.token, token, 'claim is retained encrypted by the real store');
+  assert.equal(archive.dust_msats, 617);
+  assert.ok(archive.archived_at);
+  const calls = f.calls.length;
+  await restarted.recover();
+  assert.equal(f.calls.length, calls, 'no repeated dust polling');
+  assert.deepEqual(f.count(), { sends: 1, receives: 0, rollbacks: 0 });
+  assert.equal((await restarted.begin(base, 1)).ok, true);
+});
+
+test('unavailable or malformed balance info never archives a claim', async () => {
+  for (const response of [() => json({}, 401), () => json({}, 503), () => new Response('bad'),
+    () => { throw new Error('unavailable'); }]) {
+    const f = fixture({
+      refundResponse: () => json({ detail: 'Balance too small to refund' }, 400),
+      infoResponse: response,
+    });
+    const h = await f.payment.begin(base, 1);
+    assert.equal((await f.payment.finish(h)).pending, true);
+    assert.equal(f.records.has(h.name), true);
+    assert.equal((await f.payment.begin(base, 1)).ok, false);
+    assert.equal(f.count().sends, 1);
+  }
+});
+
+test('only the exact refund status and detail may initiate dust verification', async () => {
+  for (const response of [() => json({ dust: true }),
+    () => json({ detail: 'Balance too small to refund' }),
+    () => json({ detail: 'Balance too small to refund' }, 503),
+    () => json({ detail: 'Balance too small to refund.' }, 400)]) {
+    const f = fixture({ refundResponse: response });
+    const h = await f.payment.begin(base, 1);
+    assert.equal((await f.payment.finish(h)).pending, true);
+    assert.equal(f.calls.some(call => call.url.endsWith('/info')), false);
+    assert.equal(f.records.has(h.name), true);
+  }
+});
+
+test('archive persistence and removal failures retain the original claim and block another deposit', async () => {
+  for (const stage of ['put', 'remove']) {
+    const f = fixture({ refundResponse: () => json({ detail: 'Balance too small to refund' }, 400) });
+    const h = await f.payment.begin(base, 1);
+    if (stage === 'put') f.store.put = async () => { throw new Error('disk'); };
+    else f.store.remove = async () => { throw new Error('disk'); };
+    assert.equal((await f.payment.finish(h)).pending, true);
+    assert.equal(f.records.has(h.name), true);
+    assert.equal((await f.payment.begin(base, 1)).ok, false);
+    assert.equal(f.count().sends, 1);
+  }
+});
+
+test('an older pending claim returns a truthful error without sending again', async () => {
+  const f = fixture({ createThrows: true, refundResponse: () => json({}, 503) });
+  await f.payment.begin(base, 1);
+  const blocked = await f.payment.begin(base, 1);
+  assert.equal(blocked.reason, 'An earlier payment is awaiting recovery. No new payment was sent.');
+  assert.equal(f.count().sends, 1);
 });
 
 test('rejected mint refund remains recoverable and blocks more deposits', async () => {
@@ -193,6 +299,67 @@ test('production recovery records are encrypted with restricted permissions', as
     assert.ok(!raw.includes(token) && !raw.includes(key) && !raw.includes(base));
     assert.equal((await stat(path)).mode & 0o777, 0o600);
   } finally { payment.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('production dust archive preserves encrypted custody across restart without polling or paying', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'routstr-dust-'));
+  const f = fixture();
+  let calls = 0;
+  const fetchFn = async url => {
+    calls++;
+    if (url.endsWith('/create')) return json({ api_key: key });
+    if (url.endsWith('/refund')) return json({ detail: 'Balance too small to refund' }, 400);
+    return json({ api_key: key, balance: 617, reserved: 0 });
+  };
+  const payment = createRoutstrPayment(cfg, f.wallet, { dir, fetchFn });
+  try {
+    const h = await payment.begin(base, 1);
+    assert.equal((await payment.finish(h)).dust_msats, 617);
+    const names = await readdir(dir);
+    assert.equal(names.length, 1);
+    assert.match(names[0], /^rdust_[a-f0-9]{20}\.enc$/);
+    const raw = await readFile(join(dir, names[0]), 'utf8');
+    assert.ok(!raw.includes(token) && !raw.includes(key) && !raw.includes(base));
+    assert.equal((await stat(join(dir, names[0]))).mode & 0o777, 0o600);
+    const before = calls;
+    await createRoutstrPayment(cfg, f.wallet, { dir, fetchFn }).recover();
+    assert.equal(calls, before);
+    assert.deepEqual(f.count(), { sends: 1, receives: 0, rollbacks: 0 });
+  } finally { payment.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('router keeps DeepSeek and counts dust conservatively without blocking the next owner turn', async () => {
+  const f = fixture({ refundResponse: () => json({ detail: 'Balance too small to refund' }, 400) });
+  const dir = await mkdtemp(join(tmpdir(), 'routstr-dust-router-'));
+  const saved = globalThis.fetch;
+  let completions = 0;
+  globalThis.fetch = async (_url, init) => {
+    completions++;
+    assert.equal(JSON.parse(init.body).model, 'deepseek-v3.2');
+    return new Response('data: {"choices":[{"delta":{"content":"Good morning"}}]}\n\ndata: [DONE]\n\n');
+  };
+  const router = createRoutstr({ ...cfg, routstr: { ...cfg.routstr, endpoint: base,
+    discovery: { enabled: false }, models: { chat: 'deepseek-v3.2' },
+    limits: { max_sats_per_request: 1 } }, logging: { cost_log: join(dir, 'costs.jsonl') },
+  }, f.wallet, { info() {}, warn() {} }, {
+    fetchCatalog: async () => [], payment: { store: f.store, fetchFn: f.fetchFn },
+  });
+  try {
+    for (let i = 0; i < 2; i++) {
+      const telemetry = createChatTelemetry();
+      const result = await router.chat({ messages: [{ role: 'user', content: 'gm' }], telemetry });
+      assert.equal(result.ok, true);
+      assert.equal(result.sats_spent, 1);
+      assert.equal(result.sats_refunded, 0);
+      assert.equal(result.refund_pending, false);
+      assert.equal(result.refund_dust_msats, 617);
+      assert.equal(telemetry.snapshot().refund_dust_msats, 617);
+      assert.equal(telemetry.snapshot().refund_pending, false);
+    }
+    assert.equal(completions, 2);
+    assert.deepEqual(f.count(), { sends: 2, receives: 0, rollbacks: 0 });
+    assert.equal(f.records.size, 2, 'both encrypted claims preserved');
+  } finally { globalThis.fetch = saved; await rm(dir, { recursive: true, force: true }); }
 });
 
 test('real chat adapter emits DeepSeek text before EOF/refund with one funded request', async () => {

@@ -1,5 +1,27 @@
 # Continuum — Session Handover
 
+## v0.2.182-alpha: repair dust-induced global chat block
+
+The v181 rollout completed through PR #217 and the owner tried normal chat.
+Read-only VPS inspection on 2026-09-24 confirmed one retained 1-sat claim:
+provider balance 617 msats, reserved 0, total requests 1, total spent 383 msats.
+This is fractional dust, not a new login failure or insufficient wallet funds.
+[Diagnostic evidence](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/36023790441).
+
+After the exact dust refund error, verify `/v1/balance/info` using the existing
+claim key. Matching identity, reserved 0 and integer balance 1–999 msats permit
+durable encrypted `rdust_*.enc` archival before removing the active
+`rrefund_*.enc` entry. No new deposit, top-up, model call or proof restoration
+occurs during recovery. Retain the archived claim; do not bulk-delete archives.
+They are excluded from automatic polling and never reused for funding.
+The full unrefunded allocation remains counted as spent, not returned to wallet.
+
+Keep DeepSeek, payment mode and all limits unchanged. Deploy the merged/tagged
+release with blank optional configuration inputs. Verify the old claim's
+encrypted archive, zero active claims, matching main/tag/live versions and
+healthy API. No paid automatic acceptance test is authorized; ask the owner to
+try one normal message after these checks. Do not infer live streaming from mocks.
+
 ## v0.2.181-alpha: one-time rollout approved, verification pending
 
 The owner's measurements locate batching upstream of Continuum; published

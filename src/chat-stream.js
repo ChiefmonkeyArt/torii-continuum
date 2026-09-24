@@ -71,6 +71,8 @@ export function timingLabel(t) {
       .map(([key, label]) => `${label} ${seconds(t[`${key}_ms`])}`),
     Number.isFinite(t.attempts) ? `Attempts ${t.attempts}` : null,
     t.refund_pending === true ? 'Refund pending; recovery retained' : null,
+    Number.isSafeInteger(t.refund_dust_msats) && t.refund_dust_msats > 0
+      ? `Unrefundable remainder ${(t.refund_dust_msats / 1000).toFixed(3)} sat; claim retained` : null,
     ...(Array.isArray(t.upstream_attempts) ? t.upstream_attempts.slice(-1).flatMap(a => [
       `Upstream chunks ${a.transport_chunks ?? 0}`,
       `Text events ${a.content_events ?? 0}`,

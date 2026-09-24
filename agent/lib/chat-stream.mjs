@@ -10,6 +10,7 @@ export function createChatTelemetry(emit = () => {}, now = performance.now.bind(
   let provider = null;
   let deltaEvents = 0;
   let refundPending = false;
+  let refundDustMsats = 0;
   const upstream = [];
   const add = (phase, ms) => {
     if (PHASES.has(phase) && Number.isFinite(ms)) {
@@ -19,6 +20,9 @@ export function createChatTelemetry(emit = () => {}, now = performance.now.bind(
   return {
     add,
     refundPending() { refundPending = true; },
+    refundDust(msats) {
+      if (Number.isSafeInteger(msats) && msats > 0 && msats < 1000) refundDustMsats += msats;
+    },
     async measure(phase, task) {
       emit({ type: 'phase', phase });
       const t = now();
@@ -46,6 +50,7 @@ export function createChatTelemetry(emit = () => {}, now = performance.now.bind(
         agent_delta_events: deltaEvents,
         upstream_attempts: upstream.map(item => ({ ...item })),
         refund_pending: refundPending,
+        refund_dust_msats: refundDustMsats,
       };
     },
   };
