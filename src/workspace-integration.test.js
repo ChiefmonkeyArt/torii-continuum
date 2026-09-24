@@ -102,3 +102,20 @@ test('settings stay in the upward profile menu and history searches private titl
   await tick();
   expect(document.querySelector('.workspace-chat')).not.toBeNull();
 });
+
+test('automatic token renewal retains private history but a new login invalidates it', async () => {
+  await boot(initial());
+  const { sessionLibrary } = await import('./chat.js');
+  const { setStoredToken, invalidateAuthWrites } = await import('./data/agent.js');
+  expect(sessionLibrary.rows()).toHaveLength(1);
+  setStoredToken(`2.${Math.floor(Date.now()/1000)+7200}.${pubkey}.1.renewed`);
+  expect(sessionLibrary.rows()).toHaveLength(1);
+  await sessionLibrary.patch('session-one', { pinned: true });
+  expect(sessionLibrary.rows()[0].metadata.pinned).toBe(true);
+  invalidateAuthWrites();
+  expect(sessionLibrary.rows()).toHaveLength(0);
+  await sessionLibrary.load();
+  expect(sessionLibrary.rows()).toHaveLength(1);
+  setStoredToken(`3.${Math.floor(Date.now()/1000)+7200}.${'b'.repeat(64)}.3.other`);
+  expect(sessionLibrary.rows()).toHaveLength(0);
+});

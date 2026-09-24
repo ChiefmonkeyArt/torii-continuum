@@ -15,7 +15,7 @@
  * the current project/page.
  */
 
-import { chat as agentChat, isAgentConfigured, getStoredToken, listSessions, readSession, saveSession, deleteSession } from './data/agent.js';
+import { chat as agentChat, isAgentConfigured, getStoredToken, authEpochNow, listSessions, readSession, saveSession, deleteSession } from './data/agent.js';
 import { hydrateFromServer } from './data/store.js';
 import { isSessionLive } from './auth.js';
 import { currentRoute } from './router.js';
@@ -53,8 +53,17 @@ async function signerDeps() {
     encrypt: (p, text) => window.nostr.nip44.encrypt(p, text),
     decrypt: (p, text) => window.nostr.nip44.decrypt(p, text) };
 }
+function historyIdentity() {
+  if (!isSessionLive()) return null;
+  const token = getStoredToken(), parts = token?.split('.') || [];
+  // Renewal preserves public key and original login time. This is only an
+  // in-memory cache key, never authorization; the agent still verifies tokens.
+  const login = parts.length === 5 && /^[0-9a-f]{64}$/.test(parts[2]) && /^\d+$/.test(parts[3])
+    ? `${parts[2]}:${parts[3]}` : token;
+  return `${authEpochNow()}:${login}`;
+}
 export const sessionLibrary = createSessionLibrary({
-  identity: () => isSessionLive() ? getStoredToken() : null,
+  identity: historyIdentity,
   list: () => listSessions(), read: id => readSession(id),
   save: (id, blob, sha) => saveSession(id, blob, sha), remove: id => deleteSession(id),
   seal: async value => sealSession(await signerDeps(), value),
@@ -329,7 +338,7 @@ function saveThreads() {
 }
 
 // A session can only be sealed/unsealed when signed in AND a NIP-44 signer is
-// present. Otherwise the dock falls back to its in-browser (localStorage) copy.
+// present. Otherwise messages stay transient in memory, with a save warning.
 function serverSessionsAvailable() {
   return isSessionLive()
     && typeof window !== 'undefined'
@@ -340,15 +349,14 @@ function serverSessionsAvailable() {
 }
 
 // Best-effort: pull the owner's sealed sessions and merge them into threads.
-// Server wins over localStorage on the same thread key (it is the durable,
-// private-by-default store). A thread that fails to decrypt is treated as
+// Server is the durable, private-by-default store. A thread that fails to decrypt is treated as
 // foreign/corrupt and skipped, never allowed to crash the dock.
 async function hydrateServerSessions() {
   if (!serverSessionsAvailable()) return;
-  const token = getStoredToken();
+  const identity = historyIdentity();
   try {
     const sessions = await sessionLibrary.load();
-    if (token !== getStoredToken()) return;
+    if (identity !== historyIdentity()) return;
     for (const session of sessions) {
       if (!session.threadKey || session.locked || dirtyThreads.has(session.threadKey)) continue;
       threads[session.threadKey] = trimThread(session.messages, THREAD_CAP);
@@ -362,7 +370,7 @@ async function hydrateServerSessions() {
 // only thread (no user turn) is not persisted, so merely visiting a page does
 // not mint empty sessions. Seal/network failures never break the dock.
 async function persistServerSession(key) {
-  const token = getStoredToken();
+  const identity = historyIdentity();
   if (!serverSessionsAvailable()) {
     if (isAgentConfigured() && threads[key]?.some(m => m.who === 'user')) {
       persistenceError = 'History is not saved yet. Connect your signer and keep this tab open.';
@@ -375,9 +383,9 @@ async function persistServerSession(key) {
   try {
     const record = sessionLibrary.rows().find(r => r.id === sessionIdFor(key));
     await sessionLibrary.save(key, threads[key].slice(), record ? undefined : threadMetadata[key]);
-    if (token !== getStoredToken()) return;
+    if (identity !== historyIdentity()) return;
     persistenceError = '';
-  } catch (e) { if (token !== getStoredToken()) return; persistenceError = e.message; }
+  } catch (e) { if (identity !== historyIdentity()) return; persistenceError = e.message; }
   renderSaveStatus();
 }
 
@@ -705,7 +713,7 @@ export function newConversation(project = null) {
 
 export async function openConversation(id, project = null) {
   const opening = ++openGeneration;
-  const token = getStoredToken();
+  const identity = historyIdentity();
   const key = Object.keys(threads).find(k => sessionIdFor(k) === id);
   if (key) {
     explicitThread = key;
@@ -713,7 +721,7 @@ export async function openConversation(id, project = null) {
     loadingHistory = true;
     renderLog();
     await hydrateServerSessions();
-    if (token !== getStoredToken() || opening !== openGeneration) { loadingHistory = false; return false; }
+    if (identity !== historyIdentity() || opening !== openGeneration) { loadingHistory = false; return false; }
     const record = sessionLibrary.rows().find(r => r.id === id);
     loadingHistory = false;
     if (!record?.threadKey || record.locked) { renderLog(); return false; }

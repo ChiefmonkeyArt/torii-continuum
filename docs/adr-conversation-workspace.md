@@ -14,6 +14,8 @@ Server writes serialize per owner to prevent concurrent session-index loss. New 
 
 Client save/delete operations serialize per session. Delete waits for pending writes and prevents later saves from recreating the deleted session within the current library lifetime. Sign-out/identity changes invalidate delayed decrypt and write results. Sealing checks signer identity against the authenticated public key. Pins and titles show success only after server acknowledgement.
 
+The private-history cache follows the public key, original login time and local auth epoch, not the rotating token bytes. Normal authenticated renewal retains history; sign-out, a fresh login or an owner change invalidates it. This cache key grants no authority: all transport requests still require agent-verified tokens.
+
 ## Privacy and compatibility
 
 - No human password, private key, seed, signer key or decrypted conversation is added to server persistence.

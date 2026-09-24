@@ -11,7 +11,7 @@ conflict rejection. Sign-out invalidates delayed private-history results.
 
 Pre-change version check: main/tag f81ae2ad8a30e937ef9bd9b4c8141d0ecc5e0177,
 v0.2.186-alpha, matching public health. New-install chat templates use V4 Flash;
-existing config, saved model and caps are preserved. Local checks: 1,150 frontend
+existing config, saved model and caps are preserved. Local checks: 1,151 frontend
 tests, 708 agent tests, all ops suites, production build and release-artifact
 validation pass. Browser checks cover reload/pins, new project sessions, tabs,
 search and mobile fit. CI and runtime evidence must be attached to the release
