@@ -103,6 +103,8 @@ export async function benchmark(cfg, deps = {}) {
   const catalog = await (deps.catalog || fetchProviderCatalog)(providers);
   const maxTokens = Math.min(2048, cfg.routstr.limits.max_tokens_out);
   const plan = selectPlan(catalog, maxTokens, cap);
+  const target = deps.target || 'deepseek_first';
+  if (!['deepseek_first', 'fast_control'].includes(target)) throw new Error('benchmark_invalid_target');
   const rows = [];
   let halted = false;
   const run = async target => {
@@ -147,11 +149,16 @@ export async function benchmark(cfg, deps = {}) {
     rows.push(row);
     deps.onRow?.(row);
   };
-  // Alternate providers rather than doing every warm run on one node first.
-  for (let repeat = 0; repeat < 2; repeat++) for (const target of plan.deepseek) await run(target);
-  if (!halted && needsAlternative(rows))
-    for (let repeat = 0; repeat < 2; repeat++) for (const target of plan.alternative) await run(target);
+  if (target === 'fast_control') {
+    for (let repeat = 0; repeat < 2; repeat++) for (const choice of plan.alternative) await run(choice);
+  } else {
+    // Alternate providers rather than doing every warm run on one node first.
+    for (let repeat = 0; repeat < 2; repeat++) for (const choice of plan.deepseek) await run(choice);
+    if (!halted && needsAlternative(rows))
+      for (let repeat = 0; repeat < 2; repeat++) for (const choice of plan.alternative) await run(choice);
+  }
   return { schema: 1, max_provider_allocation_sats: MAX_SATS, max_requests: MAX_REQUESTS,
+    benchmark_target: target,
     wallet_before_sats: before, wallet_after_sats: (await wallet.balance()).total,
     ...wallet.stats(), halted, rows };
 }
@@ -167,6 +174,7 @@ export async function claimRun(dir, runId) {
 
 async function main() {
   const runId = process.argv[2];
+  const target = process.argv[3] || 'deepseek_first';
   if (process.env.CONTINUUM_BENCHMARK_APPROVED !== '1' ||
       process.env.CONTINUUM_AGENT_STOPPED !== '1' || !/^\d+$/.test(runId || '')) {
     throw new Error('benchmark_not_authorized_or_isolated');
@@ -174,7 +182,8 @@ async function main() {
   const dir = join(agentRoot(), 'memory', 'benchmarks');
   // Same workflow run cannot charge twice, even after a partial failure/rerun.
   await claimRun(dir, runId);
-  const report = await benchmark(loadConfig(), { onRow: row => console.log(JSON.stringify({ trial: row })) });
+  const report = await benchmark(loadConfig(), { target,
+    onRow: row => console.log(JSON.stringify({ trial: row })) });
   await writeFile(join(dir, `${runId}.json`), JSON.stringify(report), { mode: 0o600 });
   console.log(JSON.stringify({ benchmark_report: report }));
 }

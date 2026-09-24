@@ -57,3 +57,30 @@ A provider-direct result establishes that provider/agent segment only; it does
 not prove the user's browser/proxy renders progressively. Prefer a genuinely
 streaming DeepSeek provider if the measurements support it. Obtain an explicit
 decision before changing a saved model or routing policy.
+
+## First live result and follow-up
+
+The first DeepSeek trial on GitHappens2Routstr produced 156 reasoning events,
+first at 6.9 seconds and ending at 19.8 seconds. Reply text began at 19.8 seconds
+and then genuinely streamed through 114 events over 7.4 seconds; total was
+27.8 seconds, one sat allocated, with 731 msats retained as encrypted dust.
+This identifies reasoning latency in the tested provider/agent path; it does
+not exclude an additional issue in the owner's browser. One sample is limited.
+
+The Redshift DeepSeek trial failed before completion. Its separate refund
+returned a valid two-sat Cashu-B token from the configured Minibits mint using
+a shortened v2 keyset identifier. Continuum's pre-whitelist decoding did not
+yet have the mint keyset map and rejected it; the encrypted claim correctly
+blocked further paid tests.
+
+v0.2.184 changes only that compatibility boundary: inspect mint/unit through
+metadata (which does not require keyset expansion), enforce whitelist and sat
+unit, load the mint, then let its wallet decode shortened IDs against its full
+keyset set and perform normal proof validation/swap. Unknown mints, non-sat
+units, unmappable keysets and mint failures still reject and retain recovery.
+
+After recovery, the benchmark's `fast_control` target runs only the cheapest
+priced Llama control twice. This avoids repeating DeepSeek trials, keeps the
+same prompt/metrics and does not change the saved DeepSeek model.
+[First benchmark](https://github.com/ChiefmonkeyArt/torii-continuum/actions/runs/36031165417)
+[Refund diagnosis](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/36032506087)

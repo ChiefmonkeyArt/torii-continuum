@@ -11,6 +11,12 @@
 
 ### Active tasks
 
+- **CONT-REFUND-KEYSET / CONT-FAST-CONTROL (v0.2.184-alpha):** accept valid
+  modern short-keyset Cashu-B refunds only through loaded whitelisted mint
+  validation, recover the retained 2 sats, then run two isolated cheap Llama
+  control trials without repeating DeepSeek. Compare results and ask before any
+  saved-model or routing change.
+
 - **CONT-STREAM-BENCHMARK (v0.2.183-alpha):** owner explicitly approved bounded
   paid testing on September 24. Compare two DeepSeek providers twice, optional
   cheap Llama control twice, using real first-text/stream/cost metrics. No saved

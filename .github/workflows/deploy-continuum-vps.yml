@@ -39,6 +39,14 @@ on:
         required: false
         default: false
         type: boolean
+      benchmark_target:
+        description: 'Benchmark set: DeepSeek providers first, or the cheap fast-model control only'
+        required: false
+        default: deepseek_first
+        type: choice
+        options:
+          - deepseek_first
+          - fast_control
 
 concurrency:
   # Never run two VPS deploys at once — the installer holds no external lock
@@ -222,14 +230,17 @@ jobs:
         env:
           SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
           BENCHMARK_RUN: ${{ github.run_id }}
+          BENCHMARK_TARGET: ${{ inputs.benchmark_target }}
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
-            "$SSH_HOST" sudo -n bash -s -- "$BENCHMARK_RUN" <<'REMOTE'
+            "$SSH_HOST" sudo -n bash -s -- "$BENCHMARK_RUN" "$BENCHMARK_TARGET" <<'REMOTE'
           set -euo pipefail
           run="$1"
+          target="$2"
           [[ "$run" =~ ^[0-9]+$ ]]
+          [[ "$target" == deepseek_first || "$target" == fast_control ]]
           systemctl is-active --quiet continuum-agent.service
           # The wallet mutex is in-process. Never let a standalone benchmark
           # race the live daemon's wallet writer. Restore service on every exit.
@@ -239,7 +250,7 @@ jobs:
           cd /apps/continuum/agent/repo/agent
           timeout --signal=TERM --kill-after=10s 360s \
             runuser -u continuum -- env CONTINUUM_BENCHMARK_APPROVED=1 \
-            CONTINUUM_AGENT_STOPPED=1 node ops/benchmark-streaming.mjs "$run"
+            CONTINUUM_AGENT_STOPPED=1 node ops/benchmark-streaming.mjs "$run" "$target"
           REMOTE
 
       - name: Verify live version matches

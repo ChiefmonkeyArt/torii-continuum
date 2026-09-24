@@ -1,5 +1,28 @@
 # Continuum — Session Handover
 
+## v0.2.184-alpha: refund compatibility + remaining fast control
+
+The first live benchmark proved GitHappens DeepSeek is genuinely streaming in
+the provider/agent path but reasons before it answers: reasoning 6.9–19.8s,
+first reply 19.8s, 114 text events spread over 7.4s, 27.8s total, 1 sat allocated
+and 731-msat encrypted dust. The browser path remains independently unverified.
+
+Redshift failed and its 2-sat refund remained encrypted. Read-only inspection
+confirmed balance/reservation zero and a replayable valid Cashu-B token:
+Minibits, sat unit, one proof, 2 sats, configured mint, shortened v2 keyset ID.
+The wallet's first decode lacked the mint map; this is a compatibility bug.
+Do not delete the claim or retry funding before v184.
+
+v184 switches pre-whitelist inspection to `getTokenMetadata`, checks mint and
+sat unit, then delegates decode/proof validation to the loaded mint wallet with
+full IDs. Startup recovery should import the refund and remove the active claim.
+Verify wallet and recovery without printing proofs. The `fast_control`
+benchmark target makes at most two cheap Llama calls, without repeating
+DeepSeek. Keep the saved DeepSeek model and spending limits unchanged.
+
+Compare the control samples against the one successful DeepSeek sample with
+small-sample caveats. A recommendation does not authorize a saved-model change.
+
 ## v0.2.183-alpha: explicitly approved live streaming comparison
 
 The owner still observes about 20 seconds followed by a complete answer and
