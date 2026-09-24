@@ -99,9 +99,24 @@ test('first failure halts all subsequent tests rather than risking repeat paymen
   assert.equal(result.rows.length, 1);
   assert.deepEqual(deps.count(), { sends: 1, requests: 1 });
 });
+test('fast control runs only the cheap alternative twice and never mutates the saved DeepSeek config', async () => {
+  const copy = JSON.stringify(cfg), deps = { ...seams(), target: 'fast_control' };
+  const result = await benchmark(cfg, deps);
+  assert.equal(result.benchmark_target, 'fast_control');
+  assert.equal(result.rows.length, 2);
+  assert.ok(result.rows.every(row => row.model === 'llama-3.1-8b-instruct'));
+  assert.deepEqual(deps.count(), { sends: 2, requests: 2 });
+  assert.equal(JSON.stringify(cfg), copy);
+});
+test('unknown benchmark targets fail before allocating funds', async () => {
+  const deps = { ...seams(), target: 'anything' };
+  await assert.rejects(benchmark(cfg, deps), /invalid_target/);
+  assert.deepEqual(deps.count(), { sends: 0, requests: 0 });
+});
 test('workflow makes benchmark opt-in, stops the daemon for wallet isolation and restores it on exit', async () => {
   const workflow = await readFile(new URL('../../.github/workflows/deploy-continuum-vps.yml', import.meta.url), 'utf8');
   assert.match(workflow, /if: inputs\.benchmark == true/);
+  assert.match(workflow, /benchmark_target/);
   assert.match(workflow, /trap 'systemctl start continuum-agent\.service' EXIT/);
   assert.match(workflow, /systemctl stop continuum-agent\.service/);
   assert.match(workflow, /runuser -u continuum/);

@@ -24,7 +24,7 @@
 import { mkdir, readFile, writeFile, readdir, rename, open } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { Mint, Wallet, getEncodedToken, getDecodedToken, CheckStateEnum, MintQuoteState } from '@cashu/cashu-ts';
+import { Mint, Wallet, getEncodedToken, getTokenMetadata, CheckStateEnum, MintQuoteState } from '@cashu/cashu-ts';
 import { agentRoot } from './config.mjs';
 
 // Non-reversible short id for a mint URL — lets health output/logs reference a
@@ -253,7 +253,11 @@ export async function createWallet(cfg, log, deps = {}) {
   async function receive(encodedToken) {
     let decoded;
     try {
-      decoded = getDecodedToken(encodedToken);
+      // Metadata decoding identifies the mint without resolving short v2
+      // keyset IDs. The whitelisted, loaded Wallet resolves and validates those
+      // IDs during receive(); decoding first without its keysets rejects valid
+      // modern Cashu-B refunds before they can ever reach that validation.
+      decoded = getTokenMetadata(encodedToken);
     } catch (e) {
       return { ok: false, reason: `bad token encoding: ${e.message}` };
     }
@@ -264,6 +268,7 @@ export async function createWallet(cfg, log, deps = {}) {
     if (!mints.has(mintUrl)) {
       return { ok: false, reason: `mint not whitelisted: ${mintUrl}. Add it to cashu.mints in config.yaml.` };
     }
+    if (decoded.unit !== 'sat') return { ok: false, reason: 'token unit must be sat' };
 
     const wallet = mints.get(mintUrl);
     let received;

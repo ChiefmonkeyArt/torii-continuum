@@ -1,5 +1,23 @@
 # Torii Continuum — Progress log
 
+## v0.2.184-alpha: refund keyset compatibility and control isolation (2026-09-24)
+
+Live benchmark: GitHappens DeepSeek sent 156 private-reasoning events from
+6.9–19.8s, then 114 reply-text events over 7.4s; total 27.8s. This demonstrates
+real answer streaming in the provider/agent path and identifies reasoning
+latency. Redshift failed and triggered the stop after two total allocations.
+
+Sanitized refund inspection confirmed the retained claim is a valid 2-sat
+Cashu-B token from configured Minibits with a shortened v2 keyset ID. The wallet
+decoded too early without the mint's full ID map. v184 uses token metadata for
+mint/unit gating and the loaded wallet for full decode/proof validation.
+The separate fast-control target runs only two cheap Llama trials, avoiding
+repeated DeepSeek charges. Saved settings remain intact.
+
+Update-All: wallet/benchmark/workflow/tests, root and agent package/lock version,
+README, strategy/todo/progress/handoff, benchmark ADR. No normal-model, limits,
+Suite or other-app changes. Merge/tag/deploy/recovery/control evidence pending.
+
 ## v0.2.183-alpha: bounded streaming test tooling (2026-09-24)
 
 The owner explicitly requested a paid comparison after reporting persistent

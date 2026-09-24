@@ -2,6 +2,12 @@
 
 Living document. This will change as we learn.
 
+**Thinking versus answer streaming (2026-09-24):** distinguish private model
+reasoning activity from user-visible answer text. DeepSeek produced reasoning
+events from 6.9–19.8s, then genuinely streamed answer text for 7.4s in the direct
+provider test. Never show hidden reasoning content or fake typing. Compare an
+isolated cheap fast control before proposing any saved-model change.
+
 **Benchmark before model changes (2026-09-24):** the owner now explicitly
 authorizes bounded paid response-speed testing. Prefer testing DeepSeek through
 different providers before a small fast-model control. Compare time to actual

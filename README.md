@@ -2,6 +2,16 @@
 
 An app builder, project engine and marketplace for bot work — a gateway into the Torii ecosystem.
 
+## v0.2.184-alpha: modern refund recovery and isolated speed control
+
+Cashu-B refunds with shortened v2 keyset identifiers are now identified from
+metadata, then decoded by the loaded, whitelisted mint wallet with its full
+keyset map. Mint whitelist, sat-unit, proof validation and encrypted recovery
+remain enforced. This fixes a valid 2-sat benchmark refund that was retained.
+
+The manual benchmark can separately run only the cheap fast-model control,
+without repeating DeepSeek/provider trials or changing the saved model.
+
 ## v0.2.183-alpha: bounded streaming comparison
 
 The manual deployment workflow optionally runs an explicitly approved paid
