@@ -1,0 +1,62 @@
+/* Extend Continuum's established warm, locally hosted design system. */
+.connections-page { max-width: 1120px; margin: 0 auto; padding-bottom: 24px; }
+body:has(.connections-page) .chat-dock { display: none; }
+.main:has(> .connections-page) { padding-bottom: 24px; }
+.connections-header { max-width: 740px; margin-bottom: 32px; }
+.connections-header h1 { font-size: clamp(26px, 3vw, 36px); font-weight: 550; line-height: 1.2; margin: 12px 0; }
+.connections-header p { line-height: 1.7; }
+.connections-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(240px, 1fr); gap: 28px; align-items: start; }
+.connection-card { padding: 24px; border: 1px solid hsl(var(--border)); border-radius: 14px; background: hsl(var(--card)); min-width: 0; }
+.connection-card-heading { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+.connection-card-heading h2, .connection-card-heading p { margin: 0; }
+.connection-card-heading > .connection-badge { margin-left: auto; }
+.connection-mark { display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid hsl(var(--border)); border-radius: 12px; font-weight: 600; color: hsl(var(--primary)); }
+.connection-badge { display: inline-flex; font-size: 12px; line-height: 1.5; border: 1px solid hsl(var(--border)); padding: 3px 8px; border-radius: 6px; color: hsl(var(--muted-foreground)); vertical-align: middle; }
+.connection-steps { padding-left: 20px; display: flex; gap: 28px; flex-wrap: wrap; font-size: 12px; color: hsl(var(--muted-foreground)); }
+.connection-feedback { min-height: 22px; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.connection-rules { padding: 24px 0; }
+.connection-rules h2 { font-size: 22px; font-weight: 550; line-height: 1.35; margin: 12px 0 20px; }
+.connection-rules li { margin-bottom: 14px; line-height: 1.65; }
+.connections-page .connection-rules li, .connections-page summary { color: hsl(var(--foreground)); }
+.connection-rules ul { padding-left: 18px; }
+.connection-rules p, .connection-body p, .connection-next p { line-height: 1.7; font-size: 14px; }
+.connection-body a.btn { display: inline-flex; align-items: center; text-decoration: none; }
+.connections-page button, .connections-page a.btn, .connections-page summary, .connections-page input:not([type="checkbox"]), .connections-page select { min-height: 44px; }
+.connection-form { display: grid; gap: 10px; margin-top: 20px; }
+.connection-form input, .repository-picker select, .repository-picker input { width: 100%; min-width: 0; padding: 10px; background: hsl(var(--background)); border: 1px solid hsl(var(--input)); border-radius: 6px; color: hsl(var(--foreground)); font: inherit; }
+.connection-form label, .repository-picker label { font-size: 13px; margin-top: 8px; }
+.connection-setup { margin-top: 24px; padding-top: 12px; border-top: 1px solid hsl(var(--border)); }
+.connection-setup summary, .connection-next summary { cursor: pointer; line-height: 44px; font-size: 14px; }
+.connection-setup ol { padding-left: 20px; font-size: 14px; line-height: 1.7; }
+.connection-setup li { margin-bottom: 12px; }
+.connection-consent { display: flex; gap: 12px; margin: 24px 0; font-size: 14px; line-height: 1.65; align-items: flex-start; }
+.connection-consent input { width: 20px; height: 20px; flex-shrink: 0; margin-top: 2px; }
+.connection-code { padding: 20px; background: hsl(var(--primary) / .06); border: 1px solid hsl(var(--primary) / .25); border-radius: 10px; }
+.connection-code strong { display: block; font-size: 28px; letter-spacing: .15em; overflow-wrap: anywhere; }
+.connection-code .btn { margin: 8px 8px 0 0; }
+.connection-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.connection-links, .repository-picker { border-top: 1px solid hsl(var(--border)); padding-top: 20px; margin-top: 24px; }
+.connection-linked-row, .repository-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; border-bottom: 1px solid hsl(var(--border)); }
+.connection-linked-row > div, .repository-row > div { min-width: 0; overflow-wrap: anywhere; }
+.connection-linked-row button, .repository-row button { flex-shrink: 0; }
+.repository-row strong { display: block; margin-bottom: 8px; }
+.repository-row p { margin-bottom: 0; }
+.repository-picker { display: grid; gap: 12px; }
+.repository-picker h3 { margin-bottom: 0; }
+.connection-next { display: flex; align-items: start; justify-content: space-between; gap: 28px; margin-top: 28px; }
+.connection-next > div { max-width: 620px; }
+.connection-next h2 { font-size: 20px; margin: 12px 0 0; }
+.connection-next details { max-width: 320px; }
+.project-repository-entry { border-top: 1px solid hsl(var(--border)); margin-top: 24px; padding-top: 16px; }
+.project-repository-entry a { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; }
+@media (max-width: 1000px) {
+  .connections-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .connection-rules { padding: 16px 8px; }
+}
+@media (max-width: 600px) {
+  .connection-card { padding: 16px; }
+  .connection-steps { display: grid; gap: 8px; }
+  .connection-linked-row, .repository-row, .connection-next { flex-direction: column; align-items: stretch; }
+  .connection-card-heading > .connection-badge { margin-left: 0; }
+  .connection-next details { max-width: none; }
+}

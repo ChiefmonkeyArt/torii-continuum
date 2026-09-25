@@ -1,5 +1,27 @@
 # Torii Continuum — Progress log
 
+## v0.2.188-alpha: read-only GitHub connections
+
+Owner approved the connection-flow/permission draft, initial read-only GitHub
+flow and Settings screen. Baseline main/tag/live v0.2.187-alpha matched commit
+a7500d9f0760760e5dce0448a7260d0cc929f3d7. Added owner-gated fixed-origin GitHub
+device-flow routes, encrypted expiring service credentials, selected-repository
+permission checks, paginated metadata browsing and local project links.
+
+Settings UI preserves the amber workspace, adds project entry points, consent,
+pending/expired/retry/disconnect states and clearly planned nGit. Design/flow,
+custody distinction, next phases and rollback are in the repository-connections
+ADR. Existing payments, model selection and keys stay untouched. Real GitHub
+authorization requires operator registration/approval and is not simulated.
+Complete CI, browser QA, release/deploy and independent evidence on the PR.
+
+Local verification: 1,156 frontend and 724 agent tests pass. Browser fixtures
+exercise setup, consent, approval/cancel, repository pagination/search, project
+link/reload/unlink, disconnect/cancel, expiry, permission-error retry and mobile
+fit. Desktop/mobile and light/dark inspected; no paid model calls or real GitHub
+authorization performed. Read-only guard/secret isolation remains the release
+boundary, not an assertion of production account setup.
+
 ## v0.2.187-alpha: conversation workspace and private history
 
 Implementation prepared on 2026-09-24 under explicit owner approval. Added

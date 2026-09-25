@@ -1,5 +1,35 @@
 # Continuum Agent — VPS bring-up
 
+## Read-only GitHub connections
+
+The owner-gated `/api/connections/github` family is available from v0.2.188-alpha.
+See [flow and permission contract](../docs/adr-repository-connections.md) for
+one-time GitHub App setup, expiry and deliberate limits.
+
+| Method | Suffix | Purpose |
+|---|---|---|
+| GET | (none) | Sanitized status, public setup, current local project links |
+| PUT | `/setup` | Verify public `{app_id, client_id, slug}`; no secrets accepted |
+| POST | `/start` | `{consent:true}` begins device approval |
+| POST | `/poll`, `/cancel` | `{id}` bound to initiating owner/sign-in |
+| POST | `/disconnect` | `{confirm:true}` clears current credential and links locally |
+| GET | `/installations` | Approved, matching, selected-repository installations |
+| GET | `/repositories?installation=ID&page=N` | Bounded metadata page |
+| PUT | `/project` | `{installation,page,repository,project}`; fresh grant validation |
+| DELETE | `/project/:slug` | Remove a local link only |
+
+Credential records use `memory/secrets/github_<owner-hash>.enc`, atomic encrypted
+replacement and the existing operator at-rest key. No token is returned through
+these routes. The AI never receives credentials or repository code from connecting.
+Only fixed GitHub GETs and device-authorization POSTs exist; there is no write,
+clone or shell endpoint. A GitHub authorization failure returns connector status
+409 rather than logging the user out of Continuum. User tokens expire within
+eight hours; refresh tokens are discarded and reconnection is currently manual.
+Disconnect is local removal, not remote app revocation or backup erasure.
+
+This initial setup validates public app metadata. Operator registration/approval
+is required; a deployed screen with no app configuration is not a connected account.
+
 The Continuum agent is a small Fastify daemon that owns three invariants
 for a single operator:
 

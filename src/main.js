@@ -33,6 +33,7 @@ import { renderMemory } from './views/memory.js';
 import { renderNoticeboard } from './views/noticeboard.js';
 import { renderSessions } from './views/sessions.js';
 import { renderWorkspace, renderNewChat } from './views/workspace.js';
+import { renderConnections } from './views/connections.js';
 
 function setLandingMode(on) {
   releaseChatWorkspace();
@@ -137,6 +138,8 @@ function boot() {
   route('/marketplace', guarded('/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent()); renderSidebar(); }));
   route('/routstr', guarded('/routstr', () => { setLandingMode(false); renderRoutstr(mainContent()); renderSidebar(); }));
   route('/team', guarded('/team', () => { setLandingMode(false); renderTeam(mainContent()); renderSidebar(); }));
+  route('/settings/connections', guarded('/settings/connections', () => { setLandingMode(false); renderConnections(mainContent()); renderSidebar(); }));
+  route('/settings/connections/:slug', guarded('/settings/connections/:slug', ({ slug }) => { setLandingMode(false); renderConnections(mainContent(), { project: slug }); renderSidebar(); }));
   route('/genesis', guarded('/genesis', () => { setLandingMode(false); renderGenesis(mainContent()); renderSidebar(); }));
   route('/memory', guarded('/memory', () => { setLandingMode(false); renderMemory(mainContent()); renderSidebar(); }));
   route('/noticeboard', guarded('/noticeboard', () => { setLandingMode(false); renderNoticeboard(mainContent()); renderSidebar(); }));
@@ -157,6 +160,7 @@ function boot() {
   route('/demo/marketplace', demoRoute('/demo/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent(), demoOpts); renderSidebar(); }));
   route('/demo/routstr', demoRoute('/demo/routstr', () => { setLandingMode(false); renderRoutstr(mainContent(), demoOpts); renderSidebar(); }));
   route('/demo/team', demoRoute('/demo/team', () => { setLandingMode(false); renderTeam(mainContent(), demoOpts); renderSidebar(); }));
+  route('/demo/settings/connections', demoRoute('/demo/settings/connections', () => { setLandingMode(false); renderConnections(mainContent(), { demo: true }); renderSidebar(); }));
   // Demo equivalents for every remaining sidebar/real route. These have no
   // bespoke mockup view, so they render the shared demo stub (banner + one fake
   // card): the whole /demo/* subtree is navigable with zero guarded bounces and

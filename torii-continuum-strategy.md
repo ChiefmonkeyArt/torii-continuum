@@ -2,6 +2,14 @@
 
 Living document. This will change as we learn.
 
+**Read-only repository connections (2026-09-25):** Settings → Connections is
+the single owner-controlled entry point for project repositories. Start with
+a self-hosted GitHub App/device flow, selected repositories only, explicit
+encrypted-token consent and local project links. No source-code upload, clone,
+execution or GitHub writes. nGit remains a remote-signer design until compatibility
+and permission boundaries are implemented. Automatic renewal and team access
+are later work. See `docs/adr-repository-connections.md`.
+
 **Conversation-first workspace (2026-09-24):** Continuum's everyday interface
 centres on independent conversations and project work, not administrative
 navigation. New chat, search, pinned history and projects lead the sidebar;

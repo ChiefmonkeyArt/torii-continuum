@@ -2,6 +2,17 @@
 
 An app builder, project engine and marketplace for bot work — a gateway into the Torii ecosystem.
 
+## v0.2.188-alpha: read-only repository connections
+
+Open **Settings & tools → Connections**, or **Connect repository** in a project's
+Context panel. The initial GitHub App flow supports selected-repository access,
+expiring encrypted server-side credentials, repository metadata browsing and
+local project links. It requires a one-time operator-owned GitHub App registration
+and explicit GitHub approval. It does not clone, execute, publish or send code to
+AI. nGit is visibly planned, not yet connected. See the
+[connection flow, setup and permission contract](docs/adr-repository-connections.md)
+for prerequisites, expiry, revocation and next phases.
+
 ## v0.2.187-alpha: conversation-first project workspace
 
 New chat, search, private pins, projects and recent conversations now lead the

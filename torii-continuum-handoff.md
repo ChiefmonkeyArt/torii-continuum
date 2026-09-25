@@ -1,5 +1,22 @@
 # Continuum — Session Handover
 
+## v0.2.188-alpha: GitHub connection foundation
+
+Requested: connection/permission draft, read-only GitHub flow, Settings screen.
+Implementation: `agent/core/github-connection.mjs`, protected routes, encrypted
+owner records using opt-in atomic secret-store writes, `src/views/connections.js`,
+API helpers/styles and project Context entry. See `docs/adr-repository-connections.md`
+for scope, setup and approval rules. No token or human key entry form.
+
+One-time GitHub App registration remains with the operator. Public app metadata
+must be verifiable; Contents/Metadata read only, selected repositories, Device
+flow and expiring user tokens. Tokens are encrypted server-side and excluded
+from AI/browser payloads. They expire within eight hours; refresh tokens are
+discarded, so reconnection is currently deliberate. Local disconnect is not
+remote GitHub revocation. Source code reads/AI uploads, execution, writes, nGit
+pairing and team roles are not part of this slice. Final CI/runtime evidence
+belongs on its PR. Rollback baseline: v0.2.187-alpha / a7500d9f0760760e5dce0448a7260d0cc929f3d7.
+
 ## v0.2.187-alpha: navigation, history and project workspace
 
 Owner authorized implementation and requested a rollback version check first.

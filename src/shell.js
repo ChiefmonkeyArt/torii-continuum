@@ -15,6 +15,7 @@ import { navClickTarget } from './components/nav-link.js';
 import { renderLoginStatus } from './components/login-status.js';
 
 const NAV_ITEMS = [
+  { id: 'connections', label: 'Connections', icon: iconProjects, path: '/settings/connections' },
   { id: 'projects',    label: 'Projects',    icon: iconProjects,    path: '/projects' },
   { id: 'marketplace', label: 'Marketplace', icon: iconMarket,      path: '/marketplace' },
   { id: 'routstr',     label: 'Routstr',     icon: iconRoutstr,     path: '/routstr' },

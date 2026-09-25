@@ -36,7 +36,7 @@
  */
 
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes, createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile, unlink, readdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, unlink, readdir, open, rename } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 const ENVELOPE_VERSION = 1;
@@ -104,7 +104,7 @@ export function createSecretStore(cfg, deps = {}) {
    * @param {string} name
    * @param {string} plaintext
    */
-  async function put(name, plaintext) {
+  async function put(name, plaintext, { atomic = false } = {}) {
     assertName(name);
     if (typeof plaintext !== 'string' || plaintext.length === 0) {
       throw new Error('secretstore: plaintext must be a non-empty string');
@@ -123,7 +123,19 @@ export function createSecretStore(cfg, deps = {}) {
       updated_at: new Date().toISOString(),
     };
     await mkdir(dir, { recursive: true, mode: 0o700 });
-    await writeFile(fileFor(name), JSON.stringify(envelope), { mode: 0o600 });
+    if (atomic) {
+      // Opt-in durable replacement for connector records. Existing callers keep
+      // their behavior; a failed write cannot truncate a prior connection.
+      const temp = fileFor(name) + '.' + randomBytes(8).toString('hex') + '.tmp';
+      try {
+        const fh = await open(temp, 'wx', 0o600);
+        try { await fh.writeFile(JSON.stringify(envelope)); await fh.sync(); }
+        finally { await fh.close(); }
+        await rename(temp, fileFor(name));
+        const dh = await open(dir, 'r');
+        try { await dh.sync(); } finally { await dh.close(); }
+      } finally { await unlink(temp).catch(e => { if (e.code !== 'ENOENT') throw e; }); }
+    } else await writeFile(fileFor(name), JSON.stringify(envelope), { mode: 0o600 });
     // Never log the plaintext; a content-independent fingerprint is enough to
     // correlate "stored X" with "loaded X" in the audit trail.
     log.info(`[secretstore] stored ${name} (fp=${fingerprint(plaintext)})`);
