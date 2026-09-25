@@ -3,6 +3,7 @@ import * as store from '../data/store.js';
 import { navigate } from '../router.js';
 import { attachChatWorkspace, newConversation, openConversation, sessionLibrary, historyTitle, setChatContext } from '../chat.js';
 import { renderProjectTabs, renderMilestones, renderFiles, renderTodos } from './projectHome.js';
+import { renderProjectRepositoryLink } from './connections.js';
 
 export function renderNewChat() {
   navigate('/sessions/' + newConversation(), { replace: true });
@@ -87,7 +88,7 @@ export function renderWorkspace(mount, { id, project = null }) {
         if (!rows.length) contents.append(h('p', { class: 'muted', text: 'Start a chat here to keep it with this project.' }));
         for (const row of rows) contents.append(h('a', { class: 'workspace-session-link', href: '#/sessions/' + row.id, text: historyTitle(row) }));
       } else {
-        contents.append(h('h2', { text: 'Project context' }), h('p', { class: 'muted', text: projectRecord.content.description || 'Add a project description to keep your goal in view.' }), renderMilestones(project, store));
+        contents.append(h('h2', { text: 'Project context' }), h('p', { class: 'muted', text: projectRecord.content.description || 'Add a project description to keep your goal in view.' }), renderMilestones(project, store), renderProjectRepositoryLink(project));
       }
     };
     for (const name of ['Context', 'Tasks', 'Files', 'Chats']) tabs.append(h('button', { type: 'button', text: name, onclick: () => show(name) }));

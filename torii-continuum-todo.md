@@ -11,10 +11,20 @@
 
 ### Active tasks
 
+- **CONT-CONNECTIONS-READONLY (v0.2.188-alpha):** implement Settings → Connections,
+  GitHub App setup validation/device authorization, encrypted expiring credentials,
+  approved repository browsing and project links. Ship only after route/security,
+  full regression and browser checks; attach release/runtime evidence to the PR.
+  A real operator GitHub App registration/approval remains a one-time prerequisite;
+  do not misrepresent an unconfigured instance as connected.
+- **CONT-CONNECTIONS-NEXT:** source-content selection, automatic token renewal,
+  nGit signer integration, isolated code execution, reviewed publication and
+  team roles are deferred. No private-code AI upload follows from connecting.
+
 - **CONT-WORKSPACE-HISTORY (v0.2.187-alpha):** navigation/profile restructuring,
   independent encrypted history, private pins/titles, search and project
-  workspace layout implemented. Complete full CI, desktop/mobile checks, merge,
-  tag, deploy and independent live verification before calling shipped. Baseline
+  workspace layout shipped with passing CI, desktop/mobile checks, merge,
+  tag, deploy and independent live verification in [PR #223](https://github.com/ChiefmonkeyArt/torii-continuum/pull/223). Baseline
   rollback: v0.2.186-alpha at f81ae2ad8a30e937ef9bd9b4c8141d0ecc5e0177.
   Runtime completion evidence belongs on the release PR.
 - **CONT-PROJECT-ENGINE-NEXT:** isolated build/edit/preview jobs, checkpoints,

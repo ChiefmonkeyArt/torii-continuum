@@ -27,6 +27,7 @@ import { createAuth } from './core/auth.mjs';
 import { createWallet } from './core/wallet.mjs';
 import { createRoutstr } from './core/routstr.mjs';
 import { createChatModelSettings, validModelId } from './core/chat-model-settings.mjs';
+import { createGitHubConnection, registerGitHubRoutes } from './core/github-connection.mjs';
 import { createOllama } from './core/ollama.mjs';
 import { createModelRouter } from './core/model-router.mjs';
 import { createChatSkill } from './skills/chat.mjs';
@@ -394,6 +395,11 @@ async function requireAdmin(req, reply) {
   if (!check.ok) return reply.code(401).send({ error: `session invalid: ${check.reason}` });
   req.session = { npub: check.npub, exp: check.exp };
 }
+
+registerGitHubRoutes(app, { requireAdmin, connection: deps.githubConnection ?? createGitHubConnection({
+  secretStore,
+  projectExists: slug => projectStore.get().projects.some(p => p?.content?.slug === slug),
+}) });
 
 // ─────────────────────────────────────────────────────────────
 // Public routes

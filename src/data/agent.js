@@ -473,6 +473,9 @@ export async function walletNwcInvoiceStatus(hash)       { return req('GET',  `/
 export async function walletPendingQuotes()              { return req('GET',  '/api/wallet/quotes/pending'); }
 export async function routstrModels() { return req('GET', '/api/routstr/models', null, { timeoutMs: 35000 }); }
 export async function selectRoutstrModel(model) { return req('POST', '/api/routstr/model', { model }, { timeoutMs: 35000 }); }
+export function githubConnectionRequest(method, suffix, body) {
+  return req(method, '/api/connections/github' + suffix, body, { timeoutMs: 45000 });
+}
 /** POST /api/wallet/quotes/:quote/resume — complete one stuck top-up (idempotent). */
 export async function walletResumeQuote(quote)           { return req('POST', `/api/wallet/quotes/${encodeURIComponent(quote)}/resume`); }
 
