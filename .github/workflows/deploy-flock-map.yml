@@ -1,0 +1,97 @@
+name: Deploy Flock Map to VPS
+
+# Install the Flock Surveillance Map static app on the operator's canonical VPS,
+# mounted at /flock-map/ alongside quest and continuum.
+#
+# Reuses the repo's existing VPS deploy SSH secrets (same broad-sudo `ubuntu`
+# deploy key the Continuum deploys use). See deploy-continuum-vps.yml for the
+# host-key trust-anchor rationale (FE-14): the live ed25519 fingerprint must
+# match VPS_DEPLOY_HOST_KEY before any remote command runs.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flock-map-vps-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out static bundle + installer
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            flock-map
+          sparse-checkout-cone-mode: false
+
+      - name: Install SSH key (host-key verified)
+        env:
+          SSH_KEY: ${{ secrets.VPS_DEPLOY_SSH_KEY }}
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+          VPS_DEPLOY_HOST_KEY: ${{ secrets.VPS_DEPLOY_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          umask 077
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519_torii
+          chmod 600 ~/.ssh/id_ed25519_torii
+          host_only="${SSH_HOST#*@}"
+          scan="$(mktemp)"
+          ssh-keyscan -T 10 -t ed25519 "$host_only" > "$scan" 2>/dev/null || true
+          live_fp="$(ssh-keygen -lf "$scan" -E sha256 2>/dev/null | awk 'NF>=2 {print $2}' | head -n1)"
+          rm -f "$scan"
+          expected_fp="${VPS_DEPLOY_HOST_KEY}"
+          [[ "$expected_fp" == SHA256:* ]] || expected_fp="SHA256:${expected_fp}"
+          if [[ -z "$live_fp" || "$live_fp" != "$expected_fp" ]]; then
+            echo "::error::VPS host key mismatch: expected $expected_fp, got ${live_fp:-<none>}"
+            exit 1
+          fi
+          ssh-keyscan -T 10 -t ed25519 "$host_only" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Upload release bundle + installer
+        env:
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          tar -czf flock-release.tar.gz -C flock-map index.html cams.js manifest.json
+          scp -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes -o BatchMode=yes \
+              -o ConnectTimeout=15 flock-release.tar.gz flock-map/install-flock-map.sh \
+              "$SSH_HOST":/tmp/
+
+      - name: Install on VPS
+        env:
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes -o BatchMode=yes \
+              -o ConnectTimeout=15 "$SSH_HOST" 'sudo -n bash /tmp/install-flock-map.sh'
+
+      - name: Verify live
+        env:
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          host_only="${SSH_HOST#*@}"
+          for i in $(seq 1 8); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://${host_only}/flock-map/")
+            echo "poll $i: http=$code"
+            if [ "$code" = "200" ]; then
+              echo "flock-map is live"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::flock-map not serving 200 after retries"
+          exit 1
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519_torii ~/.ssh/known_hosts
