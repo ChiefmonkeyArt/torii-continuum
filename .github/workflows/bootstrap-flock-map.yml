@@ -58,10 +58,10 @@ jobs:
           SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
         run: |
           set -euo pipefail
-          PUB="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJWcNv7PQ3NMYdIhcIOKkUtn7hxEsiNi9tY3K7ijsyF1 flock-map-deploy@github-actions"
+          PUB_BLOB="AAAAC3NzaC1lZDI1NTE5AAAAIJWcNv7PQ3NMYdIhcIOKkUtn7hxEsiNi9tY3K7ijsyF1"
           ssh -i ~/.ssh/id_ed25519_bootstrap -o IdentitiesOnly=yes \
               -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
-              "$SSH_HOST" sudo -n bash -s -- "$PUB" < ops/bootstrap-vps.sh
+              "$SSH_HOST" sudo -n bash -s -- "$PUB_BLOB" < ops/bootstrap-vps.sh
 
       - name: Clean up SSH key
         if: always()
