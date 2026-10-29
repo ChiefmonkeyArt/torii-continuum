@@ -3,7 +3,10 @@
 . /opt/fips-trial/env   # also MEMBERS=npub1alice...,npub1bob...
 export NGIT_DOMAIN="$VPS_NPUB.fips:7334" NGIT_BIND_ADDRESS="[$VPS_FD]:7334"
 export NGIT_PRIVATE_MODE=true NGIT_PRIVATE_MEMBERS="$MEMBERS"
-export NGIT_USER_INDEX_RELAYS="ws://[$VPS_FD]:10547"   # no purplepag.es lookups
+# Private mode signs credentials for https:// unless the domain is loopback; the
+# mesh is already encrypted, so declare the plain-http origin explicitly.
+export NGIT_PRIVATE_PUBLIC_ORIGIN="http://$VPS_NPUB.fips:7334"
+export NGIT_USER_INDEX_RELAYS="ws://fips-trial-relay:10547"   # no purplepag.es lookups
 export NGIT_RELAY_DATA_PATH=/opt/fips-trial/run/grasp/relay NGIT_GIT_DATA_PATH=/opt/fips-trial/run/grasp/git
 export NGIT_RELAY_NAME="Torii FIPS trial" NGIT_LOG_LEVEL=info
 mkdir -p /opt/fips-trial/run/grasp && cd /opt/fips-trial/run/grasp

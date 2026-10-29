@@ -1,0 +1,242 @@
+name: Teams FIPS trial (manual)
+
+# docs/trials/teams-fips/README.md, run end to end. Manual only. The VPS side
+# is ops/fips-trial/vps.sh (root, over the pinned deploy SSH key); the second
+# machine is a throwaway GitHub runner running ops/fips-trial/runner.sh with a
+# real FIPS node. Logs are public: scripts mask IPv4/global IPv6, and the
+# VPS hostname is masked from the deploy secret.
+#
+#   status    read-only report
+#   trial     install (firewall first) -> admit runner -> services -> Q1, Q2, Q4
+#             (+ Q3 via test-uk01 if route_test) -> restore admit list = member_nodes
+#   admit     set the admitted team devices (member_nodes) and private-git
+#             members (git_members) without running the tests
+#   teardown  remove everything the trial installed (phase 6)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "status | trial | admit | teardown"
+        required: true
+        type: choice
+        options: [status, trial, admit, teardown]
+        default: status
+      member_nodes:
+        description: "Team FIPS node npubs to admit (comma-separated, from `fipsctl keygen` / /etc/fips/fips.pub)"
+        required: false
+        default: ""
+      git_members:
+        description: "Team Nostr npubs allowed to read the private git server (comma-separated)"
+        required: false
+        default: ""
+      route_test:
+        description: "Q3: also test a routed session through the public test node test-uk01"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+env:
+  NGIT_GRASP_REPO: https://ngit.dev/ngit-grasp.git
+  NGIT_GRASP_COMMIT: 9493a5a40fb59be4ba04750875b36ab815f456f7   # tag v3.0.10
+  NAK_URL: https://github.com/fiatjaf/nak/releases/download/v0.22.0/nak-v0.22.0-linux-amd64
+  NAK_SHA: f4cb05c42e2cab2d85f436c42aece1f6e10499e1166b6e0ad1fd3e3973b70712
+  NGIT_URL: https://github.com/DanConwayDev/ngit-cli/releases/download/v3.0.5/ngit-v3.0.5-x86_64-unknown-linux-musl.tar.gz
+  NGIT_SHA: d908fd2e8b818ad3c2427b54245c4dc98e765f4840846a321c98343ff3a773ba
+
+jobs:
+  build-grasp:
+    if: inputs.action == 'trial' || inputs.action == 'admit'
+    runs-on: ubuntu-24.04   # glibc 2.39; the VPS runs 2.43
+    timeout-minutes: 40
+    steps:
+      - name: Cache build
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: out
+          key: ngit-grasp-${{ env.NGIT_GRASP_COMMIT }}-ubuntu-24.04
+      - name: Build ngit-grasp at the pinned commit
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -q libssl-dev pkg-config >/dev/null
+          git init -q src && cd src
+          git fetch -q --depth 1 "$NGIT_GRASP_REPO" "$NGIT_GRASP_COMMIT"
+          git checkout -q FETCH_HEAD
+          [ "$(git rev-parse HEAD)" = "$NGIT_GRASP_COMMIT" ]
+          rustup toolchain install stable --profile minimal -q
+          cargo +stable build --release --locked -p ngit-grasp
+          mkdir -p ../out && cp target/release/ngit-grasp ../out/
+          cd ../out && sha256sum ngit-grasp | cut -d' ' -f1 > ngit-grasp.sha256
+      - run: cat out/ngit-grasp.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ngit-grasp
+          path: out/
+          retention-days: 1
+
+  run:
+    needs: [build-grasp]
+    if: always() && (needs.build-grasp.result == 'success' || needs.build-grasp.result == 'skipped')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ACTION: ${{ inputs.action }}
+      MEMBER_NODES: ${{ inputs.member_nodes }}
+      GIT_MEMBERS: ${{ inputs.git_members }}
+      ROUTE_TEST: ${{ inputs.route_test }}
+      W: ${{ github.workspace }}/w
+      BIN: ${{ github.workspace }}/w/bin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install SSH key and verify the pinned VPS host key
+        env:
+          SSH_KEY: ${{ secrets.VPS_DEPLOY_SSH_KEY }}
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+          VPS_DEPLOY_HOST_KEY: ${{ secrets.VPS_DEPLOY_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          [[ -n "${SSH_KEY:-}" && -n "${SSH_HOST:-}" && -n "${VPS_DEPLOY_HOST_KEY:-}" ]] || { echo "::error::deploy secrets missing"; exit 1; }
+          host_only="${SSH_HOST#*@}"
+          echo "::add-mask::$host_only"
+          for a in $(getent ahosts "$host_only" | awk '{print $1}' | sort -u); do echo "::add-mask::$a"; done
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          umask 077
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519_torii
+          scan="$(mktemp)"
+          ssh-keyscan -T 10 -t ed25519 "$host_only" > "$scan" 2>/dev/null || true
+          live_fp="$(ssh-keygen -lf "$scan" -E sha256 2>/dev/null | awk 'NF >= 2 {print $2}' | head -n1)"
+          expected_fp="$VPS_DEPLOY_HOST_KEY"; [[ "$expected_fp" == SHA256:* ]] || expected_fp="SHA256:$expected_fp"
+          [[ -n "$live_fp" && "$live_fp" == "$expected_fp" ]] || { echo "::error::VPS host key mismatch"; exit 1; }
+          cat "$scan" >> ~/.ssh/known_hosts; rm -f "$scan"
+          echo "VPS_HOST=$host_only" >> "$GITHUB_ENV"
+          # Pin the VPS address so the runner's own fips-dns setup cannot break SSH.
+          ip=$(getent ahostsv4 "$host_only" | awk 'NR==1{print $1}')
+          [ -n "$ip" ] && echo "$ip $host_only" | sudo tee -a /etc/hosts >/dev/null
+          printf '#!/bin/sh\nexec ssh -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 "%s" "$@"\n' "$SSH_HOST" > ~/vssh
+          chmod 700 ~/vssh
+          mkdir -p "$BIN"
+
+      - name: Read-only status
+        if: env.ACTION == 'status'
+        run: ~/vssh sudo -n bash -s -- status < ops/fips-trial/vps.sh
+
+      - name: Teardown
+        if: env.ACTION == 'teardown'
+        run: ~/vssh sudo -n bash -s -- teardown < ops/fips-trial/vps.sh
+
+      - uses: actions/download-artifact@v4
+        if: env.ACTION == 'trial' || env.ACTION == 'admit'
+        with:
+          name: ngit-grasp
+          path: bundle
+
+      - name: Upload the reviewed bundle to the VPS
+        if: env.ACTION == 'trial' || env.ACTION == 'admit'
+        run: |
+          set -euo pipefail
+          cp docs/trials/teams-fips/{fips-vps.yaml,run-relay.sh,run-coord.sh,run-grasp.sh} bundle/
+          (cd bundle && sha256sum -c <(echo "$(cat ngit-grasp.sha256)  ngit-grasp"))
+          remote_home=$(~/vssh 'printf %s "$HOME"')
+          echo "BUNDLE=$remote_home/fips-trial-bundle" >> "$GITHUB_ENV"
+          tar -C bundle -cz . | ~/vssh 'rm -rf ~/fips-trial-bundle && mkdir -m 700 ~/fips-trial-bundle && tar -xz -C ~/fips-trial-bundle'
+
+      - name: Second machine tools (verified)
+        if: env.ACTION == 'trial'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -q iputils-ping >/dev/null
+          curl -fsSL -o "$BIN/nak" "$NAK_URL"; echo "$NAK_SHA  $BIN/nak" | sha256sum -c --status; chmod +x "$BIN/nak"
+          curl -fsSL -o /tmp/ngit.tgz "$NGIT_URL"; echo "$NGIT_SHA  /tmp/ngit.tgz" | sha256sum -c --status
+          tar -xzf /tmp/ngit.tgz -C /tmp; find /tmp -maxdepth 3 -type f \( -name ngit -o -name git-remote-nostr \) -exec install -m 0755 {} "$BIN/" \;
+          mkdir -p "$W/cli" && cp ops/fips-trial/cordn-cli/package.json ops/fips-trial/cordn-cli/package-lock.json "$W/cli/"
+          (cd "$W/cli" && npm ci --ignore-scripts --no-audit --no-fund -q && patch -p0 < "$GITHUB_WORKSPACE/ops/fips-trial/cordn-cli/stream.patch")
+
+      - name: Phase 1-2 on the VPS (firewall first, strict ACL)
+        if: env.ACTION == 'trial' || env.ACTION == 'admit'
+        run: |
+          set -euo pipefail
+          ~/vssh sudo -n bash -s -- install "$BUNDLE" < ops/fips-trial/vps.sh | tee /tmp/install.txt
+          echo "VPS_NPUB=$(sed -n 's/^== node npub: //p' /tmp/install.txt)" >> "$GITHUB_ENV"
+
+      - name: Phase 1-2 on the runner (second machine)
+        if: env.ACTION == 'trial'
+        run: |
+          set -euo pipefail
+          out=$(bash ops/fips-trial/runner.sh setup)
+          echo "$out"
+          echo "$out" | grep -E '^(RUNNER_NODE|ALICE|BOB)=' >> "$GITHUB_ENV"
+
+      - name: Phase 3-4 admit the runner, start services
+        if: env.ACTION == 'trial'
+        run: |
+          set -euo pipefail
+          nodes="$RUNNER_NODE${MEMBER_NODES:+,$MEMBER_NODES}"
+          ~/vssh sudo -n bash -s -- admit "$nodes" < ops/fips-trial/vps.sh
+          ~/vssh sudo -n bash -s -- services "$BUNDLE" "$ALICE,$BOB${GIT_MEMBERS:+,$GIT_MEMBERS}" < ops/fips-trial/vps.sh | tee /tmp/status.txt
+          echo "COORD_PK=$(sed -n 's/^== coordinator pubkey: //p' /tmp/status.txt)" >> "$GITHUB_ENV"
+
+      - name: Q1 services over the mesh
+        if: env.ACTION == 'trial'
+        run: |
+          bash ops/fips-trial/runner.sh wait
+          bash ops/fips-trial/runner.sh reach
+          bash ops/fips-trial/runner.sh q1
+
+      - name: Q2 nothing on the public address
+        if: env.ACTION == 'trial'
+        run: bash ops/fips-trial/runner.sh q2
+
+      - name: Q4 the fips0 firewall drop-in is the gate
+        if: env.ACTION == 'trial'
+        run: |
+          set -euo pipefail
+          # Runner stays a peer (link up) but leaves the firewall drop-in.
+          ~/vssh sudo -n bash -s -- admit "$RUNNER_NODE${MEMBER_NODES:+,$MEMBER_NODES}" "$MEMBER_NODES" < ops/fips-trial/vps.sh >/dev/null
+          sleep 3
+          bash ops/fips-trial/runner.sh blocked
+          ~/vssh sudo -n bash -s -- admit "$RUNNER_NODE${MEMBER_NODES:+,$MEMBER_NODES}" < ops/fips-trial/vps.sh >/dev/null
+          bash ops/fips-trial/runner.sh reach
+          echo "PASS Q4"
+
+      - name: Q3 routed session via test-uk01 (peer ACL vs firewall)
+        if: env.ACTION == 'trial' && env.ROUTE_TEST == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # Runner is NOT a peer of the VPS (not in peers.allow, no direct link)
+          # but IS in the firewall drop-in. Both nodes link only to test-uk01.
+          ~/vssh sudo -n bash -s -- admit "$MEMBER_NODES" "$RUNNER_NODE${MEMBER_NODES:+,$MEMBER_NODES}" < ops/fips-trial/vps.sh >/dev/null
+          ~/vssh sudo -n bash -s -- route on < ops/fips-trial/vps.sh
+          bash ops/fips-trial/runner.sh via-test-node
+          if bash ops/fips-trial/runner.sh wait && bash ops/fips-trial/runner.sh reach; then
+            echo "RESULT Q3: a node outside peers.allow reached the services over a routed session; the fips0 firewall, not the peer ACL, is the gate"
+          else
+            echo "RESULT Q3: no routed session through test-uk01 within the timeout (inconclusive)"
+          fi
+          ~/vssh sudo -n bash -s -- admit "$MEMBER_NODES" "$MEMBER_NODES" < ops/fips-trial/vps.sh >/dev/null
+          sleep 3
+          bash ops/fips-trial/runner.sh blocked && echo "PASS Q3 routed node blocked once removed from the firewall"
+
+      - name: Restore admitted devices to member_nodes only
+        if: always() && (env.ACTION == 'trial' || env.ACTION == 'admit')
+        run: |
+          set -euo pipefail
+          ~/vssh sudo -n bash -s -- route off < ops/fips-trial/vps.sh >/dev/null 2>&1 || true
+          ~/vssh sudo -n bash -s -- admit "$MEMBER_NODES" < ops/fips-trial/vps.sh >/dev/null
+          if [ -n "$GIT_MEMBERS" ]; then
+            ~/vssh sudo -n bash -s -- services "$BUNDLE" "$GIT_MEMBERS" < ops/fips-trial/vps.sh >/dev/null
+          fi
+          ~/vssh 'rm -rf ~/fips-trial-bundle'
+          ~/vssh sudo -n bash -s -- status < ops/fips-trial/vps.sh

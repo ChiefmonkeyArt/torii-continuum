@@ -1,5 +1,13 @@
 # Continuum — Session Handover
 
+## Teams FIPS trial automation (2026-10-29, ops-only, no version bump)
+
+`.github/workflows/fips-trial.yml` (manual) + `ops/fips-trial/{vps,runner}.sh`.
+Actions: status | trial | admit | teardown. VPS side runs as root over the
+pinned deploy key; runner is a real FIPS node. Logs are public: scripts mask
+addresses. Team onboarding = members send FIPS node npubs + Nostr npubs, owner
+runs `action=admit`. Upstream quirks + workarounds in the trial README.
+
 ## Teams FIPS + napplet proposal (2026-10-29, docs-only)
 
 ADR amendment "FIPS private mode and the Teams napplet" is Proposed; TEAMS-2d

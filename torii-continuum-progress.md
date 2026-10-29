@@ -1,5 +1,13 @@
 # Torii Continuum — Progress log
 
+## Teams FIPS trial automation (2026-10-29, ops-only)
+
+The FIPS trial can now be run from GitHub with one button. A throwaway GitHub
+machine joins the VPS over the private mesh and checks that team chat and the
+private code server work there, that they are invisible from the public
+internet, and that the mesh firewall is what keeps outsiders out. Two upstream
+quirks were found and worked around.
+
 ## Teams FIPS trial plan (2026-10-29, docs-only)
 
 `docs/trials/teams-fips/`: step-by-step plan for the VPS + second-machine
