@@ -28,11 +28,13 @@ export async function runRecoveryProbe(cfg, { approved = false, log, emit = cons
     limits: { ...cfg.routstr.limits, max_tokens_out: 128, max_sats_per_request: 1, timeout_ms: 45000 } } };
   const wallet = await walletFactory(probeCfg, log);
   const before = (await wallet.balance()).total;
-  let deposits = 0, firstDelta = null;
+  let attempts = 0, deposits = 0, firstDelta = null;
   const guardedWallet = { ...wallet, send: async sats => {
-    if (deposits || sats !== 1) throw new Error('approved single-deposit test limit reached');
-    deposits++;
-    return wallet.send(sats, { maxDebitSats: 2 });
+    if (attempts || sats !== 1) throw new Error('approved single-deposit test limit reached');
+    attempts++;
+    const sent = await wallet.send(sats, { maxDebitSats: 2 });
+    if (sent?.ok) deposits++;
+    return sent;
   } };
   const router = routerFactory(probeCfg, guardedWallet, log, { fetchCatalog: async () => [provider] });
   const started = now();
@@ -43,7 +45,7 @@ export async function runRecoveryProbe(cfg, { approved = false, log, emit = cons
       provider: provider.baseUrl, ok: result.ok, code: result.code || null,
       failure_kind: result.failure_kind || null, duration_ms: now() - started,
       first_delta_ms: firstDelta, response_chars: result.ok ? String(result.content || '').length : 0,
-      deposits, max_total_debit_sats: 2, net_wallet_change_sats: after - before,
+      deposit_attempts: attempts, deposits, max_total_debit_sats: 2, net_wallet_change_sats: after - before,
       refund_pending: result.refund_pending === true };
     emit(JSON.stringify(report));
     return report;

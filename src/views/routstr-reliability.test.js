@@ -29,6 +29,14 @@ beforeEach(() => {
 });
 afterEach(() => { window.location.hash = '#/projects'; document.body.replaceChildren(); });
 describe('live wallet clarity', () => {
+  test('an empty server preferences event does not crash the screen', async () => {
+    store.getState().routstr = null;
+    walletBalance.mockResolvedValue({ ok: true, data: { total_sats: 7 } });
+    const mount = document.createElement('main'); document.body.append(mount);
+    expect(() => renderRoutstr(mount)).not.toThrow();
+    await tick();
+    expect(mount.querySelector('.bal-num').textContent).toBe('7');
+  });
   test('never shows cached money or mock controls; advanced remains collapsed', async () => {
     let resolve;
     walletBalance.mockImplementationOnce(() => new Promise(r => { resolve = r; }));

@@ -13,6 +13,8 @@ Routstr now leads with real balance/top-up/model controls. Advanced retains NWC,
 usage and local preferences. Balances start unknown, stale route responses cannot
 overwrite a new mount, and recovery is shown without exposing tokens or keys.
 Pending invoices are no longer described as definitely paid.
+Missing legacy Routstr preference events now receive safe local defaults instead
+of crashing the real balance/model screen after hydration.
 
 The owner approved preserving Bartly's claim, isolating that provider and one
 DeepSeek V4 test capped at 2 sats total including fees. Free discovery found other

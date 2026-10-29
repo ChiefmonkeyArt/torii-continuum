@@ -19,7 +19,7 @@ test('probe retains model, restricts one deposit, and includes fee cap', async (
     discover: async () => [{ baseUrl: 'https://bad.example' }, provider],
     catalog: async providers => { assert.deepEqual(providers, [provider]); return providers; },
     walletFactory: async () => ({ balance: async () => ({ total: 10 }), send: async (sats, options) => {
-      calls++; assert.equal(sats, 1); assert.deepEqual(options, { maxDebitSats: 2 }); return {};
+      calls++; assert.equal(sats, 1); assert.deepEqual(options, { maxDebitSats: 2 }); return { ok: true };
     } }),
     routerFactory: (config, wallet) => {
       assert.equal(config.routstr.fallback.enabled, false);
@@ -34,6 +34,8 @@ test('probe retains model, restricts one deposit, and includes fee cap', async (
   });
   assert.equal(calls, 1);
   assert.equal(report.ok, true);
+  assert.equal(report.deposits, 1);
+  assert.equal(report.deposit_attempts, 1);
   assert.equal(report.response_chars, 2);
   assert.equal(report.max_total_debit_sats, 2);
   assert.equal(cfg.routstr.models, undefined);
