@@ -148,10 +148,11 @@ Scripts in this folder (`run-relay.sh`, `run-coord.sh`, `run-grasp.sh`) read
 `VPS_FD` from `/opt/fips-trial/env` and bind to it only:
 
 - relay: `nak serve --hostname $VPS_FD --port 10547`
-- coordinator: `cordn-server`, relay `ws://[$VPS_FD]:10547`, SQLite under `/opt/fips-trial/run`
+- coordinator: `cordn-server`, relay `ws://fips-trial-relay:10547` (an `/etc/hosts` name for `$VPS_FD`; see upstream findings), SQLite under `/opt/fips-trial/run`
 - git: `ngit-grasp` with `NGIT_BIND_ADDRESS=[$VPS_FD]:7334`,
   `NGIT_DOMAIN=$VPS_NPUB.fips:7334`, `NGIT_PRIVATE_MODE=true`,
-  `NGIT_PRIVATE_MEMBERS=ALICE,BOB`, `NGIT_USER_INDEX_RELAYS=ws://[$VPS_FD]:10547`
+  `NGIT_PRIVATE_MEMBERS=ALICE,BOB`, `NGIT_PRIVATE_PUBLIC_ORIGIN=http://$VPS_NPUB.fips:7334`,
+  `NGIT_USER_INDEX_RELAYS=ws://fips-trial-relay:10547`
   (stops the default purplepag.es lookups)
 
 Open those two ports to the second machine only. Its mesh address comes
@@ -217,6 +218,49 @@ curl -sf http://127.0.0.1:8787/api/health   # VPS: Continuum unchanged
 
 On macOS, run the uninstaller shipped in the `.pkg` and delete
 `/usr/local/etc/fips`.
+
+## Automated run (GitHub Actions)
+
+`.github/workflows/fips-trial.yml` (manual dispatch only) runs phases 1–6
+end to end. The VPS side is `ops/fips-trial/vps.sh`, run as root over the
+pinned deploy SSH key. The second machine is a throwaway GitHub runner with a
+real FIPS node and TUN device (`ops/fips-trial/runner.sh`); its node key and
+the alice/bob/carol identities die with the runner. Workflow logs are public,
+so both scripts mask IPv4 and global IPv6 addresses, and the VPS hostname is
+masked from the deploy secret.
+
+| `action` | What it does |
+|---|---|
+| `status` | Read-only report. |
+| `trial` | VPS install (firewall first, strict ACL) → runner joins → services → Q1, Q2, Q4, plus Q3 via `test-uk01` if `route_test` → admit list restored to `member_nodes`. |
+| `admit` | Sets the admitted team devices (`member_nodes`, FIPS node npubs) and private-git readers (`git_members`, Nostr npubs). No tests. |
+| `teardown` | Phase 6. |
+
+```bash
+gh workflow run fips-trial.yml -R ChiefmonkeyArt/torii-continuum -f action=status
+gh workflow run fips-trial.yml -R ChiefmonkeyArt/torii-continuum -f action=trial
+gh workflow run fips-trial.yml -R ChiefmonkeyArt/torii-continuum -f action=admit \
+  -f member_nodes=npub1node1...,npub1node2... -f git_members=npub1alice...,npub1bob...
+```
+
+Guards: every mutating step aborts unless Continuum health is ok, host DNS
+still resolves, and no trial port listens on a non-mesh address. A bad
+firewall drop-in is rolled back before it can load. ngit-grasp is built in
+Actions from the pinned v3.0.10 commit and checksum-verified on the VPS.
+
+### Upstream findings while automating
+
+- **cordn-server cannot dial bracketed IPv6 relay URLs** (`ws://[fd…]:10547`
+  fails with "failed to lookup address information"; a hostname that resolves
+  to the same address works). `vps.sh` maps `fips-trial-relay` to the mesh
+  address in `/etc/hosts`. The Cordn CLI is unaffected.
+- **ngit-grasp private mode assumes https** for any non-loopback domain, so
+  members' NIP-98 credentials for `http://<npub>.fips:7334` were refused.
+  `run-grasp.sh` sets `NGIT_PRIVATE_PUBLIC_ORIGIN=http://$VPS_NPUB.fips:7334`
+  (the mesh is already encrypted).
+- **Members cannot push to `master`**: GRASP-01 limits pushes to
+  maintainers. Members open PRs with `git push origin HEAD:refs/heads/pr/<name>`;
+  the maintainer merges.
 
 ## Results
 

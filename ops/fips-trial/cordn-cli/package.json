@@ -1,0 +1,8 @@
+{
+  "name": "fips-trial-cordn-cli",
+  "private": true,
+  "description": "Pinned Cordn CLI for the Teams FIPS trial runner (ops/fips-trial). Not shipped.",
+  "dependencies": {
+    "@cordn/cli": "0.9.0"
+  }
+}
