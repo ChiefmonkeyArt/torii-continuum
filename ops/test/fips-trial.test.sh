@@ -38,6 +38,7 @@ check "mask keeps mesh fd addresses" "[ \"\$(m 'fd12:3456::1')\" = 'fd12:3456::1
 check "runner never wraps a shell function in timeout" "! grep -qE 'timeout [0-9]+ (g|chat|tcp_ok) ' $R"
 check "git host is never <npub>.fips (ngit npub1 truncation)" "! grep -qE 'grasp[^ ]*=\"?ws://\\\$VPS_NPUB\\.fips|NGIT_DOMAIN=\"\\\$VPS_NPUB' $R docs/trials/teams-fips/run-grasp.sh && grep -q 'NGIT_DOMAIN=\"torii-team.fips:7334\"' docs/trials/teams-fips/run-grasp.sh"
 check "runner maps the torii-team FIPS shortname" "grep -q 'torii-team \$VPS_NPUB\" | sudo tee -a /etc/fips/hosts' $R"
+check "runner never pipes a command into grep -q (SIGPIPE under pipefail)" "! grep -vh ExecStartPre $R $V | grep -qE '\\| *grep -[a-zA-Z]*q'"
 check "runner masks too" "grep -q 'mask()' $R"
 check "workflow masks the VPS host and its addresses" "grep -q 'add-mask::\$host_only' $WF && grep -q 'add-mask::\$a' $WF"
 
