@@ -75,6 +75,28 @@ Operational findings for packaging:
 - **Projections.** Cordn members and `NGIT_PRIVATE_MEMBERS` = everyone on the roster; announcement maintainers = owner + maintainers.
 - **Not yet.** Roster members cannot sign in to Continuum, nothing is relay-published, NIP-17 invite/accept and applying the projections to running services are the next slices.
 
+## Amendment: FIPS private mode and the Teams napplet (proposed 2026-10-29)
+
+Status: **Proposed**, docs only. Nothing is built, packaged or deployed.
+
+**Decision.**
+
+- **Napplet for the interface, FIPS underneath.** Teams ships as a napplet, `nap-torii-team@1`: chat panel, roster, PR list and clanker status, mounted sandboxed (`srcdoc`, `sandbox="allow-scripts"`, no network). It receives snapshots and proposes actions. The Continuum shell signs (NIP-07/NIP-46), asks for consent and checks every action against the roster (`can()` in `agent/lib/roster.mjs`). This follows the existing napplet rule: keys and FIPS daemons stay outside the napplet. FIPS publishes no browser or WebAssembly support, so the napplet could not use it directly anyway ([FIPS v0.5.0](https://github.com/jmcorgan/fips/releases/tag/v0.5.0)).
+- **FIPS is an optional private mode, not a requirement.** The node's cordn-server, ngit-grasp and relay also listen on the FIPS `fips0` IPv6 adapter, so members reach `<node-npub>.fips` with unmodified software ([FIPS README](https://github.com/jmcorgan/fips)). HTTPS and relays remain the fallback, so a member without FIPS still works. Cordn and ngit need no code changes. The native datagram API waits: it is off by default, its surface may change, and it gives no retransmission, ordering or flow control ([FIPS v0.5.0](https://github.com/jmcorgan/fips/releases/tag/v0.5.0)).
+- **Device keys, not personal npubs, on the mesh.** Each machine runs FIPS with its own node key, so mesh presence and IP-level traffic are not tied to a person's identity. FIPS v0.5.2 fixed a similar linkage of a node key to traversal traffic on relays ([Nostr Compass podcast](https://podcast.nostrcompass.org/rss.xml)). The roster gains a device entry, `["p", <node hex>, "device", <human hex>]`, with the same rules as agents: the human must be listed, no chaining, and removing the human removes their devices. A device grants network reach only, never a role.
+- **Fourth projection: mesh access.** Besides Cordn members, `NGIT_PRIVATE_MEMBERS` and maintainers, the roster projects to FIPS peer admission (per-npub allow/deny) and a drop-in for the default-deny `fips0` firewall that opens the service ports only to roster devices ([FIPS README](https://github.com/jmcorgan/fips)). Application auth stays on: Cordn MLS membership and GRASP NIP-42/NIP-98 still decide access, because FIPS is a permissionless mesh and cannot be the only gate.
+- **Continuum becomes a napplet host.** The napplet architecture's v0 is Quest-only. This amendment proposes that Continuum hosts napplets too, starting with Teams, by porting Quest's sandboxed runtime (nonce-bound channel, parent/source checks, network-denying CSP) rather than adopting a third-party runtime. Quest's napplet decision records need a matching note in the torii-quest repo; that is a separate change.
+
+**Risks.**
+
+- FIPS is pre-1.0 (v0.5.3, [release](https://github.com/jmcorgan/fips/releases/tag/v0.5.3)). Its protocol and APIs are not yet stable, and an audit of its cryptographic protocols is still listed as a priority ([FIPS README](https://github.com/jmcorgan/fips)). That is why it stays optional.
+- To verify in the trial: whether peer admission covers sessions routed through other mesh nodes or only direct links. If only direct links, the firewall drop-in, keyed on each device's `fd00::/8` address, is the real network gate.
+- Every member must install FIPS. Packages exist for Linux, macOS, Windows and OpenWrt; Android support is only an embedded crate upstream, with the third-party [fips2go](https://github.com/fr34aky/fips2go) app.
+- The IPv6 adapter needs `CAP_NET_ADMIN`. The isolated sandbox used for the first trial has no root, so the FIPS trial needs the owner's VPS plus one other machine, with explicit approval.
+- FIPS is MIT-licensed, so there is no licence concern.
+
+**Order.** (1) This amendment. (2) A FIPS trial on the VPS and one other machine, needing approval: two daemons, services bound to `fips0`, the admission and firewall behaviour above, and Cordn + git over `.fips` names. (3) Roster device entries and the fourth projection. (4) Suite packaging, folded into TEAMS-2b. (5) The Continuum napplet host and the `nap-torii-team@1` draft. (6) The Teams napplet UI, merging with TEAMS-2c.
+
 ## Consequences and risks
 
 - **Server-visible code.** GRASP-08 controls who can read, but the operator's server holds plaintext repositories ([ngit](https://ngit.dev/self-host/ngit-grasp/private-service/)). The owner's node is the team's trust boundary for code; chat is protected even from it.
@@ -92,3 +114,4 @@ Operational findings for packaging:
 3. TEAMS-2a: make the roster load-bearing (signed roster event, NIP-17 invite/accept), with Continuum projecting it to Cordn and ngit-grasp.
 4. TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path) and cordn-rs, with backups for both data directories.
 5. TEAMS-2c: in-app team chat panel and the clanker harness with a remote signer and an LLM in place of the trial's scripted change.
+6. TEAMS-2d: FIPS private mode and the Teams napplet (see the amendment above); starts with a VPS trial.
