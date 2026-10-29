@@ -71,10 +71,19 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
       });
       const body = await readJSON(response);
       if (!response.ok) {
+        // Current Routstr uses machine-readable refund errors. Accept the
+        // documented nested envelope or its top-level alias, not fuzzy text.
+        const nested = body?.detail?.error, alias = body?.error;
+        const structured = nested ?? alias;
+        const conflict = nested && alias &&
+          (nested.code !== alias.code || nested.type !== alias.type);
+        const code = !conflict && structured?.type === 'invalid_request_error'
+          ? structured.code : null;
+        const legacy = structured == null ? body?.detail : null;
         if (path === '/v1/balance/refund' && response.status === 400 &&
-            body?.detail === 'No balance to refund') return { empty: true };
+            (code === 'no_balance_to_refund' || legacy === 'No balance to refund')) return { empty: true };
         if (path === '/v1/balance/refund' && response.status === 400 &&
-            body?.detail === 'Balance too small to refund') return VERIFIED_DUST_RESPONSE;
+            (code === 'balance_too_small_to_refund' || legacy === 'Balance too small to refund')) return VERIFIED_DUST_RESPONSE;
         throw failure();
       }
       return body;

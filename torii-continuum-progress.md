@@ -1,5 +1,24 @@
 # Torii Continuum — Progress log
 
+## v0.2.190-alpha — structured Routstr refund compatibility (2026-10-29)
+
+The v189 live acceptance call returned a DeepSeek V4 Flash reply in 6,578 ms
+(first text 6,071 ms), making one deposit with a 1-sat net wallet debit. Its
+remaining provider balance was 994 msat with zero reserved and matching API-key
+identity, but the legacy string-only error parser left recovery pending.
+Evidence: https://github.com/ChiefmonkeyArt/torii-continuum/actions/runs/40907244498
+and https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/40907908237
+
+Upstream now returns typed codes for no balance, fractional dust and ongoing
+requests. Support both the documented structured envelope/alias and exact legacy
+strings. Dust still requires an authenticated matching key, zero reservation and
+an integer 1–999 msat balance before preserving it in the encrypted dust archive.
+Unknown, conflicting, ongoing, auth and server errors remain pending. No new paid
+probe is authorized or needed for this protocol correction.
+
+Upstream contract reviewed at commit 661898297111c3094bac29074bae429be9d24b58:
+https://github.com/Routstr/routstr-core
+
 ## v0.2.189-alpha — recovery visibility and Coco preparation (2026-10-29)
 
 Read-only diagnosis found a DeepSeek V4 Flash failure at roughly 45 seconds,

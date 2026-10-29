@@ -193,6 +193,67 @@ test('verified fractional-sat dust is archived without a second payment and no l
   assert.equal((await f.payment.begin(base, 1)).ok, true);
 });
 
+for (const shape of ['nested', 'alias', 'both']) {
+  test(`structured ${shape} dust recovery verifies identity and archives without a new deposit`, async () => {
+    const error = { type: 'invalid_request_error', code: 'balance_too_small_to_refund', message: 'Wording may change' };
+    const body = shape === 'nested' ? { detail: { error } } : shape === 'alias' ? { error } : { detail: { error }, error };
+    const f = fixture({
+      refundResponse: () => json(body, 400),
+      infoResponse: () => json({ api_key: key, balance: 994, reserved: 0 }),
+    });
+    const h = await f.payment.begin(base, 1);
+    const restarted = createRoutstrPayment(cfg, f.wallet, { store: f.store, fetchFn: f.fetchFn });
+    await restarted.recover();
+    assert.equal(f.records.has(h.name), false);
+    const archive = JSON.parse(f.records.get(h.name.replace('rrefund_', 'rdust_')));
+    assert.equal(archive.dust_msats, 994);
+    assert.equal(archive.token, token);
+    assert.equal((await restarted.status()).blocked, false);
+    assert.deepEqual(f.count(), { sends: 1, receives: 0, rollbacks: 0 });
+  });
+}
+
+test('structured no-balance is distinct from ongoing requests and unknown errors', async () => {
+  for (const code of ['no_balance_to_refund', 'refund_ongoing_requests', 'unknown']) {
+    const f = fixture({ refundResponse: () => json({
+      detail: { error: { type: 'invalid_request_error', code, message: 'No balance to refund' } },
+    }, 400) });
+    const h = await f.payment.begin(base, 1);
+    assert.equal((await f.payment.finish(h)).pending, code !== 'no_balance_to_refund');
+    assert.equal(f.records.has(h.name), code !== 'no_balance_to_refund');
+    assert.equal(f.calls.some(c => c.url.endsWith('/info')), false);
+  }
+});
+
+test('structured dust retains the original claim on unsafe balance information', async () => {
+  for (const info of [{ api_key: 'wrong', balance: 994, reserved: 0 },
+    { api_key: key, balance: 994, reserved: 1 }, { api_key: key, balance: 1000, reserved: 0 }]) {
+    const f = fixture({
+      refundResponse: () => json({ error: { type: 'invalid_request_error', code: 'balance_too_small_to_refund' } }, 400),
+      infoResponse: () => json(info),
+    });
+    const h = await f.payment.begin(base, 1);
+    assert.equal((await f.payment.finish(h)).pending, true);
+    assert.equal(f.records.has(h.name), true);
+  }
+});
+
+test('wrong status, error type or conflicting structured codes cannot release a claim', async () => {
+  const dust = { type: 'invalid_request_error', code: 'balance_too_small_to_refund' };
+  for (const [body, status] of [
+    [{ error: dust }, 503], [{ error: dust }, 401],
+    [{ error: { ...dust, type: 'server_error' } }, 400],
+    [{ detail: { error: dust }, error: { ...dust, code: 'no_balance_to_refund' } }, 400],
+    [{ detail: 'No balance to refund', error: { ...dust, code: 'refund_ongoing_requests' } }, 400],
+  ]) {
+    const f = fixture({ refundResponse: () => json(body, status) });
+    const h = await f.payment.begin(base, 1);
+    assert.equal((await f.payment.finish(h)).pending, true);
+    assert.equal(f.records.has(h.name), true);
+    assert.equal(f.calls.some(c => c.url.endsWith('/info')), false);
+  }
+});
+
 test('dust remains pending unless provider confirms matching identity, no reservation and less than one sat', async () => {
   const unsafe = [
     { api_key: 'sk-other', balance: 617, reserved: 0 },
