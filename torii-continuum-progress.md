@@ -1,5 +1,14 @@
 # Torii Continuum — Progress log
 
+## Teams FIPS trial plan (2026-10-29, docs-only)
+
+`docs/trials/teams-fips/`: step-by-step plan for the VPS + second-machine
+trial (Q1 services over `.fips`, Q2 no public exposure, Q3 peer ACL vs routed
+sessions, Q4 `fips0` firewall gate), read-only `preflight.sh`, FIPS config
+templates, firewall drop-in and trial service scripts. Templates checked
+against the real FIPS v0.5.3 daemon in the sandbox (two nodes peered, TUN off).
+Not run on any real machine yet. Torii Quest gets a matching ADR-0150.
+
 ## Teams FIPS private mode + napplet amendment (2026-10-29, docs-only)
 
 Proposed in the team-collaboration ADR: Teams as a sandboxed napplet

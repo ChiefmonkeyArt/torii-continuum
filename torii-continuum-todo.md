@@ -74,6 +74,8 @@
     - [ ] FIPS trial on the VPS + one other machine (needs owner approval;
       the sandbox has no root for the `fips0` TUN): services on `fips0`,
       `.fips` names, peer admission vs routed sessions, firewall drop-in.
+      Plan ready: `docs/trials/teams-fips/README.md` (preflight, firewall
+      before first start, throwaway node keys, Q1 to Q4, abort + teardown).
     - [ ] Roster device entries (`["p", node, "device", human]`) and the
       fourth projection (FIPS peer allow list + `fips0` firewall drop-in).
     - [ ] Suite packaging of the FIPS daemon (fold into TEAMS-2b).

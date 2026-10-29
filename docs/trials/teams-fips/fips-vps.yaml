@@ -1,0 +1,20 @@
+# /etc/fips/fips.yaml on the VPS — Teams FIPS trial. Throwaway node key.
+node:
+  identity:
+    persistent: true          # key from `fipsctl keygen --dir /etc/fips`
+  rendezvous:
+    nostr:
+      enabled: false          # no endpoint adverts on public relays
+tun:
+  enabled: true
+  name: fips0                 # must match `define fips_if` in /etc/fips/fips.nft
+  mtu: 1280
+dns:
+  enabled: true
+  bind_addr: "::1"            # loopback only; never serve the mesh
+  port: 5354
+transports:
+  udp:
+    bind_addr: "0.0.0.0:2121" # the only public port the trial opens
+  # no tcp: block, so no TCP 8443 listener
+peers: []                     # the second machine dials in; ACL in phase 2

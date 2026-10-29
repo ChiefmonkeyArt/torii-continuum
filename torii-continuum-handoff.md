@@ -3,8 +3,9 @@
 ## Teams FIPS + napplet proposal (2026-10-29, docs-only)
 
 ADR amendment "FIPS private mode and the Teams napplet" is Proposed; TEAMS-2d
-in the todo. Next step needs owner approval: a FIPS trial on the VPS plus one
-other machine (the sandbox has no root for the TUN adapter). Nothing installed.
+in the todo. Next step needs owner approval: the FIPS trial in
+`docs/trials/teams-fips/README.md` (start with the read-only `preflight.sh`
+on both machines). Nothing installed.
 VPS state unchanged; v0.2.191-alpha is still awaiting deploy approval.
 
 ## v0.2.191-alpha: TEAMS-2a slice 1, signed project roster (2026-10-29)

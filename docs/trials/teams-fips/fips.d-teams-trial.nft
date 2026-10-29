@@ -1,0 +1,4 @@
+# /etc/fips/fips.d/teams-trial.nft on the VPS. Included into the inbound
+# chain of the default-deny fips0 baseline. One line per roster device; the
+# roster's fourth projection (TEAMS-2d step 3) will generate this file.
+ip6 saddr M2_FD tcp dport { 7334, 10547 } accept

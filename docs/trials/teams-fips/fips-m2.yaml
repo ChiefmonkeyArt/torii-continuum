@@ -1,0 +1,25 @@
+# /etc/fips/fips.yaml on the second machine (macOS: /usr/local/etc/fips/).
+node:
+  identity:
+    persistent: true
+  rendezvous:
+    nostr:
+      enabled: false
+tun:
+  enabled: true
+  name: fips0                 # macOS ignores this and uses a utun device
+  mtu: 1280
+dns:
+  enabled: true
+  bind_addr: "::1"
+  port: 5354
+transports:
+  udp:
+    outbound_only: true       # client posture: dial out, accept nothing new
+peers:
+  - npub: "VPS_NPUB"
+    alias: "team-node"        # also resolvable as team-node.fips
+    addresses:
+      - transport: udp
+        addr: "VPS_PUBLIC:2121"
+    connect_policy: auto_connect
