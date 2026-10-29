@@ -54,6 +54,7 @@ import { createUpdater } from './core/updater.mjs';
 import { createGenesis, ownerHexFromNpub } from './core/genesis.mjs';
 import { composeNoticeboard } from './core/noticeboard.mjs';
 import { createAudit } from './lib/audit.mjs';
+import { createRosterStore, project as projectRoster } from './lib/roster.mjs';
 import { getConstitution } from './lib/constitution.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -233,6 +234,8 @@ const genesis = createGenesis({ agentRoot: AGENT_ROOT, audit, log: app.log });
 const MEMORY_ROOT = join(AGENT_ROOT, 'memory');
 const memstore = createMemStore({ memoryRoot: MEMORY_ROOT, log: app.log });
 const sessionStore = createSessionStore({ memoryRoot: MEMORY_ROOT, log: app.log });
+// TEAMS-2a — owner-signed project rosters (memory/team/<slug>.json).
+const rosterStore = deps.rosterStore ?? createRosterStore({ dir: join(MEMORY_ROOT, 'team'), audit });
 const consent = createConsent({ memoryRoot: MEMORY_ROOT, memstore, audit, log: app.log });
 const portability = createPortability({ memoryRoot: MEMORY_ROOT, memstore, audit, log: app.log });
 
@@ -966,6 +969,52 @@ app.post(
       return reply.code(400).send({ error: 'bad project slug' });
     }
     return projectSources.refresh(slug);
+  },
+);
+
+// ─────────────────────────────────────────────────────────────
+// Team roster routes (TEAMS-2a) — admin-gated.
+//
+// GET /api/projects/:slug/roster — stored owner-signed roster + projections
+// PUT /api/projects/:slug/roster — replace with a newer owner-signed event
+//
+// The browser signs the kind-30098 event with the owner's NIP-07/NIP-46
+// signer; the agent only verifies it (no private key on the host). The owner
+// is taken from the VERIFIED session, never the body.
+// ─────────────────────────────────────────────────────────────
+const rosterMax =
+  Number.isFinite(cfg.rate_limit?.roster_per_min) && cfg.rate_limit.roster_per_min > 0
+    ? cfg.rate_limit.roster_per_min
+    : 12;
+
+app.get('/api/projects/:slug/roster', { preHandler: requireAdmin }, async (req, reply) => {
+  const slug = req.params.slug;
+  if (!PROJECT_SLUG_RE.test(String(slug || ''))) {
+    return reply.code(400).send({ error: 'bad project slug' });
+  }
+  const stored = await rosterStore.get(slug);
+  return {
+    roster: stored?.roster ?? null,
+    event: stored?.event ?? null,
+    projection: projectRoster(stored?.roster ?? null),
+  };
+});
+
+app.put(
+  '/api/projects/:slug/roster',
+  { preHandler: requireAdmin, config: rateLimitConfig(rosterMax, '/api/projects/:slug/roster') },
+  async (req, reply) => {
+    const slug = req.params.slug;
+    if (!PROJECT_SLUG_RE.test(String(slug || ''))) {
+      return reply.code(400).send({ error: 'bad project slug' });
+    }
+    const ownerHex = ownerHexFromNpub(req.session.npub);
+    const result = await rosterStore.put(slug, req.body?.event, ownerHex);
+    if (!result.ok) {
+      app.log.warn({ evt: 'team.roster.reject', code: result.code });
+      return reply.code(result.code === 'stale' ? 409 : 400).send({ error: result.reason, code: result.code });
+    }
+    return { ok: true, roster: result.roster, projection: projectRoster(result.roster) };
   },
 );
 
