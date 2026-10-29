@@ -50,10 +50,21 @@
 - **TEAMS-ADR (proposed 2026-10-29, docs-only):** Cordn + private
   ngit-grasp + roster-scoped clankers; sandbox trial passed 9/9 checks with one
   upstream Cordn handoff defect. See `docs/adr-team-collaboration.md`.
-  - [ ] Confirm Cordn core licence and cordn-web NIP-07/NIP-46 signer support.
-  - [ ] Report the post-handoff cursor-collision history defect to Cordn.
-  - [ ] TEAMS-2a: load-bearing signed roster + NIP-17 invite/accept; project it
+  - [ ] Confirm Cordn core licence (asked in https://github.com/Cordn-msg/cordn-web/issues/51; needed before TEAMS-2b
+    packaging, not before) and cordn-web NIP-07/NIP-46 signer support.
+  - [x] Report the post-handoff defect to Cordn: https://github.com/Cordn-msg/cordn-web/issues/51
+    (snapshot omits `group.stream`; messages lost after handoff + restart).
+  - TEAMS-2a: load-bearing signed roster + NIP-17 invite/accept; project it
     to Cordn membership, `NGIT_PRIVATE_MEMBERS` and repo maintainers.
+    - [x] 2a-1 (v0.2.191-alpha): owner-signed kind-30098 project roster,
+      verified + stored by the agent (`agent/lib/roster.mjs`), admin-gated
+      `GET`/`PUT /api/projects/:slug/roster`, roles + capabilities, the three
+      projections, browser builder `src/lib/roster.js` + client functions.
+    - [ ] 2a-2: per-project roster editor in the Team view (sign with NIP-07),
+      and roster members can sign in with role-scoped sessions (`requireRole`).
+    - [ ] 2a-3: NIP-17 gift-wrapped invite/accept; accepted members only.
+    - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
+      add/remove, announcement maintainers (needs TEAMS-2b services).
   - [ ] TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path,
     `NGIT_USER_INDEX_RELAYS` = node relay) and cordn-rs, with backups.
   - [ ] TEAMS-2c: in-app team chat panel and clanker harness with a NIP-46

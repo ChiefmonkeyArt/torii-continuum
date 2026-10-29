@@ -49,7 +49,7 @@ Reproducible scripts: `docs/trials/teams-cordn-grasp/`. Identities: alice (owner
 | 1 | Alice creates a Cordn group; invites bob and clanker by pubkey; encrypted transport required | **Pass.** Cordn identity = the member's own Nostr pubkey. Messages arrive in coordinator order. |
 | 2 | Coordinator and relay never see plaintext | **Pass.** Zero plaintext hits in SQLite, WAL and logs. Coordinator stores key-package publishers, welcome targets, opaque messages and counters, but no per-message sender. |
 | 3 | Remove bob, post, bob syncs | **Pass.** Bob keeps old history; new message unreadable; group marked inactive for him. Re-invite works and does not reveal what he missed. |
-| 4 | Move the group to a second coordinator | **Pass with caveat.** Requires the group to declare fallbacks first (library `updateGroupMetadata`; the CLI has no command). Members follow automatically. **Defect:** cursors restart on the new coordinator and CLI 0.9.0 history then hides messages whose cursor collides with an older one (bob did not see the clanker's reply). The daemon inbox was unaffected. Report upstream before relying on handoff. |
+| 4 | Move the group to a second coordinator | **Pass with caveat.** Requires the group to declare fallbacks first (library `updateGroupMetadata`; the CLI has no command). Members follow automatically. **Defect:** cursors restart on the new coordinator. CLI 0.9.0 does not save `group.stream` in its session snapshot, so after a process restart its echo guard drops any new message whose cursor equals one of the member's own pre-handoff sends. This hits both history and the daemon inbox; a process that follows the handoff live without restarting is fine. Reported upstream as [cordn-web #51](https://github.com/Cordn-msg/cordn-web/issues/51) with a two-line fix, verified locally. |
 | 5 | Private ngit-grasp (GRASP-08) with members alice, bob, clanker | **Pass.** Anonymous Git HTTP → 401; anonymous relay REQ → nothing; outsider authenticates → `restricted: … not whitelisted`; bob clones; outsider's clone fails. |
 | 6 | Clanker loop: bob writes `@clanker note: …` in chat | **Pass.** Alice's unaddressed message ignored; clanker cloned, committed, pushed `pr/clanker-3` and replied in chat. PR author = clanker npub, description names the requesting human. |
 | 7 | Clanker pushes directly to `master` | **Refused**: "not a confirmed maintainer". |
@@ -67,6 +67,14 @@ Operational findings for packaging:
 - **ngit defaults to TLS** for a bare `localhost:7334`; use `ws://` explicitly in development. In production Torii Base terminates TLS.
 - **Agent hygiene.** `--private-key-file` and ngit's file store hold raw keys; give clankers a NIP-46 signer before real use. The Cordn daemon needed SIGKILL when its relay had already gone; use a service manager with a stop timeout.
 
+## Addendum: TEAMS-2a slice 1 (v0.2.191-alpha)
+
+- **Roster kind.** The owner-signed project roster uses a new addressable kind **30098** with `d` = project slug, not TEAMS-1's 30093 (one local record per member). One event per project carries the whole team, so it can be verified and replaced atomically. Tags: `["p", hex, "maintainer"|"contributor"|"viewer"]` and `["p", hex, "agent", <human hex>]`. The owner is the signer and is never listed. Content is empty.
+- **Trust rules (agent/lib/roster.mjs).** Signer must be the Continuum owner from the verified session; signature verified on a rebuilt seven-field event (nostr-tools caches a verified flag that object spread copies onto tampered copies); `d` must equal the route slug; `created_at` strictly newer than the stored roster and at most 10 minutes ahead; at most 12 people and 32 entries; no duplicates; agents must belong to a listed human and cannot chain.
+- **Roles.** Owner: manage + merge + propose + chat + read. Maintainer: merge and below. Contributor: propose and below. Viewer: chat + read. An agent gets min(its human's role, Contributor), so it never merges or manages.
+- **Projections.** Cordn members and `NGIT_PRIVATE_MEMBERS` = everyone on the roster; announcement maintainers = owner + maintainers.
+- **Not yet.** Roster members cannot sign in to Continuum, nothing is relay-published, NIP-17 invite/accept and applying the projections to running services are the next slices.
+
 ## Consequences and risks
 
 - **Server-visible code.** GRASP-08 controls who can read, but the operator's server holds plaintext repositories ([ngit](https://ngit.dev/self-host/ngit-grasp/private-service/)). The owner's node is the team's trust boundary for code; chat is protected even from it.
@@ -80,7 +88,7 @@ Operational findings for packaging:
 ## Next steps (each needs its own approval)
 
 1. Confirm the Cordn core licence and whether cordn-web supports NIP-07/NIP-46 signers.
-2. Report the post-handoff cursor-collision history defect to Cordn and re-test handoff.
+2. ~~Report the post-handoff defect to Cordn~~ — filed as [cordn-web #51](https://github.com/Cordn-msg/cordn-web/issues/51) (2026-10-29), which also asks the core licence. Until fixed: one coordinator per team, no handoff, or persist `stream` in Continuum's own @cordn/core integration.
 3. TEAMS-2a: make the roster load-bearing (signed roster event, NIP-17 invite/accept), with Continuum projecting it to Cordn and ngit-grasp.
 4. TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path) and cordn-rs, with backups for both data directories.
 5. TEAMS-2c: in-app team chat panel and the clanker harness with a remote signer and an LLM in place of the trial's scripted change.

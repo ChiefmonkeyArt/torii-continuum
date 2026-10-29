@@ -534,6 +534,20 @@ export async function refreshProjectSources(slug) {
   return req('POST', `/api/projects/${encodeURIComponent(slug)}/sources/refresh`, {});
 }
 
+// ─── Team roster (TEAMS-2a) ─────────────────────────────────
+// The owner signs a kind-30098 roster in the browser (NIP-07/NIP-46); the
+// agent only verifies + stores it and returns the derived projections.
+
+/** GET /api/projects/:slug/roster — { roster, event, projection }. */
+export async function projectRoster(slug) {
+  return req('GET', `/api/projects/${encodeURIComponent(slug)}/roster`);
+}
+
+/** PUT /api/projects/:slug/roster — replace with a newer owner-signed event. */
+export async function putProjectRoster(slug, event) {
+  return req('PUT', `/api/projects/${encodeURIComponent(slug)}/roster`, { event });
+}
+
 // ─── Noticeboard (NAP-BRIDGE-8) ─────────────────────────────
 // The node only ever DRAFTS. It returns the unsigned kind-30078 event plus the
 // relay the operator must sign (NIP-07, in-browser) and publish to. The node has

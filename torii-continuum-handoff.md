@@ -1,5 +1,16 @@
 # Continuum — Session Handover
 
+## v0.2.191-alpha: TEAMS-2a slice 1, signed project roster (2026-10-29)
+
+Agent + frontend, no UI change yet. `agent/lib/roster.mjs` verifies owner-signed
+kind-30098 rosters; routes `GET`/`PUT /api/projects/:slug/roster` (admin,
+rate limit `rate_limit.roster_per_min`, default 12). Storage
+`memory/team/<slug>.json`. Nothing reads the roster for authorization yet;
+next is 2a-2 (Team view editor + member sign-in with `requireRole`). Cordn
+handoff defect filed as https://github.com/Cordn-msg/cordn-web/issues/51; until fixed, run one coordinator
+per team and avoid handoff. Deploying v191 needs owner approval; it does not
+change the paid-chat path, so the v190 handoff steps below still apply.
+
 ## Teams architecture proposal (2026-10-29, docs-only)
 
 `docs/adr-team-collaboration.md` proposes Cordn group chat, a private

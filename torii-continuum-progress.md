@@ -1,5 +1,20 @@
 # Torii Continuum — Progress log
 
+## v0.2.191-alpha — TEAMS-2a slice 1: owner-signed project roster (2026-10-29)
+
+The roster now has a verifiable source of truth. The owner signs one kind-30098
+event per project (d = slug) in the browser; the agent verifies and stores it at
+`memory/team/<slug>.json` (0600, atomic, audited) via admin-gated
+`GET`/`PUT /api/projects/:slug/roster` and returns the Cordn, ngit-private and
+maintainer projections. Rejects foreign signers, tampered events, cross-project
+replay, rollback, future dates, more than 12 people, duplicates and dangling or
+chained agents; agents are capped at Contributor. Found while testing:
+nostr-tools' cached verification flag survives object spread, so the module
+re-verifies a rebuilt seven-field event. Browser builder `src/lib/roster.js`
+plus client functions. Members cannot sign in yet (2a-2). Tests: agent 757 pass
+/ 0 fail (+16 `roster.test.js`), vitest 1165/1165 (+4), build clean.
+Also filed the Cordn handoff defect: https://github.com/Cordn-msg/cordn-web/issues/51
+
 ## Team collaboration ADR and sandbox trial (2026-10-29, docs-only)
 
 Compared Buzz, its Cordn-based fork Zzub and a GRASP + Cordn + ContextVM design;
