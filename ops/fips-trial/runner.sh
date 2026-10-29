@@ -24,6 +24,8 @@ export PATH="$BIN:$W/cli/node_modules/.bin:$PATH"
 
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+# Like grep -q but reads all input, so the writer never gets SIGPIPE under pipefail.
+has() { grep "$@" >/dev/null; }
 mask() { sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/<ipv4>/g; s/\b[23][0-9a-f]{3}:[0-9a-f:]{3,}/<ipv6>/g'; }
 vps_fd() { fipsctl address "$VPS_NPUB"; }
 tcp_ok() { timeout "${3:-8}" bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; }
@@ -125,10 +127,10 @@ g() { # git/ngit as identity $1 with isolated config
 
 cmd_q1() {
   log "Q1 .fips name resolution"
-  getent ahosts "$VPS_NPUB.fips" | head -1 | grep -q '^fd' && echo "PASS $VPS_NPUB.fips resolves to the mesh address" \
+  getent ahosts "$VPS_NPUB.fips" | head -1 | has '^fd' && echo "PASS $VPS_NPUB.fips resolves to the mesh address" \
     || die ".fips name does not resolve (fips-dns)"
-  local i; for i in $(seq 15); do getent ahosts torii-team.fips | head -1 | grep -q '^fd' && break; sleep 2; done
-  getent ahosts torii-team.fips | head -1 | grep -q '^fd' && echo "PASS torii-team.fips (FIPS shortname) resolves to the mesh address" \
+  local i; for i in $(seq 15); do getent ahosts torii-team.fips | head -1 | has '^fd' && break; sleep 2; done
+  getent ahosts torii-team.fips | head -1 | has '^fd' && echo "PASS torii-team.fips (FIPS shortname) resolves to the mesh address" \
     || die "FIPS shortname torii-team.fips does not resolve"
   log "Q1 chat: alice creates the team group, bob joins, both directions"
   c bob gen-kp bob | tail -1
@@ -141,12 +143,12 @@ cmd_q1() {
   c bob accept-welcome "$ref" torii-team | tail -1
   c alice send-to torii-team "hello team over FIPS" | tail -1
   c bob sync torii-team >/dev/null
-  c bob messages torii-team | grep -q 'hello team over FIPS' && echo "PASS bob read alice's message" || die "bob did not get the message"
+  c bob messages torii-team | has 'hello team over FIPS' && echo "PASS bob read alice's message" || die "bob did not get the message"
   c bob send-to torii-team "hi alice" | tail -1
   c alice sync torii-team >/dev/null
-  c alice messages torii-team | grep -q 'hi alice' && echo "PASS alice read bob's reply" || die "alice did not get the reply"
+  c alice messages torii-team | has 'hi alice' && echo "PASS alice read bob's reply" || die "alice did not get the reply"
   c carol fetch-welcomes | tail -1
-  if c carol messages torii-team | grep -q 'hello team'; then die "outsider read the group"; else echo "PASS outsider carol cannot read the group"; fi
+  if c carol messages torii-team | has 'hello team'; then die "outsider read the group"; else echo "PASS outsider carol cannot read the group"; fi
 
   log "Q1 private git: alice creates, bob clones + opens a PR, carol is refused"
   local n
@@ -165,8 +167,9 @@ cmd_q1() {
   g bob timeout 120 git clone -q "$url" bob 2>&1 | tail -1 || true
   grep -q 'team art' bob/README.md && echo "PASS member bob cloned the private repo" || die "bob could not clone"
   cd bob && echo "bob was here" >>README.md && g bob git commit -qam "bob: readme"
-  g bob timeout 120 git push origin HEAD:refs/heads/pr/bob-readme 2>&1 | grep -q 'new branch' \
-    && echo "PASS member bob opened a PR" || die "bob could not open a PR"
+  local out; out=$(g bob timeout 120 git push origin HEAD:refs/heads/pr/bob-readme 2>&1 || true)
+  grep -q 'HEAD -> pr/bob-readme' <<<"$out" && echo "PASS member bob opened a PR" \
+    || { mask <<<"$out" | tail -20; die "bob could not open a PR"; }
   cd "$W/repo"
   g carol timeout 120 git clone -q "$url" carol >/dev/null 2>&1 || true
   [ -f carol/README.md ] && die "outsider carol cloned the private repo" || echo "PASS outsider carol refused"
@@ -203,7 +206,7 @@ cmd_via_test_node() {
   sudo systemctl restart fips
   local i
   for i in $(seq 45); do
-    sudo fipsctl show peers 2>/dev/null | grep -q "${TEST_UK01:0:16}\|test-uk01" && break; sleep 2
+    sudo fipsctl show peers 2>/dev/null | has "${TEST_UK01:0:16}\|test-uk01" && break; sleep 2
   done
   sudo fipsctl show peers 2>&1 | mask | head -10
 }

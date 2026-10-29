@@ -47,6 +47,8 @@ TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'ABORT: %s\n' "$*" >&2; exit 1; }
+# Like grep -q but reads all input, so the writer never gets SIGPIPE under pipefail.
+has() { grep "$@" >/dev/null; }
 mask() { sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/<ipv4>/g; s/\b[23][0-9a-f]{3}:[0-9a-f:]{3,}/<ipv6>/g'; }
 sha_ok() { echo "$2  $1" | sha256sum -c --status; }
 fc() { "$FIPSCTL" -s "$SOCK" "$@"; }
@@ -64,7 +66,7 @@ npubs() {
   [ ${#out[@]} -le 32 ] || die "more than 32 entries"
   [ ${#out[@]} -eq 0 ] || printf '%s\n' "${out[@]}" | sort -u
 }
-ufw_active() { command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; }
+ufw_active() { command -v ufw >/dev/null && ufw status 2>/dev/null | has '^Status: active'; }
 ufw_clear_trial() {
   ufw_active || return 0
   local n
@@ -78,15 +80,15 @@ node_ok() {
   systemctl is-active -q torii-fips || die "Suite FIPS node (torii-fips) is not active"
   nft list chain $TABLE $CHAIN >/dev/null 2>&1 || die "Suite fips0 firewall table missing"
   [ -s "$SUITE_ETC/fips.pub" ] && [ -x "$FIPSCTL" ] || die "Suite FIPS identity or fipsctl missing"
-  ip -6 addr show dev fips0 2>/dev/null | grep -q "inet6 $(node_fd)" || die "fips0 does not carry the node mesh address"
+  ip -6 addr show dev fips0 2>/dev/null | has "inet6 $(node_fd)" || die "fips0 does not carry the node mesh address"
 }
 
 # Abort criteria shared by every mutating command (README "Abort criteria").
 guard() {
-  curl -fsS --max-time 8 http://127.0.0.1:8787/api/health | grep -q '"ok":true' \
+  curl -fsS --max-time 8 http://127.0.0.1:8787/api/health | has '"ok":true' \
     || die "Continuum health check failed"
   getent ahosts github.com >/dev/null || die "host DNS resolution broken"
-  if ss -Hltn | awk '{print $4}' | grep -E ':(7334|10547)$' | grep -vqE '^\[?fd'; then
+  if ss -Hltn | awk '{print $4}' | grep -E ':(7334|10547)$' | has -vE '^\[?fd'; then
     die "a trial port is listening on a non-mesh address"
   fi
   [ ! -e /etc/fips/fips.yaml ] || die "/etc/fips/fips.yaml exists; one FIPS identity per node (Suite docs/FIPS.md)"
