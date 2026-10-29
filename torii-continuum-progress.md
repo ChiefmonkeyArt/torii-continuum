@@ -8,6 +8,11 @@ private code server work there, that they are invisible from the public
 internet, and that the mesh firewall is what keeps outsiders out. Two upstream
 quirks were found and worked around.
 
+The first full trial run passed on the real VPS and a second machine: private
+team chat and a private git server work over the mesh, outsiders are shut
+out, and nothing is exposed to the public internet. Members can join with
+`docs/trials/teams-fips/MEMBERS.md`.
+
 The first read-only status run showed the VPS already runs FIPS for Torii
 Suite. The trial now shares that node instead of installing a second one,
 and only adds removable allow rules to its mesh firewall.
