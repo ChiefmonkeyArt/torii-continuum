@@ -6,6 +6,7 @@
 - [x] Workarounds: cordn-server `[v6]` relay URLs (hosts name), ngit-grasp private origin (`NGIT_PRIVATE_PUBLIC_ORIGIN`).
 - [x] VPS side reuses the Torii Suite FIPS node (one identity per host): no `.deb`, no `/etc/fips`, tagged rules in `inet torii_fips input`, re-applied via `fips-trial-admit.service` (PartOf the Suite firewall).
 - [ ] Suite follow-up: `fips.d` include in `mesh.nft` for the roster projection (TEAMS-2d step 3); Suite FIPS 0.5.1 -> 0.5.3 upgrade.
+- [x] ngit npub1-truncation workaround: git host is the FIPS shortname `torii-team.fips`.
 - [ ] Run `action=trial` on the VPS; record Q1–Q4 in the trial README Results.
 - [ ] Owner + Plebeian team: install FIPS, send node npubs; owner runs `action=admit`.
 - [ ] Report the cordn-server IPv6-literal bug upstream (owner approval to file).
