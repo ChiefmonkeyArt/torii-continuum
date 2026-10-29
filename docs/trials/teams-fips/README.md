@@ -158,8 +158,8 @@ Scripts in this folder (`run-relay.sh`, `run-coord.sh`, `run-grasp.sh`) read
 - relay: `nak serve --hostname $VPS_FD --port 10547`
 - coordinator: `cordn-server`, relay `ws://fips-trial-relay:10547` (an `/etc/hosts` name for `$VPS_FD`; see upstream findings), SQLite under `/opt/fips-trial/run`
 - git: `ngit-grasp` with `NGIT_BIND_ADDRESS=[$VPS_FD]:7334`,
-  `NGIT_DOMAIN=$VPS_NPUB.fips:7334`, `NGIT_PRIVATE_MODE=true`,
-  `NGIT_PRIVATE_MEMBERS=ALICE,BOB`, `NGIT_PRIVATE_PUBLIC_ORIGIN=http://$VPS_NPUB.fips:7334`,
+  `NGIT_DOMAIN=torii-team.fips:7334`, `NGIT_PRIVATE_MODE=true`,
+  `NGIT_PRIVATE_MEMBERS=ALICE,BOB`, `NGIT_PRIVATE_PUBLIC_ORIGIN=http://torii-team.fips:7334`,
   `NGIT_USER_INDEX_RELAYS=ws://fips-trial-relay:10547`
   (stops the default purplepag.es lookups)
 
@@ -192,7 +192,7 @@ No upstream binary is published. In order of preference:
    relay `ws://VPS_NPUB.fips:10547`: create group, add BOB, both send, both
    read. Repeat with BOB's process restarted.
 2. **Git (Q1):** ngit as ALICE `init --private` against
-   `ws://VPS_NPUB.fips:7334`; BOB clones, pushes a `pr/` branch; ALICE lists and
+   `ws://torii-team.fips:7334` (shortname `torii-team VPS_NPUB` in `/etc/fips/hosts`); BOB clones, pushes a `pr/` branch; ALICE lists and
    merges. Time the clone.
 3. **Public exposure (Q2):** from the second machine over the normal
    internet, `nc -vz -w3 VPS_PUBLIC 7334` and `… 10547` must fail; on the VPS,
@@ -273,13 +273,20 @@ Suite: a reviewed `include` (for example `/etc/torii/fips/fips.d/*.nft`) in
 
 ### Upstream findings while automating
 
+- **ngit v3.0.5 `normalize_grasp_server_url` truncates at `npub1`.** It is
+  meant to strip `/npub1…/repo` paths, but it also cuts a host named
+  `npub1….fips`, so `ws://<npub>.fips:7334` becomes `wss://http` and every
+  announcement fails ("relay not connected"). Workaround: serve git under a
+  FIPS shortname (`torii-team.fips`, one line in `/etc/fips/hosts` on each
+  member device). Reproduced locally; upstream issue drafted, not filed.
+
 - **cordn-server cannot dial bracketed IPv6 relay URLs** (`ws://[fd…]:10547`
   fails with "failed to lookup address information"; a hostname that resolves
   to the same address works). `vps.sh` maps `fips-trial-relay` to the mesh
   address in `/etc/hosts`. The Cordn CLI is unaffected.
 - **ngit-grasp private mode assumes https** for any non-loopback domain, so
   members' NIP-98 credentials for `http://<npub>.fips:7334` were refused.
-  `run-grasp.sh` sets `NGIT_PRIVATE_PUBLIC_ORIGIN=http://$VPS_NPUB.fips:7334`
+  `run-grasp.sh` sets `NGIT_PRIVATE_PUBLIC_ORIGIN=http://torii-team.fips:7334`
   (the mesh is already encrypted).
 - **Members cannot push to `master`**: GRASP-01 limits pushes to
   maintainers. Members open PRs with `git push origin HEAD:refs/heads/pr/<name>`;
