@@ -161,7 +161,7 @@ jobs:
           sudo apt-get install -y -q iputils-ping >/dev/null
           curl -fsSL -o "$BIN/nak" "$NAK_URL"; echo "$NAK_SHA  $BIN/nak" | sha256sum -c --status; chmod +x "$BIN/nak"
           curl -fsSL -o /tmp/ngit.tgz "$NGIT_URL"; echo "$NGIT_SHA  /tmp/ngit.tgz" | sha256sum -c --status
-          tar -xzf /tmp/ngit.tgz -C /tmp; find /tmp -maxdepth 3 -type f \( -name ngit -o -name git-remote-nostr \) -exec install -m 0755 {} "$BIN/" \;
+          mkdir -p /tmp/ngit-x && tar -xzf /tmp/ngit.tgz -C /tmp/ngit-x; find /tmp/ngit-x -maxdepth 3 -type f \( -name ngit -o -name git-remote-nostr \) -exec install -m 0755 {} "$BIN/" \;
           mkdir -p "$W/cli" && cp ops/fips-trial/cordn-cli/package.json ops/fips-trial/cordn-cli/package-lock.json "$W/cli/"
           (cd "$W/cli" && npm ci --ignore-scripts --no-audit --no-fund -q && patch -p0 < "$GITHUB_WORKSPACE/ops/fips-trial/cordn-cli/stream.patch")
 
