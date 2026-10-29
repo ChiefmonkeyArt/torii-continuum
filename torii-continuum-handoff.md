@@ -1,5 +1,25 @@
 # Continuum — Session Handover
 
+## v0.2.190-alpha release handoff (2026-10-29)
+
+The owner-approved test already ran once: DeepSeek V4 Flash via
+`https://routstr.nostrnative.com`, 6.578 seconds, one 1-sat deposit, 1-sat net
+wallet debit. Do NOT rerun a paid benchmark. Bartly is now isolated and all three
+older claims matched their original hashes after v189.
+
+The remaining blocker is structured refund refusal parsing, not inference:
+provider reports 994 msat, reserved 0, matching key. v190 recognises the exact
+documented codes and preserves fractional change as an encrypted dust claim.
+Deploy with `benchmark=false`, no payment-mode or quarantine changes. Verify
+claim count returns to the three isolated originals, the existing new claim is
+archived at 994 msat, and no additional paid request occurred. Main/tag/VPS must
+match. Do not claim wallet funds were refunded: fractional dust is retained,
+not returned to the spendable wallet.
+
+No Coco SDK/funds migration, new provider deposits, model or spending-cap changes.
+Strategy and Routstr UI are unchanged from v189; the new fix affects the agent,
+version stamps, recovery tests and these continuity/architecture notes only.
+
 ## v0.2.189-alpha release handoff (2026-10-29)
 
 - Changes: classified funded failures; bounded terminal-SSE tail; atomic encrypted

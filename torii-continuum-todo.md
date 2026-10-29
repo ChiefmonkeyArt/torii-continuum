@@ -1,5 +1,15 @@
 # Torii Continuum — Master TODO
 
+## v0.2.190-alpha: refund protocol compatibility
+
+- [x] Accept exact typed refund codes without conflating ongoing requests,
+  unknown errors or fractional dust with an empty balance.
+- [x] Cover nested/alias formats, restart recovery, identity/reservation checks,
+  conflicting codes and non-400 responses.
+- [x] Preserve legacy response compatibility, owner model and spending limits.
+- [ ] Verify the existing 994-msat claim archives on restart with zero new
+  deposits; retain the three older isolated claims byte-for-byte.
+
 ## v0.2.189-alpha: reliability and Coco preparation
 
 - [x] Expose redacted recovery counts through the owner-only, no-store wallet
@@ -11,7 +21,7 @@
 - [x] Add a single-deposit DeepSeek V4 recovery probe with a 2-sat gross debit
   cap including known mint fees, protected by the run-id/writer lock.
 - [x] Draft Coco migration and rollback boundaries without migrating funds.
-- [ ] Verify owner-approved Bartly isolation and one live capped acceptance
+- [x] Verify owner-approved Bartly isolation and one live capped acceptance
   probe through the tagged release workflow; retain every existing claim.
 - [ ] Implement Coco after SDK/storage selection, offline recovery tests,
   read-only inventory and separately approved migration canary.

@@ -67,6 +67,20 @@ https://cashubtc.github.io/coco/starting/start-here.html
 
 ## Migration gates
 
+### Provider refund compatibility prerequisite
+
+Routstr's current contract uses structured `invalid_request_error` codes
+`no_balance_to_refund`, `balance_too_small_to_refund` and
+`refund_ongoing_requests`, distinct from the older exact detail strings.
+Compatibility must support both without treating generic errors as empty money.
+The existing positive dust check is unchanged: matching account identity,
+reserved exactly zero, integer balance 1–999 msat. Encrypted fractional claims
+are retained, not labelled as recovered/spendable. This requirement applies
+independently of Coco. Contract reviewed in [Routstr core](https://github.com/Routstr/routstr-core)
+at commit `661898297111c3094bac29074bae429be9d24b58`.
+
+### Wallet migration gates
+
 1. Pin/review the same Coco release as Plebeian; keep changes to Plebeian read-only.
 2. Define adapter contract: balance, mint quote/status/claim, receive,
    prepare/commit send, reservation state, recover and export inventory.
