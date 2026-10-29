@@ -69,6 +69,17 @@
     `NGIT_USER_INDEX_RELAYS` = node relay) and cordn-rs, with backups.
   - [ ] TEAMS-2c: in-app team chat panel and clanker harness with a NIP-46
     signer and an LLM in place of the trial's scripted change.
+  - TEAMS-2d (proposed, docs-only so far): FIPS private mode + Teams napplet.
+    See the ADR amendment "FIPS private mode and the Teams napplet".
+    - [ ] FIPS trial on the VPS + one other machine (needs owner approval;
+      the sandbox has no root for the `fips0` TUN): services on `fips0`,
+      `.fips` names, peer admission vs routed sessions, firewall drop-in.
+    - [ ] Roster device entries (`["p", node, "device", human]`) and the
+      fourth projection (FIPS peer allow list + `fips0` firewall drop-in).
+    - [ ] Suite packaging of the FIPS daemon (fold into TEAMS-2b).
+    - [ ] Continuum napplet host (port Quest's sandboxed runtime) and a
+      `nap-torii-team@1` contract draft; matching note in torii-quest.
+    - [ ] Teams napplet UI (merges with TEAMS-2c).
 
 - **CONT-WORKSPACE-HISTORY (v0.2.187-alpha):** navigation/profile restructuring,
   independent encrypted history, private pins/titles, search and project

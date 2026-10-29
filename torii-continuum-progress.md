@@ -1,5 +1,15 @@
 # Torii Continuum — Progress log
 
+## Teams FIPS private mode + napplet amendment (2026-10-29, docs-only)
+
+Proposed in the team-collaboration ADR: Teams as a sandboxed napplet
+(`nap-torii-team@1`) with the Continuum shell signing and checking the roster;
+FIPS (v0.5.3, MIT, pre-1.0) as an optional private transport, with node
+services on `fips0` reachable as `<node-npub>.fips` and HTTPS kept as the
+fallback; per-device node keys on the roster; and a fourth roster projection to
+FIPS peer admission and a `fips0` firewall drop-in. Added TEAMS-2d. No app
+bytes, version, tag or VPS changed.
+
 ## v0.2.191-alpha — TEAMS-2a slice 1: owner-signed project roster (2026-10-29)
 
 The roster now has a verifiable source of truth. The owner signs one kind-30098
