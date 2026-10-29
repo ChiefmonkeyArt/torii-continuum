@@ -1,0 +1,86 @@
+# Team collaboration: Cordn group chat, private GRASP code and roster-scoped clankers
+
+Date: 2026-10-29. Status: **Proposed** — design plus a completed isolated sandbox trial (below). No Continuum code, release, tag or VPS change. Supersedes nothing; it gives TEAMS-2 (see `torii-continuum-todo.md`) a concrete architecture.
+
+## Context
+
+Continuum Teams means "team vibe coding": a handful of people (maximum 12) plus their clankers (AI agents) working on one project's code and graphics, chatting about it, and shipping it through ngit. TEAMS-1 (v0.2.53-alpha) gave Continuum a local operator roster (kind 30093) that carries no authority. TEAMS-2 was defined as server-side operator auth, relay sync and an invite handshake, but without a messaging or code-hosting choice.
+
+The requirements, in priority order:
+
+1. **Sovereign.** Each team runs on an operator's own node (VPS or Start9-like), under Torii Base. No central workspace provider.
+2. **One roster.** Who may read chat, read code and push/merge must come from one owner-signed membership list, not three hand-maintained ones.
+3. **Private where it matters.** Chat content is end-to-end encrypted; private code is unreadable to non-members.
+4. **Clankers are members, not superusers.** Agents have their own npubs, act only on authorised humans' requests, open PRs and never merge.
+5. **Interoperable.** Use NIP-34/GRASP for code so ngit, GitWorkshop and Budabit work; use a chat protocol with more than one client.
+6. **Light.** Fit a small VPS next to Quest, Hibiki and Layercraft; prefer SQLite to new database servers.
+
+## Options considered
+
+| | Buzz (Block) | Zzub (Buzz fork) | GRASP + Cordn + ContextVM (chosen) |
+|---|---|---|---|
+| Topology | One workspace relay; no gossip or replication ([Buzz architecture](https://github.com/block/buzz/blob/main/ARCHITECTURE.md)) | Inherits Buzz's server | Private ngit-grasp + Cordn coordinator on the owner's node; coordinator is movable |
+| Server weight | Rust relay + Postgres + Redis + S3 ([RepoCloud](https://www.repocloud.io/details/Buzz/)) | Same | Two Rust binaries; LMDB/SQLite |
+| Nostr fit | 81 custom kinds, 13 Buzz-only NIP drafts ([Hyphae analysis](https://github.com/iDoris-ai/Hyphae/blob/main/docs/buzz-comparison-analysis.md)) | Moving chat to Cordn ([Nostr Compass](https://nostrcompass.org/en/newsletters/2026-10-21-newsletter/)) | Standard NIP-34, GRASP-01/08, NIP-42, NIP-98; Cordn over ContextVM |
+| Code hosting | Buzz's own git backend, not GRASP ([ngit](https://ngit.dev/ecosystem/)) | Built-in git client and PR review ([Nostr Compass](https://nostrcompass.org/en/newsletters/2026-09-23-newsletter/)) | ngit-grasp private mode (GRASP-08) |
+| Chat privacy | Relay-readable | Cordn (MLS) | Cordn (MLS); coordinator sees opaque blobs only |
+| Agents | Agent keypair + owner attestation, ACP harness ([nowline](https://nowline.net/reports/block-ships-buzz-open-source-slack-git-built-for-ai-agents)) | Inherits | Agent npub as Cordn member; inbox/outbox daemon; PRs via NIP-34 |
+| Licence | Apache-2.0 | Apache-2.0 (unconfirmed canonical source) | ngit-grasp/ngit MIT; cordn-rs, cordn-web, @cordn/cli MIT; ContextVM SDK LGPL-3.0; Cordn core repo licence **not declared** |
+
+Also considered: NIP-29 relay groups (Flotilla, Budabit) — simple and widely supported, but the relay reads every message; Marmot (MLS over relays) — no ordering authority, which is the problem Cordn's coordinator solves; Concord (Armada) — named by ngit's roadmap for future access management, worth tracking; Iris double ratchet — good 1:1 DMs, but O(members) group fan-out and deniable messages suit a team record poorly.
+
+## Decision
+
+Adopt **GRASP + Cordn + ContextVM** as Continuum's team architecture, and borrow Buzz's ideas rather than its code:
+
+- **Workspace = owner's node.** It runs a private `ngit-grasp` (GRASP-08: NIP-42 for the relay, NIP-98 for Git HTTP) and a `cordn-rs` coordinator, both behind Torii Base. ngit-grasp supports `NGIT_BASE_PATH`, so it can mount at e.g. `/grasp` on the existing domain.
+- **One roster, three projections.** The owner-signed project roster (TEAMS-1's kind 30093 members, made load-bearing) is the single source. Continuum derives: Cordn group membership (add/remove), `NGIT_PRIVATE_MEMBERS` (read access) and the repository announcement's maintainers (merge/push). Roles: Owner, Maintainer, Contributor, Viewer, Agent-of(<human npub>).
+- **One project = one Cordn group + its repos.** Branch channels (Buzz's best idea) come later as extra Cordn groups named after `pr/` branches.
+- **Clankers.** Each agent has its own npub, is listed on the roster as Agent-of a human, runs on its owner's machine or node, and reaches Cordn through the CLI daemon's inbox/outbox queues. It acts only on messages from roster humans, is rate-limited, dedupes by cursor, ignores other agents (no loops), opens `pr/` branches and never merges. Its signing key should move to a NIP-46 remote signer (`ngit --nbunksec`) before real use.
+- **Graphics.** SVGs and other text assets live in git with normal review. Large raster/video lives in Blossom (Cordn already supports encrypted media); the repo stores hash manifests.
+- **Approval boundary unchanged.** Agent work is a proposal; a human maintainer merges. Merges and roster changes are signed, public-to-the-team events, so decisions stay attributable even though chat is encrypted.
+
+## Trial (2026-10-29, isolated sandbox, test keys only)
+
+Reproducible scripts: `docs/trials/teams-cordn-grasp/`. Identities: alice (owner), bob (contributor), clanker (agent of alice), outsider (not on roster). All services bound to loopback; nothing published to public relays.
+
+| # | Test | Result |
+|---|---|---|
+| 1 | Alice creates a Cordn group; invites bob and clanker by pubkey; encrypted transport required | **Pass.** Cordn identity = the member's own Nostr pubkey. Messages arrive in coordinator order. |
+| 2 | Coordinator and relay never see plaintext | **Pass.** Zero plaintext hits in SQLite, WAL and logs. Coordinator stores key-package publishers, welcome targets, opaque messages and counters, but no per-message sender. |
+| 3 | Remove bob, post, bob syncs | **Pass.** Bob keeps old history; new message unreadable; group marked inactive for him. Re-invite works and does not reveal what he missed. |
+| 4 | Move the group to a second coordinator | **Pass with caveat.** Requires the group to declare fallbacks first (library `updateGroupMetadata`; the CLI has no command). Members follow automatically. **Defect:** cursors restart on the new coordinator and CLI 0.9.0 history then hides messages whose cursor collides with an older one (bob did not see the clanker's reply). The daemon inbox was unaffected. Report upstream before relying on handoff. |
+| 5 | Private ngit-grasp (GRASP-08) with members alice, bob, clanker | **Pass.** Anonymous Git HTTP → 401; anonymous relay REQ → nothing; outsider authenticates → `restricted: … not whitelisted`; bob clones; outsider's clone fails. |
+| 6 | Clanker loop: bob writes `@clanker note: …` in chat | **Pass.** Alice's unaddressed message ignored; clanker cloned, committed, pushed `pr/clanker-3` and replied in chat. PR author = clanker npub, description names the requesting human. |
+| 7 | Clanker pushes directly to `master` | **Refused**: "not a confirmed maintainer". |
+| 8 | Alice reviews and merges | **Pass.** `ngit merge` + push; PR status becomes `applied`. |
+| 9 | Remove bob from `NGIT_PRIVATE_MEMBERS` | **Pass** after a restart: bob's fetch fails, alice's still works. |
+
+Footprint (resident memory): ngit-grasp 27.5 MB, each cordn-server ~15 MB, Cordn CLI daemon 122 MB (Node), clanker loop 45 MB. Binaries: ngit-grasp 27.6 MB (≈3.5 min release build on 2 cores), cordn-server 10.3 MB.
+
+Operational findings for packaging:
+
+- **Private repo discovery lives on the user's relays.** ngit publishes an encrypted kind-10318 relay list to the member's own write relays; the private GRASP correctly rejects it. Each member needs a normal outbox relay (the Torii node relay can serve).
+- **Relay owners can become members.** GRASP-08 membership = `NGIT_PRIVATE_MEMBERS` ∪ NIP-11 owners of relays listed in accepted announcements. Team repos must list only the private GRASP (`--repo-relay-only`), or another operator is silently admitted.
+- **Outbound lookups.** Even in private mode, ngit-grasp contacted `purplepag.es`, `index.hzrd149.com` and `indexer.coracle.social` to look up participants' relay lists, which can reveal member pubkeys to those indexers. Set `NGIT_USER_INDEX_RELAYS` to the Torii node relay.
+- **Membership changes need a restart** in v3.0.10 (environment-configured). Continuum's roster projector must restart the service, or a dynamic membership source must land upstream.
+- **ngit defaults to TLS** for a bare `localhost:7334`; use `ws://` explicitly in development. In production Torii Base terminates TLS.
+- **Agent hygiene.** `--private-key-file` and ngit's file store hold raw keys; give clankers a NIP-46 signer before real use. The Cordn daemon needed SIGKILL when its relay had already gone; use a service manager with a stop timeout.
+
+## Consequences and risks
+
+- **Server-visible code.** GRASP-08 controls who can read, but the operator's server holds plaintext repositories ([ngit](https://ngit.dev/self-host/ngit-grasp/private-service/)). The owner's node is the team's trust boundary for code; chat is protected even from it.
+- **Coordinator metadata.** Cordn's coordinator stores key-package publishers and welcome targets (pubkeys), group IDs, message counts and timing. It cannot read content or see who sent each message. Teams should know the coordinator learns who was invited.
+- **Agents hold group keys.** A compromised clanker can read its group's chat and push `pr/` branches. Keep agents to their own project group; maintainer rules stop it merging.
+- **Removal is forward-only.** A removed member keeps what they already received.
+- **Service-wide private scope.** GRASP-08 membership covers the whole ngit-grasp instance, so one instance per team (or per trust domain), not one per repository.
+- **Young dependencies.** Cordn is pre-1.0 (CLI 0.9.0, server v0.5.1-next.3) and its core repo declares no licence; confirm with gzuuus before bundling. Pin versions and verify release checksums.
+- **Identity custody.** The Cordn CLI and ngit accept raw keys; human members must use a browser signer (NIP-07/NIP-46) through Continuum or cordn-web, never paste an nsec into Continuum.
+
+## Next steps (each needs its own approval)
+
+1. Confirm the Cordn core licence and whether cordn-web supports NIP-07/NIP-46 signers.
+2. Report the post-handoff cursor-collision history defect to Cordn and re-test handoff.
+3. TEAMS-2a: make the roster load-bearing (signed roster event, NIP-17 invite/accept), with Continuum projecting it to Cordn and ngit-grasp.
+4. TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path) and cordn-rs, with backups for both data directories.
+5. TEAMS-2c: in-app team chat panel and the clanker harness with a remote signer and an LLM in place of the trial's scripted change.

@@ -17,6 +17,15 @@ gates and non-custody boundary are in `docs/adr-coco-wallet-transition.md`.
 
 Living document. This will change as we learn.
 
+**Team collaboration direction (proposed 2026-10-29):** Teams of up to 12
+people plus their clankers work from one owner-signed roster, projected to a
+Cordn (MLS) group for encrypted chat, a private ngit-grasp (GRASP-08) for code,
+and the repository's maintainer list for merges. Clankers have their own npubs,
+act only for roster humans and open PRs; humans merge. Buzz's ideas are borrowed
+(agent keypairs, branch channels), not its server. A sandbox trial passed; no
+code ships until each TEAMS-2 slice is approved. See
+`docs/adr-team-collaboration.md`.
+
 **Read-only repository connections (2026-09-25):** Settings → Connections is
 the single owner-controlled entry point for project repositories. Start with
 a self-hosted GitHub App/device flow, selected repositories only, explicit

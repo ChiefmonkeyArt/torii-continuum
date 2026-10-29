@@ -1,5 +1,18 @@
 # Torii Continuum — Progress log
 
+## Team collaboration ADR and sandbox trial (2026-10-29, docs-only)
+
+Compared Buzz, its Cordn-based fork Zzub and a GRASP + Cordn + ContextVM design;
+proposed the latter in `docs/adr-team-collaboration.md`. An isolated loopback
+trial (throwaway keys; cordn-server v0.5.1-next.3, @cordn/cli 0.9.0, ngit 3.0.5,
+ngit-grasp 3.0.10) passed encrypted group chat, plaintext-free coordinator
+storage, member removal, coordinator handoff, private GRASP-08 access control,
+a chat-driven clanker PR, refusal of the clanker's direct push, human merge and
+code-access removal. Found: a Cordn CLI history gap after handoff, restart-only
+GRASP membership, public index-relay lookups by default, and relay-owner
+admission via announcements. No app bytes, version, tag or VPS changed;
+scripts are in `docs/trials/teams-cordn-grasp/`.
+
 ## v0.2.190-alpha — structured Routstr refund compatibility (2026-10-29)
 
 The v189 live acceptance call returned a DeepSeek V4 Flash reply in 6,578 ms

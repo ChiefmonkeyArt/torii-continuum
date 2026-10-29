@@ -1,5 +1,14 @@
 # Continuum — Session Handover
 
+## Teams architecture proposal (2026-10-29, docs-only)
+
+`docs/adr-team-collaboration.md` proposes Cordn group chat, a private
+ngit-grasp and roster-scoped clankers; status Proposed. Its trial ran only in an
+isolated sandbox. Nothing is installed on the VPS, and v0.2.190-alpha release
+work above is unaffected. Next approvals needed, in order: Cordn licence check,
+then TEAMS-2a (roster), 2b (Suite packaging), 2c (chat panel and clanker harness).
+Do not package Cordn before its core licence is confirmed.
+
 ## v0.2.190-alpha release handoff (2026-10-29)
 
 The owner-approved test already ran once: DeepSeek V4 Flash via
