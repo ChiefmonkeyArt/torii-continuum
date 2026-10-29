@@ -9,6 +9,7 @@ import { createRoutstrPayment } from '../core/routstr-payment.mjs';
 import { discoverProviders, fetchProviderCatalog, estimateSatsForModel, safeRemoteBaseUrl } from '../core/routstr-discovery.mjs';
 import { createChatTelemetry } from '../lib/chat-stream.mjs';
 import { isQuarantined } from '../core/provider-quarantine.mjs';
+import { runRecoveryProbe } from './probe-deepseek-recovery.mjs';
 
 const COMPARISON_MODELS = ['deepseek-v4-flash', 'qwen3-5-9b'];
 const NO_THINKING_ROUTES = [
@@ -217,8 +218,10 @@ async function main() {
   const dir = join(agentRoot(), 'memory', 'benchmarks');
   // Same workflow run cannot charge twice, even after a partial failure/rerun.
   await claimRun(dir, runId);
-  const report = await benchmark(loadConfig(), { target,
-    onRow: row => console.log(JSON.stringify({ trial: row })) });
+  const report = target === 'deepseek_recovery'
+    ? await runRecoveryProbe(loadConfig(), { approved: true, log: quiet })
+    : await benchmark(loadConfig(), { target,
+      onRow: row => console.log(JSON.stringify({ trial: row })) });
   await writeFile(join(dir, `${runId}.json`), JSON.stringify(report), { mode: 0o600 });
   console.log(JSON.stringify({ benchmark_report: report }));
 }

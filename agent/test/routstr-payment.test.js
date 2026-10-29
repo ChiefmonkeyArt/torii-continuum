@@ -64,6 +64,56 @@ function fixture(options = {}) {
   return { payment, records, calls, wallet, store, fetchFn, count: () => ({ sends, receives, rollbacks }) };
 }
 
+test('recovery status is read-only, redacted, and preserves the global guard', async () => {
+  const f = fixture();
+  assert.deepEqual(await f.payment.status(), { pending: 0, held: 0, active: 0, blocked: false, available: true });
+  await f.payment.begin(base, 10);
+  assert.equal((await f.payment.status()).active, 1);
+  const reopened = createRoutstrPayment(cfg, f.wallet, { store: f.store, fetchFn: f.fetchFn });
+  assert.equal((await reopened.status()).pending, 1);
+  assert.equal((await reopened.status()).blocked, true);
+  assert.equal(f.count().receives, 0);
+  assert.equal(f.count().sends, 1);
+  assert.ok(!JSON.stringify(await reopened.status()).includes('secret'));
+  const isolated = createRoutstrPayment({ ...cfg, routstr: { ...cfg.routstr, quarantined_providers: [base] } },
+    f.wallet, { store: f.store, fetchFn: f.fetchFn });
+  assert.equal((await isolated.status()).held, 1);
+  assert.equal((await isolated.status()).blocked, false);
+  f.records.set('rrefund_invalid', '{}');
+  assert.equal((await reopened.status()).available, false);
+  assert.equal((await reopened.status()).blocked, true);
+});
+
+test('funded provider timeout is classified, settled once, and never retried', async () => {
+  const f = fixture();
+  const dir = await mkdtemp(join(tmpdir(), 'routstr-timeout-'));
+  const saved = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async (_url, { signal }) => {
+    requests++;
+    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  };
+  const router = createRoutstr({ ...cfg, routstr: { ...cfg.routstr,
+    discovery: { enabled: false }, models: { chat: 'deepseek-v3.2' },
+    limits: { timeout_ms: 20, max_sats_per_request: 10 } },
+    logging: { cost_log: join(dir, 'costs.jsonl') } }, f.wallet, { info() {}, warn() {} }, {
+    fetchCatalog: async () => [base, 'https://other.example'].map(baseUrl => ({
+      baseUrl, models: [{ id: 'deepseek-v3.2', max_cost_sats: 10 }],
+    })), payment: { store: f.store, fetchFn: f.fetchFn },
+  });
+  try {
+    const result = await router.chat({ messages: [{ role: 'user', content: 'gm' }] });
+    assert.equal(result.ok, false);
+    assert.equal(result.failure_kind, 'upstream_timeout');
+    assert.match(result.reason, /took too long/);
+    assert.match(result.reason, /refund was returned/);
+    assert.equal(requests, 1);
+    assert.equal(f.count().sends, 1);
+    assert.equal(f.count().receives, 1);
+    assert.equal((await router.paymentStatus()).pending, 0);
+  } finally { globalThis.fetch = saved; await rm(dir, { recursive: true, force: true }); }
+});
+
 test('one bounded deposit, bearer refund, no URLs/separate approval/reusable funded key', async () => {
   const f = fixture();
   const handle = await f.payment.begin(base, 10);

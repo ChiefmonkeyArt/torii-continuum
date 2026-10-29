@@ -1,6 +1,4 @@
-/** Routstr page — connect, Cashu pay, model picker, usage stats.
- *  All UI-only for MVP; wire real endpoint later.
- */
+/** Routstr: live agent funds and model, with optional advanced controls. */
 import { h, clear, formatSats, openModal } from './util.js';
 import * as store from '../data/store.js';
 import { getRoutstr, updateRoutstr } from '../data/store.js';
@@ -59,6 +57,8 @@ let usageBarEl = null;
 // Live handle to the balance number node so the poll can refresh it in place
 // without re-rendering (and tearing) the whole page.
 let balanceNumEl = null;
+let balanceStatusEl = null;
+let recoveryStatusEl = null;
 // Live handles to the inline Cashu receive/top-up form so the "Top Up" button
 // (here and from the chat dock) can reveal + focus it without a re-render.
 let topUpSectionEl = null;
@@ -193,15 +193,14 @@ export function renderRoutstr(mount, opts = {}) {
   if (demo) mount.appendChild(demoBanner());
 
   // Kick off (or refresh) live balance + usage polling when logged in.
-  if (live) { startBalancePoll(mount); startUsagePoll(mount); }
-  else { stopBalancePoll(); stopUsagePoll(); }
+  stopBalancePoll(); stopUsagePoll();
 
   const header = h('div', { class: 'page-header' }, [
     h('div', {}, [
       h('h1', { class: 'page-title', text: 'Routstr' }),
-      h('div', { class: 'page-sub', text: 'Pay-per-request AI over Cashu. Pick your model, load a mint, route requests through nostr-native infra.' }),
+      h('div', { class: 'page-sub', text: 'Your AI model and spending wallet.' }),
     ]),
-    h('div', { class: 'page-actions' }, [
+    demo && h('div', { class: 'page-actions' }, [
       c.connected
         ? h('button', { onClick: demoIntercept(demo, disconnect) }, ['Disconnect'])
         : h('button', { class: 'primary', onClick: demoIntercept(demo, connect) }, ['Connect Cashu wallet']),
@@ -216,21 +215,12 @@ export function renderRoutstr(mount, opts = {}) {
   mount.appendChild(pendingSlot);
   if (live) mountPendingTopUps(pendingSlot, demo);
 
-  // Two matching horizontal wallet cards: Cashu (left) + NWC (right).
+  // Primary controls only. Optional Lightning funding is under Advanced.
   const walletCards = h('div', { class: 'grid-2' }, [
     renderCashuCard(c, demo),
-    renderNwcCard(live, demo),
+    renderModelPicker(c, demo),
   ]);
   mount.appendChild(walletCards);
-
-  mount.appendChild(h('div', { style: 'height: 16px' }));
-
-  // Grid: model list + usage
-  const grid = h('div', { class: 'grid-2' }, [
-    renderModelPicker(c, demo),
-    renderUsage(c),
-  ]);
-  mount.appendChild(grid);
 
   mount.appendChild(h('div', { style: 'height: 16px' }));
 
@@ -258,7 +248,17 @@ export function renderRoutstr(mount, opts = {}) {
       })(),
     ]),
   ]);
-  mount.appendChild(settings);
+  const advanced = h('details', { class: 'routstr-advanced' }, [
+    h('summary', { text: 'Advanced · Lightning, usage and preferences' }),
+    h('div', { class: 'grid-2', style: 'margin-top:16px;' }, [
+      renderNwcCard(live, demo), renderUsage(c),
+    ]),
+    settings,
+  ]);
+  mount.appendChild(advanced);
+  // Start only after the live nodes exist; a fast response cannot update an old
+  // mount. Never display a cached browser amount as a freshly verified balance.
+  if (live) { startBalancePoll(mount); startUsagePoll(mount); }
 
   // If we arrived here from the chat dock's "Top Up" button, reveal + focus the
   // Cashu receive form so funding is one paste away. Never in demo (no session).
@@ -268,19 +268,18 @@ export function renderRoutstr(mount, opts = {}) {
 // ─── Card 1: Cashu / Routstr balance ────────────────────────────────────────
 
 function renderCashuCard(c, demo) {
-  balanceNumEl = h('span', { class: 'bal-num', text: formatSats(c.cashuBalanceSats) });
+  balanceNumEl = h('span', { class: 'bal-num', text: demo ? formatSats(c.cashuBalanceSats) : '—' });
+  balanceStatusEl = h('span', { class: 'pill', text: demo ? 'Demo wallet' : 'Checking balance…' });
+  recoveryStatusEl = h('p', { class: 'wallet-recovery-status muted', role: 'status', 'aria-live': 'polite' });
 
   const hero = h('div', { class: 'routstr-hero' }, [
-    h('div', { class: 'routstr-avatar', text: '⚡' }),
     h('div', { style: 'flex: 1;' }, [
       h('div', {}, [
-        h('span', { class: c.connected ? 'pill ok' : 'pill', text: c.connected ? 'connected' : 'not connected' }),
-        ' ',
-        h('span', { class: 'mono muted', text: c.endpoint }),
+        balanceStatusEl,
       ]),
-      h('div', { style: 'margin-top: 8px;', class: 'muted', text: c.connected
-        ? 'Cashu tokens are loaded locally and burned per request. No account, no key custody.'
-        : 'Connect a Cashu wallet (mock) to enable pay-per-request. Nothing is sent to the network yet.' }),
+      h('div', { style: 'margin-top: 8px;', class: 'muted', text: demo
+        ? 'Sample funds. No payments are sent.'
+        : 'Cashu funds held by your agent on this server.' }),
     ]),
     h('div', { class: 'stat' }, [
       h('span', { class: 'label', text: 'Cashu balance' }),
@@ -297,8 +296,17 @@ function renderCashuCard(c, demo) {
   return h('div', { class: 'card hot' }, [
     h('h3', { text: 'Cashu balance' }),
     hero,
+    recoveryStatusEl,
     h('div', { class: 'wallet-card-actions' }, [topUpBtn]),
   ]);
+}
+
+export function paymentRecoveryLabel(recovery) {
+  if (!recovery || recovery.available !== true) return 'Payment recovery status unavailable. This balance does not confirm chat is ready.';
+  if (recovery.blocked) return 'Chat payments paused: an earlier payment needs recovery. Do not top up to fix this. Your claims are retained.';
+  if (recovery.held > 0) return `${recovery.held} isolated payment claim(s) retained. They are not included in this balance.`;
+  if (recovery.active > 0) return 'A chat payment is in progress.';
+  return '';
 }
 
 // ─── Top Up modal (v0.2.83-alpha): Lightning-QR primary, paste-token fallback ─
@@ -727,7 +735,7 @@ export function renderPendingTopUps(quotes, handlers = {}) {
     h('p', {
       class: 'muted',
       style: 'font-size: 12px; margin-top: 8px;',
-      text: "Payments that reached the mint but weren't minted into your wallet. Click Resume to complete them.",
+      text: 'Unfinished top-ups. Resume checks their status; an invoice may still be unpaid.',
     }),
   ]);
 }
@@ -1203,30 +1211,40 @@ function disconnect() {
 
 function startBalancePoll(mount) {
   stopBalancePoll();
+  const amountEl = balanceNumEl, statusEl = balanceStatusEl, recoveryEl = recoveryStatusEl;
+  let busy = false;
   const tick = async () => {
     // FE-04: stop entirely once the operator leaves Routstr, so a backgrounded
     // or forgotten tab does not keep calling /api/wallet/balance every 15s.
     if (!isRoutstrActive()) { stopBalancePoll(); return; }
-    const r = await walletBalance();
+    if (busy || document.visibilityState === 'hidden') return;
+    busy = true;
+    let r;
+    try { r = await walletBalance(); }
+    catch { r = { ok: false }; }
+    finally { busy = false; }
     // Re-check after the await: if the operator left while the balance was in
     // flight, drop the result rather than mutate the store or tease the DOM.
-    if (!isRoutstrActive()) { stopBalancePoll(); return; }
-    if (!r.ok || !r.data) return;
+    if (!isRoutstrActive() || !mount.isConnected || amountEl !== balanceNumEl) return;
+    if (!r.ok || !r.data) {
+      amountEl.textContent = '—'; statusEl.textContent = 'Balance unavailable';
+      recoveryEl.textContent = 'Check your connection and sign-in. Your funds have not been changed.';
+      return;
+    }
     const sats = readBalanceSats(r.data);
-    if (sats == null) return; // no numeric balance in payload — leave display as-is
+    if (sats == null) {
+      amountEl.textContent = '—'; statusEl.textContent = 'Balance unavailable';
+      recoveryEl.textContent = 'The server did not return a valid balance.';
+      return;
+    }
+    amountEl.textContent = formatSats(sats);
+    statusEl.textContent = 'Live balance';
+    recoveryEl.textContent = paymentRecoveryLabel(r.data.payment_recovery);
     const cur = getRoutstr().content;
-    // FE-09: update the balance WITHOUT flipping `connected` back on — a balance
-    // result must never silently reconnect the UI after the operator disconnected
-    // (disconnect is a deliberate local toggle, and the poll was previously
-    // re-marking it connected on the next tick).
+    // Preserve legacy/demo preferences; the real wallet has no local
+    // connected/disconnected toggle and takes its status only from the agent.
     if (cur.cashuBalanceSats !== sats) {
       updateRoutstr({ cashuBalanceSats: sats });
-      // Refresh the balance number in place. A targeted textContent write avoids
-      // tearing/re-rendering the whole page mid-interaction, and only touches the
-      // node if it is still on-screen (Routstr page still mounted).
-      if (balanceNumEl && balanceNumEl.isConnected) {
-        balanceNumEl.textContent = formatSats(sats);
-      }
     }
   };
   tick();

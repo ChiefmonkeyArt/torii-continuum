@@ -1,5 +1,21 @@
 # Torii Continuum — Master TODO
 
+## v0.2.189-alpha: reliability and Coco preparation
+
+- [x] Expose redacted recovery counts through the owner-only, no-store wallet
+  balance response; keep the global pending-payment guard.
+- [x] Classify funded timeouts without retrying a second payment; atomically
+  persist encrypted claims and stop waiting on already-completed SSE answers.
+- [x] Simplify live Routstr to balance/top-up/model; disclose unknown balance,
+  pending recovery and unpaid top-ups; preserve demo-only simulation.
+- [x] Add a single-deposit DeepSeek V4 recovery probe with a 2-sat gross debit
+  cap including known mint fees, protected by the run-id/writer lock.
+- [x] Draft Coco migration and rollback boundaries without migrating funds.
+- [ ] Verify owner-approved Bartly isolation and one live capped acceptance
+  probe through the tagged release workflow; retain every existing claim.
+- [ ] Implement Coco after SDK/storage selection, offline recovery tests,
+  read-only inventory and separately approved migration canary.
+
 > Torii Continuum is a **separate app** from Torii Quest. Continuum is the sovereign dashboard / project engine / personal AI. Quest is the game.
 
 > This file is the **active task list and source of truth for Torii Continuum**. Update it whenever Continuum tasks are added, changed, completed, removed, or reprioritised.

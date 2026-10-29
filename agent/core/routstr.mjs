@@ -120,7 +120,7 @@ export function parseSSE(body) {
  * `onDelta` is best-effort UI progress only; the returned content remains the
  * authoritative completion used for refunds, actions and persistence.
  */
-export async function consumeSSE(stream, { onDelta, onTrace, now = Date.now, started = now() } = {}) {
+export async function consumeSSE(stream, { onDelta, onTrace, now = Date.now, started = now(), completionGraceMs = 100 } = {}) {
   if (!stream || typeof stream.getReader !== 'function') return { content: '', usage: null, first_token_ms: null };
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -160,9 +160,25 @@ export async function consumeSSE(stream, { onDelta, onTrace, now = Date.now, sta
   };
 
   let done = false;
+  let tailDeadline = null;
+  let tailExpired = false;
   try {
     while (!done) {
-      const part = await reader.read();
+      // finish_reason is the provider's terminal answer marker. Some proxies
+      // leave the socket open or omit [DONE]. Allow a short tail for usage, not
+      // the entire paid inference deadline. Partial answers never use this path.
+      let tailTimer;
+      let part;
+      try {
+        if (finished && tailDeadline === null) tailDeadline = Date.now() + completionGraceMs;
+        part = finished ? await Promise.race([
+          reader.read(),
+          new Promise(resolve => { tailTimer = setTimeout(() => {
+            tailExpired = true; resolve({ done: true });
+          }, Math.max(0, tailDeadline - Date.now())); }),
+        ]) : await reader.read();
+      } finally { clearTimeout(tailTimer); }
+      if (tailExpired) break;
       bytes += part.value?.byteLength || 0;
       if (part.value?.byteLength) {
         transportChunks += 1;
@@ -177,7 +193,7 @@ export async function consumeSSE(stream, { onDelta, onTrace, now = Date.now, sta
       }
       if (part.done) break;
     }
-    if (pending && !done) consumeLine(pending);
+    if (pending && !done && !tailExpired) consumeLine(pending);
     if (!finished) throw new Error('incomplete completion stream');
   } finally {
     try { onTrace?.({
@@ -605,8 +621,12 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs - (now() - started)));
     let result;
+    let failureKind = null;
     try {
-      if (now() - started >= timeoutMs) throw new Error('turn deadline reached');
+      if (now() - started >= timeoutMs) {
+        failureKind = 'upstream_timeout';
+        throw new Error('turn deadline reached');
+      }
       const res = await measure(hooks.telemetry, 'provider_wait', () => fetch(`${baseUrl}/v1/chat/completions`, {
         method: 'POST', signal: controller.signal, redirect: 'error',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${handle.key}` },
@@ -614,6 +634,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       }));
       if (!res.ok) {
         try { await res.body?.cancel(); } catch {}
+        failureKind = res.status >= 500 ? 'upstream_5xx' : 'upstream_4xx';
         throw new Error('provider request failed');
       }
       let first = null;
@@ -632,16 +653,32 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       if (!stream.content) throw new Error('empty completion');
       result = { ok: true, content: stream.content, model,
         tokens_in: stream.usage?.prompt_tokens || 0, tokens_out: stream.usage?.completion_tokens || 0 };
-    } catch {
+    } catch (error) {
       // Never silently send another paid request after an ambiguous deposit.
+      failureKind ||= controller.signal.aborted ? 'upstream_timeout' :
+        /stream|completion/.test(error?.message || '') ? 'upstream_incomplete' : 'network';
       result = { ok: false, code: 'payment_recovery_required',
-        reason: 'Streaming request failed. No second payment was sent; any remaining balance is being recovered.', retryable: false };
+        failure_kind: failureKind, retryable: false };
     } finally {
       clearTimeout(timer);
     }
     const settlement = await measure(hooks.telemetry, 'settlement', () => bearerPayments.finish(handle));
     if (settlement.pending) hooks.telemetry?.refundPending?.();
     if (settlement.dust_msats) hooks.telemetry?.refundDust?.(settlement.dust_msats);
+    if (!result.ok) {
+      const explanation = failureKind === 'upstream_timeout'
+        ? 'The AI provider took too long to reply.'
+        : failureKind === 'upstream_incomplete'
+          ? 'The AI provider did not complete its reply.'
+          : 'The AI provider could not complete this request.';
+      result.reason = `${explanation} No second payment was sent. ${settlement.pending
+        ? 'Payment recovery is pending; your claim is retained. Check Routstr.'
+        : settlement.refunded > 0
+          ? 'The available refund was returned to your wallet.'
+          : settlement.dust_msats
+            ? 'A fractional-sat claim is retained.'
+            : 'Payment settlement completed; no refund was available.'}`;
+    }
     return { ...result, sats_spent: Math.max(0, sats - settlement.refunded),
       sats_refunded: settlement.refunded, refund_pending: settlement.pending,
       refund_dust_msats: settlement.dust_msats || 0, duration_ms: now() - started };
@@ -729,6 +766,8 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
           sats_spent: attempt.ok ? attempt.sats_spent : 0, duration_ms: attempt.duration_ms || 0,
           attempted_models: [wanted],
           reason: attempt.ok ? null : attempt.reason, code: attempt.ok ? null : attempt.code || null,
+          failure_kind: attempt.failure_kind || null,
+          refund_pending: attempt.refund_pending === true,
         });
         return attempt;
       }
@@ -783,6 +822,8 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       attempted_models: attemptedModels,
       reason: attempt && !attempt.ok ? attempt.reason : null,
       code: attempt && !attempt.ok ? attempt.code || null : null,
+      failure_kind: attempt?.failure_kind || null,
+      refund_pending: attempt?.refund_pending === true,
     });
 
     return attempt;
@@ -809,6 +850,9 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       Number(priority.includes(b.id)) - Number(priority.includes(a.id)) || a.name.localeCompare(b.name)).slice(0, 500);
   }
   return { chat, availableModels, refreshCatalog: ensureCatalog, startDiscovery, stopDiscovery, discoveryStatus,
+    paymentStatus: () => bearerPayments?.status() ?? Promise.resolve({
+      pending: 0, held: 0, active: 0, blocked: false, available: true,
+    }),
     startPaymentRecovery: () => bearerPayments?.start(),
     stopPaymentRecovery: () => bearerPayments?.stop() };
 }

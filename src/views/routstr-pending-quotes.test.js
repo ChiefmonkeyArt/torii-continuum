@@ -136,7 +136,7 @@ describe('renderPendingTopUps — structure', () => {
   it('shows the explanatory footer', () => {
     const card = renderPendingTopUps(sampleQuotes, {});
     const txt = card.textContent;
-    expect(txt).toContain("weren't minted into your wallet");
+    expect(txt).toContain('an invoice may still be unpaid');
   });
 });
 

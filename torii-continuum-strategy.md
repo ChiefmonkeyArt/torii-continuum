@@ -1,5 +1,20 @@
 # Torii Continuum — Strategy & Next Steps
 
+## Wallet reliability and Coco direction (2026-10-29)
+
+Keep DeepSeek V4 Flash as the owner-selected chat model. Treat model inference,
+provider payment recovery, and wallet custody as distinct failure domains;
+changing wallet SDKs does not fix a slow AI provider.
+
+Routstr's primary surface is the real agent balance, Top Up and model selection.
+Optional NWC, usage and preferences live under Advanced. Never show cached
+browser money as a freshly checked balance or imply an unpaid quote is paid.
+
+Prepare Coco interoperability with Plebeian through a separate, bounded agent
+allowance and owner-controlled wallet, not shared plaintext seeds or duplicate
+proof stores. Npub identifies the owner; it is not a wallet seed. The migration
+gates and non-custody boundary are in `docs/adr-coco-wallet-transition.md`.
+
 Living document. This will change as we learn.
 
 **Read-only repository connections (2026-09-25):** Settings → Connections is
