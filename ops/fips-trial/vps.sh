@@ -117,6 +117,9 @@ cmd_status() {
     echo "== peers"; fc show peers 2>&1 | mask | head -40
     echo "== sessions"; fc show sessions 2>&1 | mask | head -20
   fi
+  if [ -f $TRIAL/env ]; then
+    for u in $UNITS; do echo "== log $u"; journalctl -u "$u" -n 25 --no-pager -o cat 2>/dev/null | mask; done
+  fi
   echo "== listeners on trial ports"
   ss -Hlntu | awk '{print $1, $5}' | grep -E ':(2121|7334|10547|7778)$' | mask || echo none
   if command -v ufw >/dev/null; then echo "== ufw: $(ufw status | head -1)"; fi
