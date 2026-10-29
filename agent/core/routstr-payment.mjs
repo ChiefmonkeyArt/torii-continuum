@@ -51,7 +51,7 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
   const keyFor = token => `sk-${createHash('sha256').update(token).digest('hex')}`;
 
   async function persist(name, record) {
-    await store.put(name, JSON.stringify(record));
+    await store.put(name, JSON.stringify(record), { atomic: true });
     // Production store writes once before any remote dispatch; flush the file
     // and directory before handing off funds. Injected stores are test seams.
     if (!deps.store) {
@@ -222,5 +222,24 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
     tick();
   }
   function stop() { stopped = true; clearTimeout(timer); timer = null; }
-  return { begin, finish, recover, start, stop };
+  // Read-only, owner-facing summary. Never expose credentials, proofs, tokens,
+  // claim identifiers or a provider-supplied error. No network or recovery.
+  async function status() {
+    const summary = { pending: 0, held: 0, active: 0, blocked: false, available: true };
+    try {
+      const names = (await store.list()).filter(n => n.startsWith(PREFIX));
+      for (const name of names) {
+        if (!validName(name)) throw failure();
+        const raw = await store.get(name);
+        if (!raw) continue; // settlement removed it between list/read
+        const record = validate(JSON.parse(raw));
+        if (active.has(name)) summary.active++;
+        else if (isQuarantined(cfg, record.base)) summary.held++;
+        else summary.pending++;
+      }
+      summary.blocked = summary.pending > 0 || names.length >= MAX_PENDING;
+    } catch { summary.available = false; summary.blocked = true; }
+    return summary;
+  }
+  return { begin, finish, recover, start, stop, status };
 }

@@ -1,5 +1,31 @@
 # Torii Continuum — Progress log
 
+## v0.2.189-alpha — recovery visibility and Coco preparation (2026-10-29)
+
+Read-only diagnosis found a DeepSeek V4 Flash failure at roughly 45 seconds,
+followed by a retained 1-sat Bartly claim. Two older isolated claims and 12 dust
+records were also present. Existing logs do not prove whether the original delay
+was generation or completion framing; timeout classification and the completed
+SSE tail are now covered without relaxing payment safeguards.
+Evidence: https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/40791078188
+
+Routstr now leads with real balance/top-up/model controls. Advanced retains NWC,
+usage and local preferences. Balances start unknown, stale route responses cannot
+overwrite a new mount, and recovery is shown without exposing tokens or keys.
+Pending invoices are no longer described as definitely paid.
+Missing legacy Routstr preference events now receive safe local defaults instead
+of crashing the real balance/model screen after hydration.
+
+The owner approved preserving Bartly's claim, isolating that provider and one
+DeepSeek V4 test capped at 2 sats total including fees. Free discovery found other
+advertised V4 offers, not yet proof of paid inference/refund compatibility:
+https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/40821168558
+
+Coco remains an ADR/preparation, not a production wallet migration. No human seed,
+private key or password is requested; no automatic top-up authority is added.
+Deployment and paid acceptance must be verified from the release workflow receipt,
+not inferred from passing offline tests.
+
 ## v0.2.188-alpha: read-only GitHub connections
 
 Owner approved the connection-flow/permission draft, initial read-only GitHub

@@ -1,5 +1,27 @@
 # Continuum — Session Handover
 
+## v0.2.189-alpha release handoff (2026-10-29)
+
+- Changes: classified funded failures; bounded terminal-SSE tail; atomic encrypted
+  recovery records; owner-only payment status; simple live Routstr UI;
+  explicitly approved single-deposit recovery probe; Coco migration ADR.
+- Owner approval: isolate `https://bartly.eth64.de:17881`, preserve its 1-sat claim,
+  keep DeepSeek V4 Flash, test at most once with 2 sats total including mint fees.
+  Run `deepseek_recovery`, not the older multi-request benchmark targets.
+- Shipping: merge PR, tag the merged commit, build release artifacts and deploy
+  from the tag. Select `quarantine_provider=https://bartly.eth64.de:17881`,
+  `benchmark=true`, `benchmark_target=deepseek_recovery`; leave payment_mode and
+  Suite tag unchanged. The workflow stops the daemon for the single wallet writer
+  and restores it on exit; a durable run-id marker prevents charging on reruns.
+- Verify main/tag/VPS/frontend SHA/version, health, saved model, all three prior
+  claim hashes and the probe report. Do not claim chat recovered if the capped
+  test fails, creates another pending claim or is stopped by fee data.
+- Baseline rollback: v0.2.188-alpha / 88f064a; preserve current wallet/claims,
+  never restore old spendable proofs after a payment. Quarantine is an owner
+  setting, not baked into new installations.
+- Coco implementation is pending. See `docs/adr-coco-wallet-transition.md`;
+  do not move funds or copy proof stores merely because the preparation shipped.
+
 ## v0.2.188-alpha: GitHub connection foundation
 
 Requested: connection/permission draft, read-only GitHub flow, Settings screen.

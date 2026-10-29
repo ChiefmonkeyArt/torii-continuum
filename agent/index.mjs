@@ -721,13 +721,15 @@ app.post(
   },
 );
 
-app.get('/api/wallet/balance', { preHandler: requireAdmin }, async () => {
+app.get('/api/wallet/balance', { preHandler: requireAdmin }, async (_req, reply) => {
+  reply.header('Cache-Control', 'no-store');
   const b = await wallet.balance();
   return {
     total_sats: b.total,
     per_mint: b.per_mint,
     warn_below: cfg.cashu?.low_balance_warn_sats || 500,
     floor: cfg.cashu?.hard_floor_sats || 100,
+    payment_recovery: await routstr.paymentStatus?.() ?? { available: false, blocked: true },
   };
 });
 

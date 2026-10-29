@@ -11,6 +11,31 @@ const encode = text => new TextEncoder().encode(text);
 const frame = content => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
 const log = { info() {}, warn() {}, error() {} };
 
+test('terminal finish marker does not wait forever for a proxy to close', async () => {
+  let cancelled = false;
+  const stream = new ReadableStream({
+    start(c) { c.enqueue(encode('data: {"choices":[{"delta":{"content":"gm"},"finish_reason":"stop"}]}\n\n')); },
+    cancel() { cancelled = true; },
+  });
+  let trace;
+  const result = await consumeSSE(stream, { completionGraceMs: 5, onTrace: value => { trace = value; } });
+  assert.equal(result.content, 'gm');
+  assert.equal(trace.completed, true);
+  assert.equal(cancelled, true);
+});
+
+test('usage tail after finish is still consumed within grace window', async () => {
+  let controller;
+  const stream = new ReadableStream({ start(c) { controller = c; } });
+  const task = consumeSSE(stream, { completionGraceMs: 100 });
+  controller.enqueue(encode('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n'));
+  await new Promise(r => setTimeout(r, 2));
+  controller.enqueue(encode('data: {"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":1}}\n\ndata: [DONE]\n\n'));
+  const result = await task;
+  assert.equal(result.usage.prompt_tokens, 4);
+  assert.equal(result.usage.completion_tokens, 1);
+});
+
 test('dust telemetry accepts only whole millisatoshi remainders smaller than one sat', () => {
   const telemetry = createChatTelemetry();
   for (const value of [0, -1, 1000, 0.5, NaN, '617']) telemetry.refundDust(value);

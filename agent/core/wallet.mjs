@@ -313,12 +313,15 @@ export async function createWallet(cfg, log, deps = {}) {
    *
    * If no mint has enough balance, returns { ok: false, reason }.
    */
-  async function send(sats) {
-    return withMutationLock(() => sendLocked(sats));
+  async function send(sats, { maxDebitSats } = {}) {
+    return withMutationLock(() => sendLocked(sats, maxDebitSats));
   }
 
-  async function sendLocked(sats) {
+  async function sendLocked(sats, maxDebitSats) {
     if (sats < 1) return { ok: false, reason: 'sats must be >= 1' };
+    if (maxDebitSats !== undefined && (!Number.isSafeInteger(maxDebitSats) || maxDebitSats < sats)) {
+      return { ok: false, reason: 'invalid total debit limit' };
+    }
     const floor = cfg.cashu?.hard_floor_sats || 0;
 
     for (const [mintUrl, wallet] of mints) {
@@ -338,6 +341,14 @@ export async function createWallet(cfg, log, deps = {}) {
 
       let sendResult;
       try {
+        if (maxDebitSats !== undefined) {
+          // Conservative fee bound across ALL candidate inputs. Unknown fee
+          // metadata/keysets fail closed before the mint consumes any proof.
+          const fees = wallet.getFeesForProofs(spendable);
+          if (!Number.isSafeInteger(fees) || fees < 0 || sats + fees > maxDebitSats) {
+            return { ok: false, reason: 'mint fees would exceed the total debit limit' };
+          }
+        }
         // cashu-ts v3: wallet.send(amount, proofs) → { keep, send }. Consumes the
         // input proofs at the mint (swap) and returns fresh payment proofs.
         sendResult = await wallet.send(sats, spendable);

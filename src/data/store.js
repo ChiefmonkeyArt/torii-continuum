@@ -573,8 +573,13 @@ export function listMarketTasks() {
 }
 
 // --- Routstr ---
-export function getRoutstr() { return state.routstr; }
+export function getRoutstr() {
+  // Older/empty server snapshots may omit this optional preferences event.
+  // Do not crash the live balance/model screen while hydration completes.
+  return state.routstr ||= seedRoutstr();
+}
 export function updateRoutstr(patch) {
+  getRoutstr();
   state.routstr.content = { ...state.routstr.content, ...patch };
   state.routstr.created_at = nowSec();
   persist();

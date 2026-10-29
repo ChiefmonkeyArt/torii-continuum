@@ -13,7 +13,6 @@ export function renderLiveModelPicker({ load = routstrModels, save = selectRouts
   const retry = h('button', { class: 'btn', text: 'Refresh models', disabled: true });
   const card = h('div', { class: 'card live-model-picker' }, [
     h('h3', { text: 'Chat model' }), current,
-    h('p', { class: 'muted', text: 'Choose the real model your agent uses for new chats. Your choice is saved on your server, not just in this browser.' }),
     h('div', { class: 'field', style: 'display:grid;gap:12px;min-width:0;' }, [
       h('label', { for: 'routstr-model-search', text: 'Find and select a model' }), search, select, price,
       h('div', { style: 'display:flex;gap:10px;flex-wrap:wrap;' }, [button, retry])]), cap, status,
@@ -44,8 +43,8 @@ export function renderLiveModelPicker({ load = routstrModels, save = selectRouts
       if (!result.ok) throw new Error('load');
       selected = result.data.selected_model; models = result.data.models || [];
       current.textContent = `Current: ${models.find(m => m.id === selected)?.name || selected}`;
-      cap.textContent = `Your ${result.data.max_sats_per_request}-sat request cap stays unchanged. Declared rates vary by provider; payment rounding and mint fees may apply.`;
-      status.textContent = models.length ? 'Select a model, then choose “Use this model”.' : 'No priced models are available right now. Your current setting has not changed.';
+      cap.textContent = `Spending limit: ${result.data.max_sats_per_request}-sat request cap. Mint fees may apply.`;
+      status.textContent = models.length ? '' : 'No models available. Your selection is unchanged.';
     } catch { if (card.isConnected) status.textContent = 'Could not load models. Check your sign-in and try Refresh models.'; }
     finally { busy = false; retry.disabled = false; search.disabled = !models.length; draw(); }
   }

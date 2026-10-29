@@ -72,15 +72,15 @@ describe('routstr.js — balance poll uses the correct field', () => {
   });
 });
 
-describe('routstr.js — two matching wallet cards (v0.2.70-alpha)', () => {
+describe('routstr.js — live wallet and optional Lightning funding', () => {
   it('renders a Cashu balance card and an NWC wallet card', () => {
     expect(routstrSrc).toMatch(/renderCashuCard/);
     expect(routstrSrc).toMatch(/renderNwcCard/);
   });
 
-  it('lays the two wallet cards out in a matching grid-2 of .card elements', () => {
-    // Both cards are built and placed side by side in a grid-2 container.
-    expect(routstrSrc).toMatch(/grid-2[\s\S]*renderCashuCard\(c(,\s*demo)?\)[\s\S]*renderNwcCard/);
+  it('keeps wallet/model primary and NWC in collapsed advanced controls', () => {
+    expect(routstrSrc).toMatch(/grid-2[\s\S]*renderCashuCard\(c,\s*demo\)[\s\S]*renderModelPicker\(c,\s*demo\)/);
+    expect(routstrSrc).toMatch(/h\('details'[\s\S]*renderNwcCard\(live,\s*demo\)/);
     expect(routstrSrc).toMatch(/renderCashuCard[\s\S]*class:\s*'card hot'/);
     expect(routstrSrc).toMatch(/renderNwcCard[\s\S]*class:\s*'card'/);
   });
