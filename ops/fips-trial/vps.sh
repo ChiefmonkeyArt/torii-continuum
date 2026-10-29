@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
-# Teams FIPS trial — VPS side (docs/trials/teams-fips/README.md, phases 1–6).
+# Teams FIPS trial — VPS side (docs/trials/teams-fips/README.md).
 # Runs as root:  sudo -n bash -s -- <command> [args] < ops/fips-trial/vps.sh
 #
+# Reuses the node's EXISTING Torii Suite FIPS transport (torii-fips.service,
+# /etc/torii/fips, firewall table inet torii_fips). One FIPS identity per node:
+# this script never installs a second daemon, never writes /etc/fips and never
+# edits Suite files. It only adds tagged allow rules to the Suite's default-deny
+# fips0 chain (re-applied by fips-trial-admit.service whenever that firewall
+# reloads, so a reload can only close access, never open it).
+#
 #   status                         read-only report
-#   install  BUNDLE                phase 1+2: firewall first, then key, config, strict ACL, start
-#   admit    NODES [FW]            peers.allow = NODES; fips0 drop-in (+ufw) = FW (default NODES)
-#   services BUNDLE MEMBERS        phase 3+4: relay, coordinator, private git as user fipstrial
-#   route    on|off                Q3: link to the public test node test-uk01 (runtime only)
-#   teardown                       phase 6: remove everything the trial added
+#   prepare                        check the Suite node is up (no changes)
+#   admit    NODES                 fips0 allow rules (+ufw) = exactly NODES (csv FIPS node npubs)
+#   services BUNDLE MEMBERS        relay, coordinator, private git as user fipstrial
+#   route    on|off                Q3: runtime link to the public test node test-uk01
+#   teardown                       remove everything the trial added
 #
 # Workflow logs are public: never print IPv4 or global IPv6 addresses. Mesh
 # (fd00::/8) addresses and node npubs are derived from public keys and are fine.
@@ -15,8 +22,6 @@ set -euo pipefail
 umask 022
 export DEBIAN_FRONTEND=noninteractive LC_ALL=C
 
-FIPS_VER=0.5.3
-FIPS_DEB_SHA=6edd18e67c4f4c47d9d8c7366aacc6505d11df79c1c4b1b1d63246fa66e3e8a3
 NAK_URL=https://github.com/fiatjaf/nak/releases/download/v0.22.0/nak-v0.22.0-linux-amd64
 NAK_SHA=f4cb05c42e2cab2d85f436c42aece1f6e10499e1166b6e0ad1fd3e3973b70712
 CORDN_URL=https://github.com/Cordn-msg/cordn-rs/releases/download/v0.5.1-next.3/cordn-server-x86_64-unknown-linux-gnu.tar.gz
@@ -24,9 +29,16 @@ CORDN_SHA=47770f83128e0379a8749969734dd10342c0965af2b6e5111911ea4f0581d49a
 TEST_UK01=npub1u0z26dc4qeneu5rvwvmpfhtwh3522ed6rlgxr9jarrfnjrc6ew4qxjysrs
 TEST_UK01_ADDR=test-uk01.fips.network:2121
 
-ETC=/etc/fips
+# Suite-owned FIPS node (torii-suite fips/, installers/install-fips.sh). Read only.
+SUITE_ETC=/etc/torii/fips
+FIPSCTL=/opt/torii/fips/bin/fipsctl
+SOCK=/run/torii-fips/control.sock
+TABLE="inet torii_fips"
+CHAIN=input
+TAG=torii-teams-trial
+
 TRIAL=/opt/fips-trial
-DROPIN=$ETC/fips.d/teams-trial.nft
+ADMIT=$TRIAL/admit.nft
 UNITS="fips-trial-relay fips-trial-coord fips-trial-grasp"
 NPUB_RE='^npub1[02-9ac-hj-np-z]{58}$'
 MARK='# managed by torii-continuum ops/fips-trial'
@@ -37,8 +49,10 @@ log() { printf '==> %s\n' "$*"; }
 die() { printf 'ABORT: %s\n' "$*" >&2; exit 1; }
 mask() { sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/<ipv4>/g; s/\b[23][0-9a-f]{3}:[0-9a-f:]{3,}/<ipv6>/g'; }
 sha_ok() { echo "$2  $1" | sha256sum -c --status; }
+fc() { "$FIPSCTL" -s "$SOCK" "$@"; }
+node_npub() { tr -d '[:space:]' <"$SUITE_ETC/fips.pub"; }
+node_fd() { "$FIPSCTL" address "$(node_npub)"; }
 
-# csv of npubs -> validated, de-duplicated, one per line. Never trust input.
 npubs() {
   local out=() n
   IFS=',' read -r -a raw <<<"${1// /}"
@@ -50,6 +64,22 @@ npubs() {
   [ ${#out[@]} -le 32 ] || die "more than 32 entries"
   [ ${#out[@]} -eq 0 ] || printf '%s\n' "${out[@]}" | sort -u
 }
+ufw_active() { command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; }
+ufw_clear_trial() {
+  ufw_active || return 0
+  local n
+  while n=$(ufw status numbered | grep 'FIPS trial' | head -1 | sed -E 's/^\[ *([0-9]+)\].*/\1/') && [ -n "$n" ]; do
+    ufw --force delete "$n" >/dev/null
+  done
+}
+
+node_ok() {
+  systemctl is-active -q torii-fips-firewall || die "Suite FIPS firewall (torii-fips-firewall) is not active"
+  systemctl is-active -q torii-fips || die "Suite FIPS node (torii-fips) is not active"
+  nft list chain $TABLE $CHAIN >/dev/null 2>&1 || die "Suite fips0 firewall table missing"
+  [ -s "$SUITE_ETC/fips.pub" ] && [ -x "$FIPSCTL" ] || die "Suite FIPS identity or fipsctl missing"
+  ip -6 addr show dev fips0 2>/dev/null | grep -q "inet6 $(node_fd)" || die "fips0 does not carry the node mesh address"
+}
 
 # Abort criteria shared by every mutating command (README "Abort criteria").
 guard() {
@@ -59,119 +89,109 @@ guard() {
   if ss -Hltn | awk '{print $4}' | grep -E ':(7334|10547)$' | grep -vqE '^\[?fd'; then
     die "a trial port is listening on a non-mesh address"
   fi
+  [ ! -e /etc/fips/fips.yaml ] || die "/etc/fips/fips.yaml exists; one FIPS identity per node (Suite docs/FIPS.md)"
+  return 0
 }
 
-fips_up() {
-  for _ in $(seq 30); do
-    ip -6 addr show dev fips0 2>/dev/null | grep -q 'inet6 fd' && return 0
-    sleep 1
-  done
-  return 1
-}
-
-ufw_active() { command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; }
-
-ufw_clear_trial() {
-  ufw_active || return 0
-  local n
-  while n=$(ufw status numbered | grep 'FIPS trial' | head -1 | sed -E 's/^\[ *([0-9]+)\].*/\1/') && [ -n "$n" ]; do
-    ufw --force delete "$n" >/dev/null
-  done
-}
+trial_handles() { nft -a list chain $TABLE $CHAIN 2>/dev/null | grep "comment \"$TAG\"" | sed -E 's/.*# handle ([0-9]+)$/\1/' || true; }
 
 cmd_status() {
-  echo "== fips package: $(dpkg-query -W -f='${Version}' fips 2>/dev/null || echo absent)"
-  for u in fips-firewall fips fips-dns $UNITS; do printf '%-18s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"; done
-  nft list table inet fips >/dev/null 2>&1 && echo "firewall table inet fips: loaded" || echo "firewall table inet fips: NOT loaded"
-  [ -f "$DROPIN" ] && { echo "== drop-in"; grep -v '^#' "$DROPIN" || true; }
-  if [ -s $ETC/fips.pub ]; then
-    echo "== node npub: $(cat $ETC/fips.pub)"
-    echo "== node mesh address: $(fipsctl address)"
+  local u
+  for u in torii-fips-firewall torii-fips torii-fips-relay fips-trial-admit $UNITS; do
+    printf '%-20s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"
+  done
+  if [ -s "$SUITE_ETC/fips.pub" ] && [ -x "$FIPSCTL" ]; then
+    echo "== node npub: $(node_npub)"
+    echo "== node mesh address: $(node_fd)"
+    echo "== fips: $("$FIPSCTL" --version 2>/dev/null || echo unknown)"
+  else
+    echo "== Suite FIPS node not installed"
   fi
-  [ -f $ETC/peers.allow ] && { echo "== peers.allow"; grep -v '^#' $ETC/peers.allow || true; }
-  [ -f $ETC/peers.deny ] && echo "== peers.deny: $(grep -v '^#' $ETC/peers.deny | tr '\n' ' ')"
-  [ -s $TRIAL/keys/coord.pk ] && echo "== coordinator pubkey: $(cat $TRIAL/keys/coord.pk)"
-  [ -f $TRIAL/env ] && grep -E '^MEMBERS=' $TRIAL/env | sed 's/^/== git /'
-  if systemctl is-active -q fips; then
-    echo "== peers"; fipsctl show peers 2>&1 | mask | head -40
-    echo "== sessions"; fipsctl show sessions 2>&1 | mask | head -20
+  echo "== suite peers.json entries: $(grep -c transportNpub "$SUITE_ETC/peers.json" 2>/dev/null || echo 0)"
+  echo "== fips0 chain (trial rules tagged $TAG)"
+  nft list chain $TABLE $CHAIN 2>/dev/null | grep -E 'dport|drop|comment' | mask || echo "table missing"
+  if [ -e /etc/fips/fips.yaml ]; then echo "== WARNING: /etc/fips/fips.yaml exists"; fi
+  if [ -s $TRIAL/keys/coord.pk ]; then echo "== coordinator pubkey: $(cat $TRIAL/keys/coord.pk)"; fi
+  if [ -f $TRIAL/env ]; then grep -E '^MEMBERS=' $TRIAL/env | sed 's/^/== git /'; fi
+  if systemctl is-active -q torii-fips; then
+    echo "== peers"; fc show peers 2>&1 | mask | head -40
+    echo "== sessions"; fc show sessions 2>&1 | mask | head -20
   fi
-  echo "== listeners on trial ports"; ss -Hlntu | awk '{print $1, $5}' | grep -E ':(2121|5354|7334|10547|8443)$' | mask || echo none
-  if command -v ufw >/dev/null; then echo "== ufw: $(ufw status | head -1)"; ufw status | grep -E '2121|FIPS trial' | mask || true; fi
+  echo "== listeners on trial ports"
+  ss -Hlntu | awk '{print $1, $5}' | grep -E ':(2121|7334|10547|7778)$' | mask || echo none
+  if command -v ufw >/dev/null; then echo "== ufw: $(ufw status | head -1)"; fi
   echo "== resources: $(free -m | awk '/Mem:/{print $7" MB RAM free"}'), $(df -h / | awk 'NR==2{print $4" disk free"}')"
-  curl -fsS --max-time 8 http://127.0.0.1:8787/api/health | grep -o '"version":"[^"]*"' | sed 's/^/== continuum /' || echo "== continuum health: FAILED"
+  curl -fsS --max-time 8 http://127.0.0.1:8787/api/health | grep -o '"version":"[^"]*"' | sed 's/^/== continuum /' \
+    || echo "== continuum health: FAILED"
 }
 
-cmd_install() {
-  local b=${1:?bundle dir}
+cmd_prepare() {
   guard
-  if [ "$(dpkg-query -W -f='${Version}' fips 2>/dev/null || true)" != "$FIPS_VER" ]; then
-    log "download fips $FIPS_VER"
-    local t=$TMPD
-    curl -fsSL --max-time 120 -o "$t/fips.deb" "https://github.com/jmcorgan/fips/releases/download/v$FIPS_VER/fips_${FIPS_VER}_amd64.deb"
-    sha_ok "$t/fips.deb" "$FIPS_DEB_SHA" || die "fips .deb checksum mismatch"
-    chmod 0644 "$t/fips.deb"; chmod 0755 "$t"
-    apt-get install -y -q "$t/fips.deb" >/dev/null
-  fi
-  # The .deb enables fips + fips-dns but starts neither. Keep it that way
-  # until the default-deny fips0 table is loaded.
-  systemctl stop fips fips-dns 2>/dev/null || true
-  log "firewall first"
-  install -d -m 0755 $ETC/fips.d
-  [ -f "$DROPIN" ] || printf '%s\n# no members admitted yet\n' "$MARK" >"$DROPIN"
-  systemctl enable -q fips-firewall
-  systemctl restart fips-firewall
-  nft list table inet fips >/dev/null || die "fips0 firewall table did not load"
-  log "node key"
-  [ -s $ETC/fips.key ] || fipsctl keygen --dir $ETC >/dev/null
-  chmod 0600 $ETC/fips.key
-  log "config"
-  install -m 0644 "$b/fips-vps.yaml" $ETC/fips.yaml
-  # Strict ACL before first start: nobody is admitted until `admit`.
-  [ -f $ETC/peers.allow ] && grep -q "$MARK" $ETC/peers.allow || printf '%s\n' "$MARK" >$ETC/peers.allow
-  printf '%s\nALL\n' "$MARK" >$ETC/peers.deny
-  if ufw_active; then ufw allow 2121/udp comment 'FIPS trial transport' >/dev/null; fi
-  log "start"
-  systemctl restart fips
-  fips_up || die "fips0 did not come up"
-  systemctl restart fips-dns
-  sleep 2
-  if ! getent ahosts github.com >/dev/null; then
-    systemctl stop fips-dns; die "host DNS broke after fips-dns start (stopped fips-dns)"
-  fi
-  guard
+  node_ok
+  log "Suite FIPS node is up; nothing installed"
   cmd_status
 }
 
-cmd_admit() {
-  systemctl is-active -q fips-firewall || die "run install first"
-  npubs "${1:-}" >/dev/null   # validate in this shell so die() aborts
-  npubs "${2-$1}" >/dev/null
-  mapfile -t nodes < <(npubs "${1:-}")
-  mapfile -t fw < <(npubs "${2-$1}")
-  local n fd tmp
-  tmp=$TMPD/dropin
-  { echo "$MARK"; printf '%s\n' "${nodes[@]}"; } | sed '/^$/d' >"$tmp.allow"
-  { echo "$MARK"; echo "# roster devices; generated, do not edit"; } >"$tmp"
-  ufw_clear_trial
-  ufw_active && ufw allow 2121/udp comment 'FIPS trial transport' >/dev/null
-  for n in "${fw[@]}"; do
-    [ -z "$n" ] && continue
-    fd=$(fipsctl address "$n")
-    [[ $fd =~ ^fd[0-9a-f:]+$ ]] || die "bad mesh address for ${n:0:12}…"
-    echo "ip6 saddr $fd tcp dport { 7334, 10547 } accept" >>"$tmp"
-    ufw_active && ufw allow in on fips0 from "$fd" to any port 7334,10547 proto tcp comment 'FIPS trial member' >/dev/null
+# Root helper + unit: drop our tagged rules, re-insert from $ADMIT. PartOf the
+# Suite firewall unit, so a Suite reload (which flushes the table) re-applies it.
+write_admit_unit() {
+  cat >$TRIAL/bin/apply-admit.sh <<APPLY
+#!/bin/sh
+$MARK
+set -eu
+for h in \$(nft -a list chain $TABLE $CHAIN | grep 'comment "$TAG"' | sed -E 's/.*# handle ([0-9]+)\$/\1/'); do
+  nft delete rule $TABLE $CHAIN handle "\$h"
+done
+if grep -q '^insert rule' $ADMIT; then nft -f $ADMIT; fi
+APPLY
+  chmod 0755 $TRIAL/bin/apply-admit.sh
+  cat >/etc/systemd/system/fips-trial-admit.service <<UNIT
+$MARK
+[Unit]
+Description=Torii Teams FIPS trial: admitted devices on fips0 (re-applied on firewall reload)
+After=torii-fips-firewall.service
+PartOf=torii-fips-firewall.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=$TRIAL/bin/apply-admit.sh
+[Install]
+WantedBy=torii-fips-firewall.service
+UNIT
+  systemctl daemon-reload
+  systemctl enable -q fips-trial-admit
+}
+
+# Render the admit ruleset for the given mesh addresses (pure; tested).
+render_admit() {
+  local fd
+  echo "$MARK"
+  for fd in "$@"; do
+    [[ $fd =~ ^fd[0-9a-f:]+$ ]] || return 1
+    echo "insert rule $TABLE $CHAIN iifname \"fips0\" ip6 saddr $fd tcp dport { 7334, 10547 } accept comment \"$TAG\""
   done
-  cp -p "$DROPIN" "$TMPD/dropin.prev" 2>/dev/null || : >"$TMPD/dropin.prev"
-  install -m 0644 "$tmp" "$DROPIN"
-  if ! nft -c -f $ETC/fips.nft; then
-    install -m 0644 "$TMPD/dropin.prev" "$DROPIN"   # never leave a bad drop-in for the next boot
-    die "drop-in failed nft syntax check (previous drop-in restored)"
+}
+
+cmd_admit() {
+  node_ok
+  npubs "${1:-}" >/dev/null   # validate in this shell so die() aborts
+  local n fds=()
+  while read -r n; do
+    [ -z "$n" ] && continue
+    fds+=("$("$FIPSCTL" address "$n")")
+  done < <(npubs "${1:-}")
+  render_admit "${fds[@]}" >"$TMPD/admit.nft" || die "bad mesh address (nothing changed)"
+  nft -c -f "$TMPD/admit.nft" || die "admit rules failed nft check (nothing changed)"
+  install -d -m 0755 -o root -g root $TRIAL $TRIAL/bin
+  install -m 0600 "$TMPD/admit.nft" "$ADMIT"
+  write_admit_unit
+  systemctl restart fips-trial-admit
+  [ "$(trial_handles | wc -l)" -eq "${#fds[@]}" ] || die "loaded rule count does not match admitted devices"
+  ufw_clear_trial
+  if ufw_active; then
+    for n in "${fds[@]}"; do ufw allow in on fips0 from "$n" to any port 7334,10547 proto tcp comment 'FIPS trial member' >/dev/null; done
   fi
-  install -m 0644 "$tmp.allow" $ETC/peers.allow   # daemon reloads on mtime change
-  systemctl restart fips-firewall
-  nft list table inet fips >/dev/null || die "firewall table missing after reload"
-  log "peers.allow: ${#nodes[@]} node(s); firewall: ${#fw[@]} node(s)"
+  log "fips0 admits ${#fds[@]} device(s) to the trial ports"
   cmd_status
 }
 
@@ -180,8 +200,8 @@ unit() { # name exec-script
 $MARK
 [Unit]
 Description=Torii Teams FIPS trial: $1
-After=fips.service
-Requires=fips.service
+After=torii-fips.service
+Requires=torii-fips.service
 [Service]
 User=fipstrial
 Group=fipstrial
@@ -213,7 +233,7 @@ EOF
 cmd_services() {
   local b=${1:?bundle dir}
   guard
-  systemctl is-active -q fips || die "fips not running; run install first"
+  node_ok
   npubs "${2:-}" >/dev/null
   mapfile -t members < <(npubs "${2:-}")
   [ ${#members[@]} -gt 0 ] || die "MEMBERS is empty; private git needs at least one npub"
@@ -247,15 +267,15 @@ cmd_services() {
   fi
   cat >$TRIAL/env <<EOF
 $MARK
-VPS_NPUB=$(cat $ETC/fips.pub)
-VPS_FD=$(fipsctl address)
+VPS_NPUB=$(node_npub)
+VPS_FD=$(node_fd)
 CORDN_KEY_FILE=$TRIAL/keys/coord.sk
 MEMBERS=$csv
 EOF
   chmod 0644 $TRIAL/env
   # cordn-server cannot dial bracketed IPv6 literals, so name the relay.
   sed -i '/fips-trial-relay/d' /etc/hosts
-  echo "$(fipsctl address) fips-trial-relay $MARK" >>/etc/hosts
+  echo "$(node_fd) fips-trial-relay $MARK" >>/etc/hosts
   unit fips-trial-relay run-relay.sh
   unit fips-trial-coord run-coord.sh
   unit fips-trial-grasp run-grasp.sh
@@ -269,48 +289,42 @@ EOF
 }
 
 cmd_route() {
-  systemctl is-active -q fips || die "fips not running"
+  node_ok
   case "${1:-}" in
-    on)
-      grep -qx "$TEST_UK01" $ETC/peers.allow || echo "$TEST_UK01" >>$ETC/peers.allow
-      sleep 2
-      fipsctl connect "$TEST_UK01" "$TEST_UK01_ADDR" udp 2>&1 | mask ;;
-    off)
-      fipsctl disconnect "$TEST_UK01" 2>&1 | mask || true
-      sed -i "\|^$TEST_UK01\$|d" $ETC/peers.allow ;;
+    on)  fc connect "$TEST_UK01" "$TEST_UK01_ADDR" udp 2>&1 | mask ;;
+    off) fc disconnect "$TEST_UK01" 2>&1 | mask || true ;;
     *) die "route on|off" ;;
   esac
   sleep 3
-  fipsctl show peers 2>&1 | mask | head -20
+  fc show peers 2>&1 | mask | head -20
 }
 
 cmd_teardown() {
-  systemctl disable --now $UNITS 2>/dev/null || true
-  for u in $UNITS; do rm -f /etc/systemd/system/$u.service; done
+  local h u
+  # shellcheck disable=SC2086
+  systemctl disable --now $UNITS fips-trial-admit 2>/dev/null || true
+  for h in $(trial_handles); do nft delete rule $TABLE $CHAIN handle "$h"; done
+  for u in $UNITS fips-trial-admit; do rm -f "/etc/systemd/system/$u.service"; done
   systemctl daemon-reload
-  systemctl disable --now fips-dns fips 2>/dev/null || true
   ufw_clear_trial
-  ufw_active && ufw delete allow 2121/udp >/dev/null 2>&1 || true
-  rm -f "$DROPIN"
-  systemctl disable --now fips-firewall 2>/dev/null || true
-  apt-get purge -y -q fips >/dev/null 2>&1 || true
   sed -i '/fips-trial-relay/d' /etc/hosts
-  rm -rf $ETC $TRIAL
-  id fipstrial >/dev/null 2>&1 && userdel fipstrial || true
+  rm -rf $TRIAL
+  if id fipstrial >/dev/null 2>&1; then userdel fipstrial; fi
+  [ -z "$(trial_handles)" ] || die "trial rules still present"
   guard
-  log "teardown complete"
+  log "teardown complete; Suite FIPS node untouched"
   cmd_status
 }
 
 main() {
   case "${1:-}" in
     status) cmd_status ;;
-    install) cmd_install "${2:-}" ;;
-    admit) if [ $# -ge 3 ]; then cmd_admit "$2" "$3"; else cmd_admit "${2:-}"; fi ;;
+    prepare) cmd_prepare ;;
+    admit) cmd_admit "${2:-}" ;;
     services) cmd_services "${2:-}" "${3:-}" ;;
     route) cmd_route "${2:-}" ;;
     teardown) cmd_teardown ;;
-    *) die "usage: status|install BUNDLE|admit NODES|services BUNDLE MEMBERS|route on|off|teardown" ;;
+    *) die "usage: status|prepare|admit NODES|services BUNDLE MEMBERS|route on|off|teardown" ;;
   esac
 }
 

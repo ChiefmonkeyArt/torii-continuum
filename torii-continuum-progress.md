@@ -8,6 +8,10 @@ private code server work there, that they are invisible from the public
 internet, and that the mesh firewall is what keeps outsiders out. Two upstream
 quirks were found and worked around.
 
+The first read-only status run showed the VPS already runs FIPS for Torii
+Suite. The trial now shares that node instead of installing a second one,
+and only adds removable allow rules to its mesh firewall.
+
 ## Teams FIPS trial plan (2026-10-29, docs-only)
 
 `docs/trials/teams-fips/`: step-by-step plan for the VPS + second-machine
