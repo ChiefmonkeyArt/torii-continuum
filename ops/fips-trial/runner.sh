@@ -151,8 +151,8 @@ cmd_q1() {
   mkdir -p "$W/repo/alice" && cd "$W/repo/alice"
   g alice git init -q . && echo "team art" >README.md && g alice git add . && g alice git commit -qm init
   g alice timeout 120 ngit init --name team-art --identifier team-art --description "Teams FIPS trial" \
-    --grasp-server "ws://$VPS_NPUB.fips:7334" --private --repo-relay-only -d 2>&1 | tail -2 || true
-  g alice timeout 120 git push -q origin master 2>&1 | tail -2
+    --grasp-server "ws://$VPS_NPUB.fips:7334" --private --repo-relay-only -d 2>&1 | mask | tail -40 || true
+  g alice timeout 120 git push origin master 2>&1 | mask | tail -40
   local url; url=$(g alice git remote get-url origin)
   cd "$W/repo"
   g bob timeout 120 git clone -q "$url" bob 2>&1 | tail -1 || true
