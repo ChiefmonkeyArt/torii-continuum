@@ -10,6 +10,14 @@ mesh, and answers four questions. Nothing touches the live Continuum agent,
 its config, its memory directory or the production nginx sites. Every step
 has a matching teardown.
 
+**Torii Suite hosts (the owner's VPS):** the Suite already runs a FIPS node
+(`torii-fips.service`, `/etc/torii/fips`, firewall table `inet torii_fips`,
+Suite `docs/FIPS.md`). One FIPS identity per host: the trial **reuses that
+node** and installs no second daemon. Phases 1, 2 and 6 below apply only to
+the second machine and to hosts without the Suite. On a Suite host the trial
+only adds tagged allow rules (`comment "torii-teams-trial"`) to the Suite's
+default-deny `fips0` input chain; see "Automated run".
+
 Privacy rule for this file and the results: no IP addresses, hostnames,
 device names or real npubs are committed. Use the placeholders below.
 
@@ -19,7 +27,7 @@ device names or real npubs are committed. Use the placeholders below.
 |---|---|---|
 | Q1 | Do cordn-server, ngit-grasp and a relay work bound only to the VPS mesh address, used from the second machine as `<vps-npub>.fips`? | Chat round-trip and git clone/push both work over `.fips` |
 | Q2 | Is nothing new reachable from the public internet or from unlisted mesh nodes? | Public probes of the trial ports fail; mesh probes from a non-roster source are dropped |
-| Q3 | Does the peer ACL (`peers.allow` + `ALL` in `peers.deny`) stop a member whose traffic is **routed through another mesh node**, or only direct links? | Recorded either way. Expected from the FIPS docs: routed traffic is not gated by the ACL, so the `fips0` firewall must be the gate |
+| Q3 | Can a device with **no direct link** to the VPS reach the trial services over a session **routed through another mesh node** (`test-uk01`), and does the `fips0` firewall still gate it? | Recorded either way. On a Suite host there is no peer ACL, so admission rests on the firewall alone; on a standalone host the ACL is expected not to gate routed traffic either |
 | Q4 | Does the `fips0` firewall drop-in, keyed on the member's `fd00::/8` address, open the trial ports to that member only, and close them when the member is removed? | Open with the rule, closed within one reload without it |
 
 Also measured: RAM and CPU of the FIPS daemon, ping and git clone time over the
@@ -223,7 +231,15 @@ On macOS, run the uninstaller shipped in the `.pkg` and delete
 
 `.github/workflows/fips-trial.yml` (manual dispatch only) runs phases 1–6
 end to end. The VPS side is `ops/fips-trial/vps.sh`, run as root over the
-pinned deploy SSH key. The second machine is a throwaway GitHub runner with a
+pinned deploy SSH key. It reuses the Suite FIPS node: it reads the node npub
+from `/etc/torii/fips/fips.pub`, talks to `/run/torii-fips/control.sock`,
+and never writes `/etc/fips`, `/etc/torii` or `/opt/torii`, or restarts
+`torii-fips`. Admission is one rule per device inserted at the top of
+`inet torii_fips input` (`iifname "fips0" ip6 saddr <fd> tcp dport { 7334,
+10547 } accept`). `fips-trial-admit.service` is `PartOf` the Suite firewall
+unit, so a Suite firewall reload (which flushes the table) re-applies exactly
+the admitted list. If that unit is ever missing, a reload closes access
+rather than opening it. The second machine is a throwaway GitHub runner with a
 real FIPS node and TUN device (`ops/fips-trial/runner.sh`); its node key and
 the alice/bob/carol identities die with the runner. Workflow logs are public,
 so both scripts mask IPv4 and global IPv6 addresses, and the VPS hostname is
@@ -232,9 +248,9 @@ masked from the deploy secret.
 | `action` | What it does |
 |---|---|
 | `status` | Read-only report. |
-| `trial` | VPS install (firewall first, strict ACL) → runner joins → services → Q1, Q2, Q4, plus Q3 via `test-uk01` if `route_test` → admit list restored to `member_nodes`. |
+| `trial` | VPS `prepare` (checks the Suite node; installs nothing) → runner joins → services → Q1, Q2, Q4, plus Q3 via `test-uk01` if `route_test` → admit list restored to `member_nodes`. |
 | `admit` | Sets the admitted team devices (`member_nodes`, FIPS node npubs) and private-git readers (`git_members`, Nostr npubs). No tests. |
-| `teardown` | Phase 6. |
+| `teardown` | Removes the trial units, tagged rules, `/opt/fips-trial`, the hosts entry and the `fipstrial` user. The Suite node is untouched. |
 
 ```bash
 gh workflow run fips-trial.yml -R ChiefmonkeyArt/torii-continuum -f action=status
@@ -244,9 +260,16 @@ gh workflow run fips-trial.yml -R ChiefmonkeyArt/torii-continuum -f action=admit
 ```
 
 Guards: every mutating step aborts unless Continuum health is ok, host DNS
-still resolves, and no trial port listens on a non-mesh address. A bad
-firewall drop-in is rolled back before it can load. ngit-grasp is built in
+still resolves, no trial port listens on a non-mesh address, and no
+`/etc/fips/fips.yaml` exists. The admit ruleset is checked with `nft -c`
+before anything changes, and the loaded rule count must match. ngit-grasp is built in
 Actions from the pinned v3.0.10 commit and checksum-verified on the VPS.
+
+### Follow-up for TEAMS-2d step 3
+
+The runtime rules are a trial device. The durable projection belongs in the
+Suite: a reviewed `include` (for example `/etc/torii/fips/fips.d/*.nft`) in
+`mesh.nft`, written by the roster. Separate Suite PR; not part of the trial.
 
 ### Upstream findings while automating
 

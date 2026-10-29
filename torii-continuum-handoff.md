@@ -7,6 +7,9 @@ Actions: status | trial | admit | teardown. VPS side runs as root over the
 pinned deploy key; runner is a real FIPS node. Logs are public: scripts mask
 addresses. Team onboarding = members send FIPS node npubs + Nostr npubs, owner
 runs `action=admit`. Upstream quirks + workarounds in the trial README.
+VPS already runs the Suite FIPS node (torii-fips, v0.5.1). vps.sh reuses it:
+`prepare` installs nothing; `admit` = tagged rules in `inet torii_fips input`;
+`teardown` never touches Suite files. Never install a standalone fips there.
 
 ## Teams FIPS + napplet proposal (2026-10-29, docs-only)
 
@@ -14,7 +17,7 @@ ADR amendment "FIPS private mode and the Teams napplet" is Proposed; TEAMS-2d
 in the todo. Next step needs owner approval: the FIPS trial in
 `docs/trials/teams-fips/README.md` (start with the read-only `preflight.sh`
 on both machines). Nothing installed.
-VPS state unchanged; v0.2.191-alpha is still awaiting deploy approval.
+v0.2.191-alpha is deployed (main = docs-only ahead of the tag).
 
 ## v0.2.191-alpha: TEAMS-2a slice 1, signed project roster (2026-10-29)
 

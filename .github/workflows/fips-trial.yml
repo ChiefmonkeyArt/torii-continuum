@@ -3,15 +3,17 @@ name: Teams FIPS trial (manual)
 # docs/trials/teams-fips/README.md, run end to end. Manual only. The VPS side
 # is ops/fips-trial/vps.sh (root, over the pinned deploy SSH key); the second
 # machine is a throwaway GitHub runner running ops/fips-trial/runner.sh with a
-# real FIPS node. Logs are public: scripts mask IPv4/global IPv6, and the
-# VPS hostname is masked from the deploy secret.
+# real FIPS node. The VPS side REUSES the Torii Suite FIPS node (torii-fips,
+# one identity per host) and only adds tagged rules to its fips0 firewall.
+# Logs are public: scripts mask IPv4/global IPv6, and the VPS hostname is
+# masked from the deploy secret.
 #
 #   status    read-only report
-#   trial     install (firewall first) -> admit runner -> services -> Q1, Q2, Q4
+#   trial     prepare (Suite node check) -> admit runner -> services -> Q1, Q2, Q4
 #             (+ Q3 via test-uk01 if route_test) -> restore admit list = member_nodes
 #   admit     set the admitted team devices (member_nodes) and private-git
 #             members (git_members) without running the tests
-#   teardown  remove everything the trial installed (phase 6)
+#   teardown  remove everything the trial added; Suite node untouched (phase 6)
 
 on:
   workflow_dispatch:
@@ -23,7 +25,7 @@ on:
         options: [status, trial, admit, teardown]
         default: status
       member_nodes:
-        description: "Team FIPS node npubs to admit (comma-separated, from `fipsctl keygen` / /etc/fips/fips.pub)"
+        description: "Team FIPS node npubs to admit (comma-separated, from `fipsctl keygen` / fips.pub)"
         required: false
         default: ""
       git_members:
@@ -146,7 +148,7 @@ jobs:
         if: env.ACTION == 'trial' || env.ACTION == 'admit'
         run: |
           set -euo pipefail
-          cp docs/trials/teams-fips/{fips-vps.yaml,run-relay.sh,run-coord.sh,run-grasp.sh} bundle/
+          cp docs/trials/teams-fips/{run-relay.sh,run-coord.sh,run-grasp.sh} bundle/
           (cd bundle && sha256sum -c <(echo "$(cat ngit-grasp.sha256)  ngit-grasp"))
           remote_home=$(~/vssh 'printf %s "$HOME"')
           echo "BUNDLE=$remote_home/fips-trial-bundle" >> "$GITHUB_ENV"
@@ -163,11 +165,11 @@ jobs:
           mkdir -p "$W/cli" && cp ops/fips-trial/cordn-cli/package.json ops/fips-trial/cordn-cli/package-lock.json "$W/cli/"
           (cd "$W/cli" && npm ci --ignore-scripts --no-audit --no-fund -q && patch -p0 < "$GITHUB_WORKSPACE/ops/fips-trial/cordn-cli/stream.patch")
 
-      - name: Phase 1-2 on the VPS (firewall first, strict ACL)
+      - name: Phase 1-2 on the VPS (check the Suite FIPS node; installs nothing)
         if: env.ACTION == 'trial' || env.ACTION == 'admit'
         run: |
           set -euo pipefail
-          ~/vssh sudo -n bash -s -- install "$BUNDLE" < ops/fips-trial/vps.sh | tee /tmp/install.txt
+          ~/vssh sudo -n bash -s -- prepare < ops/fips-trial/vps.sh | tee /tmp/install.txt
           echo "VPS_NPUB=$(sed -n 's/^== node npub: //p' /tmp/install.txt)" >> "$GITHUB_ENV"
 
       - name: Phase 1-2 on the runner (second machine)
@@ -182,8 +184,7 @@ jobs:
         if: env.ACTION == 'trial'
         run: |
           set -euo pipefail
-          nodes="$RUNNER_NODE${MEMBER_NODES:+,$MEMBER_NODES}"
-          ~/vssh sudo -n bash -s -- admit "$nodes" < ops/fips-trial/vps.sh
+          ~/vssh sudo -n bash -s -- admit "$RUNNER_NODE${MEMBER_NODES:+,$MEMBER_NODES}" < ops/fips-trial/vps.sh
           ~/vssh sudo -n bash -s -- services "$BUNDLE" "$ALICE,$BOB${GIT_MEMBERS:+,$GIT_MEMBERS}" < ops/fips-trial/vps.sh | tee /tmp/status.txt
           echo "COORD_PK=$(sed -n 's/^== coordinator pubkey: //p' /tmp/status.txt)" >> "$GITHUB_ENV"
 
@@ -198,34 +199,34 @@ jobs:
         if: env.ACTION == 'trial'
         run: bash ops/fips-trial/runner.sh q2
 
-      - name: Q4 the fips0 firewall drop-in is the gate
+      - name: Q4 the fips0 firewall rules are the gate
         if: env.ACTION == 'trial'
         run: |
           set -euo pipefail
-          # Runner stays a peer (link up) but leaves the firewall drop-in.
-          ~/vssh sudo -n bash -s -- admit "$RUNNER_NODE${MEMBER_NODES:+,$MEMBER_NODES}" "$MEMBER_NODES" < ops/fips-trial/vps.sh >/dev/null
+          # Runner stays a linked peer but loses its fips0 allow rule.
+          ~/vssh sudo -n bash -s -- admit "$MEMBER_NODES" < ops/fips-trial/vps.sh >/dev/null
           sleep 3
           bash ops/fips-trial/runner.sh blocked
           ~/vssh sudo -n bash -s -- admit "$RUNNER_NODE${MEMBER_NODES:+,$MEMBER_NODES}" < ops/fips-trial/vps.sh >/dev/null
           bash ops/fips-trial/runner.sh reach
           echo "PASS Q4"
 
-      - name: Q3 routed session via test-uk01 (peer ACL vs firewall)
+      - name: Q3 routed session via test-uk01 (no direct link; firewall gate)
         if: env.ACTION == 'trial' && env.ROUTE_TEST == 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
-          # Runner is NOT a peer of the VPS (not in peers.allow, no direct link)
-          # but IS in the firewall drop-in. Both nodes link only to test-uk01.
-          ~/vssh sudo -n bash -s -- admit "$MEMBER_NODES" "$RUNNER_NODE${MEMBER_NODES:+,$MEMBER_NODES}" < ops/fips-trial/vps.sh >/dev/null
+          # Runner drops its direct link to the VPS and peers only test-uk01;
+          # the VPS links test-uk01 at runtime. Runner keeps its allow rule.
+          # The Suite node has no peer ACL, so the firewall is the only gate.
           ~/vssh sudo -n bash -s -- route on < ops/fips-trial/vps.sh
           bash ops/fips-trial/runner.sh via-test-node
           if bash ops/fips-trial/runner.sh wait && bash ops/fips-trial/runner.sh reach; then
-            echo "RESULT Q3: a node outside peers.allow reached the services over a routed session; the fips0 firewall, not the peer ACL, is the gate"
+            echo "RESULT Q3: a node with no direct link reached the services over a routed session; the fips0 firewall is the gate"
           else
             echo "RESULT Q3: no routed session through test-uk01 within the timeout (inconclusive)"
           fi
-          ~/vssh sudo -n bash -s -- admit "$MEMBER_NODES" "$MEMBER_NODES" < ops/fips-trial/vps.sh >/dev/null
+          ~/vssh sudo -n bash -s -- admit "$MEMBER_NODES" < ops/fips-trial/vps.sh >/dev/null
           sleep 3
           bash ops/fips-trial/runner.sh blocked && echo "PASS Q3 routed node blocked once removed from the firewall"
 

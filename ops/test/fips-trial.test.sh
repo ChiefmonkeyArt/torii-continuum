@@ -38,24 +38,35 @@ check "mask keeps mesh fd addresses" "[ \"\$(m 'fd12:3456::1')\" = 'fd12:3456::1
 check "runner masks too" "grep -q 'mask()' $R"
 check "workflow masks the VPS host and its addresses" "grep -q 'add-mask::\$host_only' $WF && grep -q 'add-mask::\$a' $WF"
 
-# --- phase order: firewall loaded before the daemon ever starts
-inst=$(sed -n '/^cmd_install()/,/^}/p' $V)
-fw=$(grep -n 'systemctl restart fips-firewall' <<<"$inst" | head -1 | cut -d: -f1)
-st=$(grep -n 'systemctl restart fips$' <<<"$inst" | head -1 | cut -d: -f1)
-check "install: firewall restart precedes first fips start" "[ -n '$fw' ] && [ -n '$st' ] && [ $fw -lt $st ]"
-check "install: verifies the nft table is loaded" "grep -q 'nft list table inet fips' <<<\"\$inst\""
-check "install: strict ACL (ALL in peers.deny) before start" \
-  "[ \$(grep -n 'ALL' <<<\"\$inst\" | head -1 | cut -d: -f1) -lt $st ]"
-check "install: stops fips the .deb enabled before firewall" "grep -q 'systemctl stop fips fips-dns' <<<\"\$inst\""
-check "install: rolls back fips-dns if host DNS breaks" "grep -q 'systemctl stop fips-dns; die' <<<\"\$inst\""
+# --- one FIPS identity per host: reuse the Suite node, never install a second
+check "vps.sh installs no fips package" "! grep -qE 'dpkg|\.deb|FIPS_DEB' $V"
+check "vps.sh never writes /etc/fips" "! grep -vE '^\s*#' $V | grep -qE '(>|install|cp|mkdir|rm -rf).*/etc/fips([/ ]|$)'"
+check "vps.sh never writes Suite files" "! grep -vE '^\s*#' $V | grep -qE '(>|install|cp|sed -i|rm).*(/etc/torii|/opt/torii|mesh\.nft)'"
+check "vps.sh never restarts or stops the Suite node" "! grep -qE 'systemctl (restart|stop|disable)[^|]*torii-fips' $V"
+check "vps.sh drives the Suite control socket" "grep -q 'SOCK=/run/torii-fips/control.sock' $V && grep -q 'FIPSCTL=/opt/torii/fips/bin/fipsctl' $V"
+check "guard refuses a second FIPS config" "grep -q '/etc/fips/fips.yaml exists' $V"
+check "trial units require torii-fips" "grep -q '^Requires=torii-fips.service' $V && ! grep -qE '^(After|Requires)=fips\.service' $V"
+check "admit unit re-applies on Suite firewall reload" "grep -q '^PartOf=torii-fips-firewall.service' $V && grep -q '^WantedBy=torii-fips-firewall.service' $V"
 adm=$(sed -n '/^cmd_admit()/,/^}/p' $V)
-nc_=$(grep -n 'nft -c' <<<"$adm" | cut -d: -f1); pa_=$(grep -n 'install .*peers.allow' <<<"$adm" | cut -d: -f1)
-check "admit: nft syntax checked before peers.allow changes" "[ -n '$nc_' ] && [ -n '$pa_' ] && [ $nc_ -lt $pa_ ]"
-check "admit: bad drop-in is rolled back" "grep -q 'previous drop-in restored' <<<\"\$adm\""
+nc_=$(grep -n 'nft -c' <<<"$adm" | cut -d: -f1); in_=$(grep -n 'install -m 0600' <<<"$adm" | cut -d: -f1)
+check "admit: nft checked before the ruleset is installed" "[ -n '$nc_' ] && [ -n '$in_' ] && [ $nc_ -lt $in_ ]"
+check "admit: verifies loaded rule count" "grep -q 'loaded rule count does not match' <<<\"\$adm\""
+ra() { ( FIPS_TRIAL_TEST=1; . "$V"; render_admit "$@" ); }
+check "render_admit: one tagged fips0 rule per device" \
+  "[ \"\$(ra fd11::1 fd22::2 | grep -c 'insert rule inet torii_fips input iifname \"fips0\" ip6 saddr fd[0-9a-f:]* tcp dport { 7334, 10547 } accept comment \"torii-teams-trial\"')\" = 2 ]"
+check "render_admit: empty list renders no rules" "! ra | grep -q 'insert rule'"
+check "render_admit: rejects non-mesh addresses" "! ra 2a01:4f8::1 >/dev/null && ! ra 'fd11::1;drop' >/dev/null"
+th() { ( FIPS_TRIAL_TEST=1; . "$V"
+  nft() { printf '%s\n' 'table inet torii_fips {' '  chain input { # handle 1' \
+    '    iifname "fips0" ip6 saddr fd11::1 tcp dport { 7334, 10547 } accept comment "torii-teams-trial" # handle 41' \
+    '    tcp dport 7778 accept # handle 5' '    counter packets 0 bytes 0 drop # handle 6'; }
+  trial_handles | tr '\n' ' ' ); }
+check "trial_handles selects only tagged rules" "[ \"\$(th)\" = '41 ' ]"
+check "teardown deletes only tagged rule handles" "awk '/^cmd_teardown/,/^}/' $V | grep -q 'for h in \$(trial_handles); do nft delete rule'"
+check "route uses runtime connect, no config edits" "awk '/^cmd_route/,/^}/' $V | grep -q 'fc connect' && ! awk '/^cmd_route/,/^}/' $V | grep -qE 'peers\.(allow|json)|yaml'"
 
 # --- pinned artefacts agree everywhere
-sha=$(sed -n 's/^FIPS_DEB_SHA=//p' $V)
-check "fips .deb sha pinned identically in vps.sh and runner.sh" "[ -n '$sha' ] && grep -q \"FIPS_DEB_SHA=$sha\" $R"
+check "runner pins the fips .deb sha" "grep -qE '^FIPS_DEB_SHA=[0-9a-f]{64}$' $R"
 check "every download is checksum-verified (vps.sh)" "[ \$(grep -c 'curl -fsSL' $V) -eq \$(grep -c 'sha_ok \"\$t/' $V) ]"
 check "workflow pins the ngit-grasp commit" "grep -qE 'NGIT_GRASP_COMMIT: [0-9a-f]{40}' $WF"
 check "workflow verifies the built commit" "grep -q 'rev-parse HEAD)\" = \"\$NGIT_GRASP_COMMIT\"' $WF"
@@ -90,7 +101,7 @@ check "workflow shares the deploy-vps lock" "grep -q 'group: deploy-vps' $WF"
 check "workflow checks the pinned host key" "grep -q 'VPS host key mismatch' $WF && grep -q 'StrictHostKeyChecking=yes' $WF"
 check "workflow read-only token" "grep -q 'contents: read' $WF"
 check "workflow always restores the admit list" "grep -A1 'Restore admitted devices' $WF | grep -q 'always()'"
-check "teardown removes the hosts entry and trial dirs" "awk '/^cmd_teardown/,/^}/' $V | grep -q 'fips-trial-relay/d' && awk '/^cmd_teardown/,/^}/' $V | grep -q 'rm -rf \$ETC \$TRIAL'"
+check "teardown removes the hosts entry and trial dirs" "awk '/^cmd_teardown/,/^}/' $V | grep -q 'fips-trial-relay/d' && awk '/^cmd_teardown/,/^}/' $V | grep -q 'rm -rf \$TRIAL'"
 
 echo "fips-trial: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
