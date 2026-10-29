@@ -150,18 +150,18 @@ cmd_q1() {
   done
   mkdir -p "$W/repo/alice" && cd "$W/repo/alice"
   g alice git init -q . && echo "team art" >README.md && g alice git add . && g alice git commit -qm init
-  timeout 120 g alice ngit init --name team-art --identifier team-art --description "Teams FIPS trial" \
+  g alice timeout 120 ngit init --name team-art --identifier team-art --description "Teams FIPS trial" \
     --grasp-server "ws://$VPS_NPUB.fips:7334" --private --repo-relay-only -d 2>&1 | tail -2 || true
-  timeout 120 g alice git push -q origin master 2>&1 | tail -2
+  g alice timeout 120 git push -q origin master 2>&1 | tail -2
   local url; url=$(g alice git remote get-url origin)
   cd "$W/repo"
-  timeout 120 g bob git clone -q "$url" bob 2>&1 | tail -1 || true
+  g bob timeout 120 git clone -q "$url" bob 2>&1 | tail -1 || true
   grep -q 'team art' bob/README.md && echo "PASS member bob cloned the private repo" || die "bob could not clone"
   cd bob && echo "bob was here" >>README.md && g bob git commit -qam "bob: readme"
-  timeout 120 g bob git push origin HEAD:refs/heads/pr/bob-readme 2>&1 | grep -q 'new branch' \
+  g bob timeout 120 git push origin HEAD:refs/heads/pr/bob-readme 2>&1 | grep -q 'new branch' \
     && echo "PASS member bob opened a PR" || die "bob could not open a PR"
   cd "$W/repo"
-  timeout 120 g carol git clone -q "$url" carol >/dev/null 2>&1 || true
+  g carol timeout 120 git clone -q "$url" carol >/dev/null 2>&1 || true
   [ -f carol/README.md ] && die "outsider carol cloned the private repo" || echo "PASS outsider carol refused"
   echo "PASS Q1"
 }

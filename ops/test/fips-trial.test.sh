@@ -35,6 +35,7 @@ m() { ( FIPS_TRIAL_TEST=1; . "$V"; printf '%s\n' "$1" | mask ); }
 check "mask hides IPv4" "[ \"\$(m 'peer 203.0.113.7:2121')\" = 'peer <ipv4>:2121' ]"
 check "mask hides global IPv6" "[ \"\$(m 'addr 2a01:4f8:c0c:1::1')\" = 'addr <ipv6>' ]"
 check "mask keeps mesh fd addresses" "[ \"\$(m 'fd12:3456::1')\" = 'fd12:3456::1' ]"
+check "runner never wraps a shell function in timeout" "! grep -qE 'timeout [0-9]+ (g|chat|tcp_ok) ' $R"
 check "runner masks too" "grep -q 'mask()' $R"
 check "workflow masks the VPS host and its addresses" "grep -q 'add-mask::\$host_only' $WF && grep -q 'add-mask::\$a' $WF"
 
