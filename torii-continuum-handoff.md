@@ -7,6 +7,9 @@ Actions: status | trial | admit | teardown. VPS side runs as root over the
 pinned deploy key; runner is a real FIPS node. Logs are public: scripts mask
 addresses. Team onboarding = members send FIPS node npubs + Nostr npubs, owner
 runs `action=admit`. Upstream quirks + workarounds in the trial README.
+Trial services are LIVE on the VPS (fips-trial-relay/coord/grasp, git host
+torii-team.fips). Admit list is currently empty. Next: owner runs
+`action=admit -f member_nodes=<device npubs> -f git_members=<nostr npubs>`.
 VPS already runs the Suite FIPS node (torii-fips, v0.5.1). vps.sh reuses it:
 `prepare` installs nothing; `admit` = tagged rules in `inet torii_fips input`;
 `teardown` never touches Suite files. Never install a standalone fips there.

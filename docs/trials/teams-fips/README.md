@@ -294,7 +294,6 @@ Suite: a reviewed `include` (for example `/etc/torii/fips/fips.d/*.nft`) in
 
 ## Results
 
-Write `RESULTS.md` in this folder in a later docs PR: answers to Q1 to Q4,
-the measurements, any FIPS issues (reported upstream, not forked), and the
-consequence for TEAMS-2d step 3 (the roster's fourth projection). No
-addresses, hostnames, device names or real npubs.
+See `RESULTS.md` (first run 2026-10-29: Q1, Q2, Q4 pass; Q3 inconclusive).
+Member onboarding: `MEMBERS.md`. No addresses, hostnames, device names or
+real npubs in either file.
