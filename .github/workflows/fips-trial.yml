@@ -74,7 +74,7 @@ jobs:
           git fetch -q --depth 1 "$NGIT_GRASP_REPO" "$NGIT_GRASP_COMMIT"
           git checkout -q FETCH_HEAD
           [ "$(git rev-parse HEAD)" = "$NGIT_GRASP_COMMIT" ]
-          rustup toolchain install stable --profile minimal -q
+          rustup toolchain install stable --profile minimal >/dev/null
           cargo +stable build --release --locked -p ngit-grasp
           mkdir -p ../out && cp target/release/ngit-grasp ../out/
           cd ../out && sha256sum ngit-grasp | cut -d' ' -f1 > ngit-grasp.sha256
