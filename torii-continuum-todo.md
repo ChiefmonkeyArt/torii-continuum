@@ -96,6 +96,22 @@
       `nap-torii-team@1` contract draft; matching note in torii-quest.
     - [ ] Teams napplet UI (merges with TEAMS-2c).
 
+- **TEAMS-JOBS-ADR (proposed 2026-10-30, docs-only):** chat-to-actions panel,
+  Jobs page, in-house clanker jobs and an optional open clanker market. See
+  `docs/adr-team-jobs.md`. Each step needs its own approval.
+  - [ ] J1: "Make action" on messages, `torii.action/1` log in the Cordn group,
+    role-checked fold, Actions panel (no AI). After TEAMS-2c.
+  - [ ] J2: scribe clanker suggestions; per-group extraction setting, default off.
+  - [ ] J3: job spec + promotion; in-house dispatch; per-job reservation from
+    the Coco agent allowance.
+  - [ ] J4: Jobs page; `/marketplace` -> `/jobs`; fix demo 30085/30090 mismatch.
+  - [ ] J5: read-only market listing (Torii jobs + kind 9806 bounties);
+    `nap-torii-jobs@1` draft.
+  - [ ] J6: publish to market (preview + sign), sealed NIP-17 bids, award,
+    pay on acceptance. First public post needs explicit approval.
+  - [ ] J7: outbound bidding by our clankers (replaces CONT-AGENT-5 framing).
+  - [ ] Research: NUT-11 2-of-2 + locktime refund payouts in Coco; nips#2414.
+
 - **CONT-WORKSPACE-HISTORY (v0.2.187-alpha):** navigation/profile restructuring,
   independent encrypted history, private pins/titles, search and project
   workspace layout shipped with passing CI, desktop/mobile checks, merge,
