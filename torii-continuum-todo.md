@@ -89,6 +89,15 @@
     2026-10-31) opened from the Team view with roster roles — Torii Teams session;
     (b) clanker harness with a NIP-46 signer and an LLM in place of the trial's
     scripted change. cordn-web already supports NIP-07/NIP-46/NIP-55 signers.
+    - [x] (a) node mount: app on its own origin `teams.<domain>`, reads
+      `/torii-node.json` (node coordinator + `wss://relay.<domain>`); torii-teams
+      ADR 0001, PRs #4/#5. Suite installer v0.9.27-alpha (`INSTALL_TEAMS_APP=1`),
+      plus `teams.app_url` in the agent config v0.9.28-alpha.
+    - [ ] (a) first app tag `0.6.1-torii.1`, pin it in the Suite, DNS for
+      `teams.<domain>`, deploy (owner approval; after the Plebeian trial).
+    - [ ] (a) roster roles handed in from Continuum (uses TEAMS-2a-2 member sign-in).
+    - The "Open team chat" link is the Continuum Teams session's "TEAMS-2a Team
+      view link" item (shown only when `teams.app_url` is set).
   - TEAMS-2d (proposed, docs-only so far): FIPS private mode + Teams napplet.
     See the ADR amendment "FIPS private mode and the Teams napplet".
     - [ ] FIPS trial on the VPS + one other machine (needs owner approval;
