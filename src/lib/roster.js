@@ -4,7 +4,7 @@
  * so obviously-bad rosters fail before the signer prompt; the agent remains
  * the authority and re-validates everything.
  */
-import { parseNpub } from './npub.js';
+import { parseNpub, toNpub } from './npub.js';
 
 export const ROSTER_KIND = 30098;
 export const MAX_HUMANS = 12;
@@ -47,4 +47,18 @@ export function buildRosterEvent(slug, members, { ownerHex, createdAt } = {}) {
     tags,
     content: '',
   };
+}
+
+/**
+ * Stored roster → editable rows for buildRosterEvent (owner left out: it is
+ * implicit). Agents keep their human as `of`. Inverse of buildRosterEvent.
+ * @param {{owner:string, members:Array<{pubkey:string, role:string, of?:string}>}|null} roster
+ */
+export function rosterRows(roster) {
+  if (!roster || !Array.isArray(roster.members)) return [];
+  return roster.members
+    .filter((m) => m.role !== 'owner')
+    .map((m) => (m.role === 'agent'
+      ? { npub: toNpub(m.pubkey), role: 'agent', of: toNpub(m.of) }
+      : { npub: toNpub(m.pubkey), role: m.role }));
 }

@@ -1,5 +1,18 @@
 # Continuum — Session Handover
 
+## v0.2.192-alpha: TEAMS-2a slice 2 (2026-10-31)
+
+`agent/core/auth.mjs` adds `verifyMemberLogin` and `verifyMemberToken` (`m1.`
+token, separate HMAC key, no refresh or cookie). `agent/index.mjs` adds
+`teamCaller`, `requireRole(cap)`, `POST /api/team/auth/verify`,
+`GET /api/team/me`, and a role-scoped `GET /api/projects/:slug/roster`
+(projections are owner-only). `rosterStore.memberships(pubkey)` reads
+`memory/team/*.json`. UI: `src/views/team-roster.js`, mounted at the top of
+the Team view. Tests: `agent/test/team-member.test.js`,
+`src/views/team-roster.test.js`. The Torii Teams app needs its origin in
+`cors_origins` before it can call the member routes. Next: 2a-3 (NIP-17
+invites). Deploying needs owner approval, after the Nov 1 Plebeian test.
+
 ## TEAMS-2b (2026-10-31, docs-only here)
 
 Packaging lives in Torii Suite v0.9.26-alpha (`installers/install-teams.sh`,

@@ -73,8 +73,10 @@
       verified + stored by the agent (`agent/lib/roster.mjs`), admin-gated
       `GET`/`PUT /api/projects/:slug/roster`, roles + capabilities, the three
       projections, browser builder `src/lib/roster.js` + client functions.
-    - [ ] 2a-2: per-project roster editor in the Team view (sign with NIP-07),
-      and roster members can sign in with role-scoped sessions (`requireRole`).
+    - [x] 2a-2 (v0.2.192-alpha): per-project roster editor in the Team view
+      (signed with NIP-07/NIP-46); roster members sign in at
+      `POST /api/team/auth/verify` (separate `m1.` token), `GET /api/team/me`,
+      role-scoped roster read via `requireRole` checked live per request.
     - [ ] 2a-3: NIP-17 gift-wrapped invite/accept; accepted members only.
     - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
       add/remove, announcement maintainers (needs TEAMS-2b services).

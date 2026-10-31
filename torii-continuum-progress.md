@@ -1,5 +1,13 @@
 # Torii Continuum — Progress log
 
+## v0.2.192-alpha: TEAMS-2a slice 2, roster editor + member sign-in (2026-10-31)
+
+The owner can now set who is on each project, and in what role, from the Team
+view, and sign it with their Nostr signer. People on a roster can sign in with
+their own key and see only the projects they are on. Removing someone takes
+effect straight away. Their sign-in can never open the owner's settings. Not
+deployed yet; it waits for the owner after the Plebeian test.
+
 ## TEAMS-2b packaging decision (2026-10-31, docs-only)
 
 The permanent Teams services are now packaged in Torii Suite v0.9.26-alpha:
