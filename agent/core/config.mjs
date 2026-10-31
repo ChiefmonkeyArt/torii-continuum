@@ -166,6 +166,11 @@ export function loadConfig(path) {
     cfg.session_max_lifetime_sec = cfg.session_ttl_sec;
   }
   cfg.server.cors_origins ??= [];
+  // Torii Teams app (TEAMS-2a Team view link). Written by Suite's
+  // install-teams-app.sh. Only a bare https origin is accepted; anything else
+  // is dropped (no link) rather than refusing to start the agent.
+  cfg.teams ??= {};
+  cfg.teams.app_url = normalizeTeamsAppUrl(cfg.teams.app_url);
   cfg.cashu ??= { mints: [], low_balance_warn_sats: 500, hard_floor_sats: 100 };
   // Hard cap on a single Lightning-QR top-up mint quote (v0.2.83-alpha). Applied
   // to both the Cashu mint-quote and the NWC-issued invoice paths so neither can
@@ -343,4 +348,19 @@ export function persistAdminNpub(configPath, npub) {
   if (readFileSync(configPath, 'utf8') !== next) {
     throw new Error('persistAdminNpub: post-write read-back mismatch (config may be torn)');
   }
+}
+
+/**
+ * Bare https origin or null. No credentials, path, query or fragment, so the
+ * "Open team chat" link can only ever point at an app root on its own origin.
+ * @param {unknown} raw
+ * @returns {string|null}
+ */
+export function normalizeTeamsAppUrl(raw) {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 253 + 8) return null;
+  let u;
+  try { u = new URL(raw); } catch { return null; }
+  if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) return null;
+  if (u.pathname !== '/' && u.pathname !== '') return null;
+  return u.origin;
 }

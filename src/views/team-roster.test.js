@@ -117,3 +117,23 @@ test('demo mode never loads or signs; Sign and save goes to login', async () => 
   expect(onDemo).toHaveBeenCalled();
   expect(signEvent).not.toHaveBeenCalled();
 });
+
+test('team chat link: shown only for an https origin, opens /chat safely', async () => {
+  vi.resetModules();
+  dom = new JSDOM('<main></main>', { url: 'https://test.invalid/continuum/#/team' });
+  for (const key of ['window', 'document']) vi.stubGlobal(key, dom.window[key]);
+  const { renderTeamChatLink, safeAppOrigin } = await import('./team-roster.js');
+  const shown = renderTeamChatLink({ teamMe: async () => ({ ok: true, data: { teams_app_url: 'https://teams.example.org' } }) });
+  const none = renderTeamChatLink({ teamMe: async () => ({ ok: true, data: { teams_app_url: null } }) });
+  const evil = renderTeamChatLink({ teamMe: async () => ({ ok: true, data: { teams_app_url: 'javascript:alert(1)' } }) });
+  const down = renderTeamChatLink({ teamMe: async () => ({ ok: false, offline: true }) });
+  const threw = renderTeamChatLink({ teamMe: async () => { throw new Error('x'); } });
+  await tick();
+  const a = shown.querySelector('a');
+  expect(a.getAttribute('href')).toBe('https://teams.example.org/chat');
+  expect(a.getAttribute('rel')).toBe('noopener noreferrer');
+  expect(a.getAttribute('target')).toBe('_blank');
+  for (const el of [none, evil, down, threw]) expect(el.querySelector('a')).toBeNull();
+  expect(safeAppOrigin('http://teams.example.org')).toBeNull();
+  expect(safeAppOrigin('https://u:p@teams.example.org')).toBeNull();
+});

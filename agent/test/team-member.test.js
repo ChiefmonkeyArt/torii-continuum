@@ -17,6 +17,7 @@ import { nip19 } from 'nostr-tools';
 import { ROSTER_KIND, createRosterStore } from '../lib/roster.mjs';
 import { createAuth } from '../core/auth.mjs';
 import { buildApp } from '../index.mjs';
+import { normalizeTeamsAppUrl, loadConfig } from '../core/config.mjs';
 
 const NOW = 1_700_000_000;
 const TTL = 3600;
@@ -141,9 +142,9 @@ test('store.memberships lists projects with effective role and skips junk files'
 
 // ── routes ────────────────────────────────────────────────────────────────
 
-async function setup() {
+async function setup(over = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'team-routes-'));
-  const c = cfg();
+  const c = { ...cfg(), ...over };
   const auth = createAuth(c, { now: () => NOW, log: silent });
   const rosterStore = createRosterStore({ dir, now: () => NOW });
   const { app } = await buildApp(c, { auth, rosterStore });
@@ -238,4 +239,44 @@ test('route: a member token does not open owner-only routes', async () => {
     const refresh = await app.inject({ method: 'POST', url: '/api/auth/refresh', headers: bob });
     assert.equal(refresh.statusCode, 401);
   } finally { await done(); }
+});
+
+test('teams.app_url: only a bare https origin survives', () => {
+  assert.equal(normalizeTeamsAppUrl('https://teams.example.org'), 'https://teams.example.org');
+  assert.equal(normalizeTeamsAppUrl('https://teams.example.org/'), 'https://teams.example.org');
+  assert.equal(normalizeTeamsAppUrl('HTTPS://Teams.Example.org:8443/'), 'https://teams.example.org:8443');
+  for (const bad of [undefined, null, '', 42, 'http://teams.example.org', 'javascript:alert(1)',
+    'https://u:p@teams.example.org', 'https://teams.example.org/chat', 'https://teams.example.org/?x=1',
+    'https://teams.example.org/#a', 'not a url', `https://${'a'.repeat(300)}.org`]) {
+    assert.equal(normalizeTeamsAppUrl(bad), null, String(bad));
+  }
+});
+
+test('route: /api/team/me carries teams_app_url (null when unset)', async () => {
+  const a = await setup();
+  try {
+    assert.equal((await a.app.inject({ method: 'GET', url: '/api/team/me', headers: a.OH })).json().teams_app_url, null);
+  } finally { await a.done(); }
+  const b = await setup({ teams: { app_url: 'https://teams.example.org' } });
+  try {
+    const me = (await b.app.inject({ method: 'GET', url: '/api/team/me', headers: await b.H(BOB) })).json();
+    assert.equal(me.teams_app_url, 'https://teams.example.org');
+  } finally { await b.done(); }
+});
+
+test('loadConfig wires teams.app_url through the normaliser', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'teams-cfg-'));
+  const base = ['admin_npub: ""', `session_secret: "${'a'.repeat(64)}"`, 'server:', '  host: "127.0.0.1"', '  port: 8787',
+    'routstr:', '  endpoint: "https://api.example.test"'];
+  try {
+    const p1 = join(dir, 'a.yaml');
+    writeFileSync(p1, [...base, 'teams:', '  app_url: "https://teams.example.org/"'].join('\n'), { mode: 0o600 });
+    assert.equal(loadConfig(p1).teams.app_url, 'https://teams.example.org');
+    const p2 = join(dir, 'b.yaml');
+    writeFileSync(p2, [...base, 'teams:', '  app_url: "http://teams.example.org"'].join('\n'), { mode: 0o600 });
+    assert.equal(loadConfig(p2).teams.app_url, null);
+    const p3 = join(dir, 'c.yaml');
+    writeFileSync(p3, base.join('\n'), { mode: 0o600 });
+    assert.equal(loadConfig(p3).teams.app_url, null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

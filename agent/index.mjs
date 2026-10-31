@@ -1046,7 +1046,7 @@ app.get('/api/team/me', async (req, reply) => {
   const c = teamCaller(req);
   if (!c.ok) return reply.code(401).send({ error: c.error });
   const projects = await rosterStore.memberships(c.pubkey);
-  return { pubkey: c.pubkey, owner: c.owner, projects };
+  return { pubkey: c.pubkey, owner: c.owner, projects, teams_app_url: cfg.teams?.app_url ?? null };
 });
 
 app.get('/api/projects/:slug/roster', { preHandler: requireRole('read') }, async (req) => {
