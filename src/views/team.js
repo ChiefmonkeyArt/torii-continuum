@@ -1,7 +1,11 @@
 /**
- * Team view — the operator roster.
+ * Team view.
  *
- * LOCAL-FIRST FOUNDATION (TEAMS-1). The admin can add npubs as "operators"
+ * TOP: the signed per-project roster (TEAMS-2a-2, team-roster.js). This one
+ * carries authorization weight: the agent verifies the owner's signature and
+ * uses it for member sign-in and role-scoped access.
+ *
+ * BELOW: the local operator list (TEAMS-1). The admin can add npubs as "operators"
  * and label them; the roster lives in the local store (kind 30093) and feeds
  * the Kanban card assignee picker. It carries NO authorization weight yet — the
  * agent's requireAdmin is unchanged. Real multi-user auth (agent-side operator
@@ -12,6 +16,8 @@ import * as store from '../data/store.js';
 import { shortNpub } from '../lib/npub.js';
 import { setChatContext } from '../chat.js';
 import { isDemo, demoSource, demoBanner, goToLogin } from '../demo/demo-mode.js';
+import { renderProjectRosters } from './team-roster.js';
+import { projectRoster, putProjectRoster } from '../data/agent.js';
 
 let storeUnsub = null;
 
@@ -31,12 +37,20 @@ export function renderTeam(mount, opts = {}) {
     h('div', {}, [
       h('p', { class: 'eyebrow', text: 'Workspace' }),
       h('h1', { class: 'page-title', text: 'Team' }),
-      h('div', { class: 'page-sub', text: 'Operators you’ve added to this Continuum.' }),
+      h('div', { class: 'page-sub', text: 'Who is on each project, and what they can do.' }),
     ]),
   ]);
   mount.appendChild(header);
 
-  const note = h('div', { class: 'muted', style: 'font-size: 12.5px; margin: -4px 0 16px; max-width: 640px;', text: 'Operators can be assigned to Kanban cards. This roster is local for now — shared multi-user editing and agent-side authorization arrive in a later slice.' });
+  mount.appendChild(renderProjectRosters({
+    api: { projectRoster, putProjectRoster },
+    projects: () => S.listProjects(),
+    demo,
+    onDemo: goToLogin,
+  }));
+
+  mount.appendChild(h('h2', { class: 'section-title', style: 'margin: 24px 0 6px; font-size: 15px;', text: 'Card assignees' }));
+  const note = h('div', { class: 'muted', style: 'font-size: 12.5px; margin: 0 0 12px; max-width: 640px;', text: 'Names you can assign to Kanban cards. Kept on this device only; it does not grant access.' });
   mount.appendChild(note);
 
   mount.appendChild(renderAddForm(demo));

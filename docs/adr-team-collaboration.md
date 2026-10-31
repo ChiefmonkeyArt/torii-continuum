@@ -75,6 +75,16 @@ Operational findings for packaging:
 - **Projections.** Cordn members and `NGIT_PRIVATE_MEMBERS` = everyone on the roster; announcement maintainers = owner + maintainers.
 - **Not yet.** Roster members cannot sign in to Continuum, nothing is relay-published, NIP-17 invite/accept and applying the projections to running services are the next slices.
 
+## Addendum: TEAMS-2a slice 2 (v0.2.192-alpha)
+
+- **Member sign-in is a separate credential.** Roster members sign the same kind-22242 challenge (`POST /api/auth/challenge`) and send it to `POST /api/team/auth/verify`. The owner is refused there (`use_owner_login`) and keeps `/api/auth/verify`. A pubkey on no roster gets `not_member` (403). The challenge is burned once the signature checks out, whatever the decision.
+- **Token.** `m1.<iat>.<exp>.<hex pubkey>.<hmac>`, HMAC key = HMAC(session_secret, `continuum-member-session-v1`). The format and the key both differ from the owner token, so neither passes as the other (tested both ways). TTL = `session_ttl_sec`, no refresh, no cookie: a member token can never satisfy nginx `auth_request` or open an owner-only (`requireAdmin`) route. Rotating `session_secret` revokes both kinds.
+- **The token carries no role.** `requireRole(cap)` looks the caller up on the current stored roster for `:slug` on every request, so a removal takes effect on the next call. The owner session counts as owner of every project. "Not on this project", "role too low" and "no such project" all return the same 403, so it can't be used to probe membership.
+- **Routes.** `GET /api/team/me` returns `{pubkey, owner, projects:[{slug, role, caps}]}`. `GET /api/projects/:slug/roster` needs `read` and returns `{roster, event, role}`; only the owner also gets `projection` (service membership lists). `PUT` stays owner-only.
+- **Signature check.** The shared challenge check verifies a rebuilt seven-field event, the same defence the roster check uses against nostr-tools' cached verified flag.
+- **UI.** The Team view leads with the per-project roster editor: npub, role and, for agents, "acts for". It is signed in the browser with NIP-07/NIP-46; `created_at` is kept newer than the stored roster, and a 409 reloads the roster. The TEAMS-1 local list stays below as "Card assignees" with no access weight. The member-facing UI is the Torii Teams app (other session), which consumes these routes cross-origin, so its origin must be in `cors_origins`.
+- **Not yet.** 2a-3 NIP-17 invites; 2a-4 applying projections to services; members cannot yet change project data (no write route takes `requireRole` other than read).
+
 ## Amendment: FIPS private mode and the Teams napplet (proposed 2026-10-29)
 
 Status: **Proposed**, docs only. Nothing is built, packaged or deployed.

@@ -41,6 +41,7 @@ import { nip19 } from 'nostr-tools';
 
 const CHALLENGE_TTL_SEC = 5 * 60;
 const CHALLENGE_KIND = 22242;
+const HEX64_RE = /^[0-9a-f]{64}$/;
 const DEFAULT_MAX_CHALLENGES = 1000;
 
 // Prefix helpers — never log full pubkeys, full challenges, or full IPs.
@@ -378,6 +379,45 @@ export function createAuth(cfg, deps = {}) {
    * @param {string} [opts.clientIp]
    * @returns {{ ok: true, pubkey: string } | { ok: false, reason: string }}
    */
+  /**
+   * Shared one-time-challenge check for signed actions and member sign-in:
+   * challenge tag known and fresh, content matches, id + signature valid.
+   * Does NOT consume the challenge and does not look at who signed.
+   * @returns {{ok:true, challenge:string}|{ok:false, code:string, reason:string}}
+   */
+  function checkSignedChallenge(event, evt, clientIp) {
+    if (!event || typeof event !== 'object') return { ok: false, code: 'malformed_event', reason: 'no event' };
+    if (event.kind !== CHALLENGE_KIND) return { ok: false, code: 'wrong_kind', reason: 'wrong kind (expected 22242)' };
+    const tag = (event.tags || []).find((t) => Array.isArray(t) && t[0] === 'challenge');
+    if (!tag || !tag[1]) return { ok: false, code: 'malformed_event', reason: 'missing challenge tag' };
+    const challenge = tag[1];
+    const entry = challenges.get(challenge);
+    if (!entry) return { ok: false, code: 'challenge_expired', reason: 'unknown or expired challenge' };
+    if (entry.expiresAt < now()) {
+      challenges.delete(challenge);
+      return { ok: false, code: 'challenge_expired', reason: 'expired challenge' };
+    }
+    if (event.content && event.content !== challenge) {
+      return { ok: false, code: 'malformed_event', reason: 'content/tag mismatch' };
+    }
+    let sigOk = false;
+    try {
+      if (getEventHash(event) !== event.id) return { ok: false, code: 'malformed_event', reason: 'id mismatch' };
+      // Verify a plain copy: nostr-tools caches a "verified" symbol on event
+      // objects, which a tampered in-process object could otherwise carry.
+      const { id, pubkey, created_at, kind, tags, content, sig } = event;
+      sigOk = verifyEvent({ id, pubkey, created_at, kind, tags, content, sig });
+    } catch (e) {
+      log.warn({ evt, ip_prefix: prefix(clientIp || '', 12), reason: 'badsig' });
+      return { ok: false, code: 'bad_signature', reason: `sig verify threw: ${e.message}` };
+    }
+    if (!sigOk) {
+      log.warn({ evt, ip_prefix: prefix(clientIp || '', 12), reason: 'badsig' });
+      return { ok: false, code: 'bad_signature', reason: 'bad signature' };
+    }
+    return { ok: true, challenge };
+  }
+
   function verifyActionSignature(event, { expectPubkeyHex, clientIp } = {}) {
     if (!event || typeof event !== 'object') return { ok: false, reason: 'no event' };
     if (event.kind !== CHALLENGE_KIND) return { ok: false, reason: 'wrong kind (expected 22242)' };
@@ -395,32 +435,9 @@ export function createAuth(cfg, deps = {}) {
       return { ok: false, reason: 'signature is not from the signed-in owner' };
     }
 
-    const tag = (event.tags || []).find((t) => Array.isArray(t) && t[0] === 'challenge');
-    if (!tag || !tag[1]) return { ok: false, reason: 'missing challenge tag' };
-    const challenge = tag[1];
-
-    const entry = challenges.get(challenge);
-    if (!entry) return { ok: false, reason: 'unknown or expired challenge' };
-    if (entry.expiresAt < now()) {
-      challenges.delete(challenge);
-      return { ok: false, reason: 'expired challenge' };
-    }
-    if (event.content && event.content !== challenge) {
-      return { ok: false, reason: 'content/tag mismatch' };
-    }
-
-    let sigOk = false;
-    try {
-      if (getEventHash(event) !== event.id) return { ok: false, reason: 'id mismatch' };
-      sigOk = verifyEvent(event);
-    } catch (e) {
-      log.warn({ evt: 'auth.action.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'badsig' });
-      return { ok: false, reason: `sig verify threw: ${e.message}` };
-    }
-    if (!sigOk) {
-      log.warn({ evt: 'auth.action.fail', ip_prefix: prefix(clientIp || '', 12), reason: 'badsig' });
-      return { ok: false, reason: 'bad signature' };
-    }
+    const checked = checkSignedChallenge(event, 'auth.action.fail', clientIp);
+    if (!checked.ok) return { ok: false, reason: checked.reason };
+    const { challenge } = checked;
 
     // Consume — single use, so a captured event cannot be replayed.
     challenges.delete(challenge);
@@ -527,10 +544,80 @@ export function createAuth(cfg, deps = {}) {
     return { ok: true, npub: adminNpub, exp, iat, oiat };
   }
 
+  // ── Team member sessions (TEAMS-2a-2) ───────────────────────
+  // A member token is a different credential from the owner session:
+  //   - format `m1.iat.exp.pubkey.sig`, so verifySessionToken (5 numeric-led
+  //     parts, admin pubkey only) can never accept it, and vice versa;
+  //   - HMAC key derived from session_secret with its own label, so neither
+  //     token's MAC is valid as the other's even if the formats overlapped;
+  //   - carries no role. Routes re-check the CURRENT roster on every request,
+  //     so removing a member takes effect immediately; the token only proves
+  //     "this pubkey signed a fresh challenge".
+  //   - no refresh and no cookie: it never reaches nginx auth_request.
+  const memberKey = createHmac('sha256', cfg.session_secret).update('continuum-member-session-v1').digest();
+
+  /**
+   * Sign-in for a roster member (never the owner, who uses verifyChallenge).
+   * @param {object} event  NIP-07/NIP-46 signed kind-22242 challenge
+   * @param {{clientIp?:string, isMember:(hex:string)=>Promise<boolean>}} opts
+   * @returns Promise<{ok:true, token, expires_at, pubkey}|{ok:false, code, reason}>
+   * Codes: malformed_event · wrong_kind · challenge_expired · bad_signature ·
+   * use_owner_login · not_member.
+   */
+  async function verifyMemberLogin(event, { clientIp, isMember } = {}) {
+    if (typeof isMember !== 'function') return { ok: false, code: 'not_member', reason: 'no roster' };
+    const checked = checkSignedChallenge(event, 'auth.member.fail', clientIp);
+    if (!checked.ok) {
+      log.warn({ evt: 'auth.member.fail', ip_prefix: prefix(clientIp || '', 12), reason: checked.code });
+      return checked;
+    }
+    // Valid signature: burn the challenge before any further decision.
+    challenges.delete(checked.challenge);
+    if (adminHex && event.pubkey === adminHex) {
+      return { ok: false, code: 'use_owner_login', reason: 'the owner signs in through /api/auth/verify' };
+    }
+    if (!HEX64_RE.test(event.pubkey) || !(await isMember(event.pubkey))) {
+      log.warn({ evt: 'auth.member.fail', ip_prefix: prefix(clientIp || '', 12), pubkey_prefix: prefix(event.pubkey || ''), reason: 'not_member' });
+      return { ok: false, code: 'not_member', reason: 'not on any project roster' };
+    }
+    const iat = now();
+    const exp = iat + cfg.session_ttl_sec;
+    const payload = `m1.${iat}.${exp}.${event.pubkey}`;
+    const sig = createHmac('sha256', memberKey).update(payload).digest('hex');
+    log.info({ evt: 'auth.member.success', ip_prefix: prefix(clientIp || '', 12), pubkey_prefix: prefix(event.pubkey) });
+    return { ok: true, token: `${payload}.${sig}`, expires_at: exp, pubkey: event.pubkey };
+  }
+
+  /** @returns {{ok:true, pubkey:string, exp:number}|{ok:false, reason:string}} */
+  function verifyMemberToken(token) {
+    if (!token || typeof token !== 'string') return { ok: false, reason: 'no token' };
+    const parts = token.split('.');
+    if (parts.length !== 5 || parts[0] !== 'm1') return { ok: false, reason: 'malformed' };
+    const [, iatStr, expStr, pk, sig] = parts;
+    if (!/^\d{1,12}$/.test(iatStr) || !/^\d{1,12}$/.test(expStr) || !HEX64_RE.test(pk)) {
+      return { ok: false, reason: 'malformed' };
+    }
+    const iat = Number(iatStr);
+    const exp = Number(expStr);
+    if (exp < now()) return { ok: false, reason: 'expired' };
+    if (iat > now() + 60 || exp - iat > cfg.session_ttl_sec) return { ok: false, reason: 'bad timestamps' };
+    const expected = createHmac('sha256', memberKey).update(`m1.${iatStr}.${expStr}.${pk}`).digest('hex');
+    let match = false;
+    try {
+      match = timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'));
+    } catch {
+      return { ok: false, reason: 'bad signature' };
+    }
+    if (!match) return { ok: false, reason: 'bad signature' };
+    return { ok: true, pubkey: pk, exp };
+  }
+
   return {
     issueChallenge,
     verifyChallenge,
     verifyActionSignature,
+    verifyMemberLogin,
+    verifyMemberToken,
     verifySessionToken,
     refreshSession,
     isClaimed: () => adminHex !== null,

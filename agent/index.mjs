@@ -54,7 +54,7 @@ import { createUpdater } from './core/updater.mjs';
 import { createGenesis, ownerHexFromNpub } from './core/genesis.mjs';
 import { composeNoticeboard } from './core/noticeboard.mjs';
 import { createAudit } from './lib/audit.mjs';
-import { createRosterStore, project as projectRoster } from './lib/roster.mjs';
+import { createRosterStore, project as projectRoster, effectiveRole, can as rosterCan } from './lib/roster.mjs';
 import { getConstitution } from './lib/constitution.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -973,10 +973,13 @@ app.post(
 );
 
 // ─────────────────────────────────────────────────────────────
-// Team roster routes (TEAMS-2a) — admin-gated.
+// Team roster routes (TEAMS-2a) + member sessions (TEAMS-2a-2).
 //
-// GET /api/projects/:slug/roster — stored owner-signed roster + projections
-// PUT /api/projects/:slug/roster — replace with a newer owner-signed event
+// POST /api/team/auth/verify     — roster member signs a challenge → member token
+// GET  /api/team/me              — projects the caller is on, role + caps
+// GET  /api/projects/:slug/roster — owner or any member with 'read';
+//                                   projections only for 'manage' (owner)
+// PUT  /api/projects/:slug/roster — owner only: newer owner-signed event
 //
 // The browser signs the kind-30098 event with the owner's NIP-07/NIP-46
 // signer; the agent only verifies it (no private key on the host). The owner
@@ -987,17 +990,70 @@ const rosterMax =
     ? cfg.rate_limit.roster_per_min
     : 12;
 
-app.get('/api/projects/:slug/roster', { preHandler: requireAdmin }, async (req, reply) => {
-  const slug = req.params.slug;
-  if (!PROJECT_SLUG_RE.test(String(slug || ''))) {
-    return reply.code(400).send({ error: 'bad project slug' });
+// Resolve a bearer into a team caller: the owner session counts as owner of
+// every project; a member token is only a proven pubkey — its role is looked
+// up on the CURRENT roster per request, so removal is immediate.
+function teamCaller(req) {
+  const m = (req.headers.authorization || '').match(/^Bearer\s+(.+)$/i);
+  if (!m) return { ok: false, error: 'missing bearer token' };
+  const admin = auth.verifySessionToken(m[1]);
+  if (admin.ok) {
+    req.session = { npub: admin.npub, exp: admin.exp };
+    return { ok: true, owner: true, pubkey: ownerHexFromNpub(admin.npub) };
   }
-  const stored = await rosterStore.get(slug);
-  return {
-    roster: stored?.roster ?? null,
-    event: stored?.event ?? null,
-    projection: projectRoster(stored?.roster ?? null),
+  const member = auth.verifyMemberToken(m[1]);
+  if (member.ok) return { ok: true, owner: false, pubkey: member.pubkey };
+  return { ok: false, error: `session invalid: ${member.reason}` };
+}
+
+function requireRole(cap) {
+  return async function requireRoleHandler(req, reply) {
+    const c = teamCaller(req);
+    if (!c.ok) return reply.code(401).send({ error: c.error });
+    const slug = req.params?.slug;
+    if (!PROJECT_SLUG_RE.test(String(slug || ''))) {
+      return reply.code(400).send({ error: 'bad project slug' });
+    }
+    const stored = await rosterStore.get(slug);
+    if (c.owner) {
+      req.team = { pubkey: c.pubkey, role: 'owner', owner: true, stored };
+      return;
+    }
+    // Same 403 for "not on this roster" and "role too low": no membership oracle.
+    if (!stored || !rosterCan(stored.roster, c.pubkey, cap)) {
+      return reply.code(403).send({ error: 'not permitted on this project' });
+    }
+    req.team = { pubkey: c.pubkey, role: effectiveRole(stored.roster, c.pubkey), owner: false, stored };
   };
+}
+
+app.post('/api/team/auth/verify', { config: rateLimitConfig(authVerifyMax, '/api/team/auth/verify') }, async (req, reply) => {
+  const event = req.body?.event;
+  if (!event) return reply.code(400).send({ ok: false, code: 'malformed_event', error: 'body.event required' });
+  const result = await auth.verifyMemberLogin(event, {
+    clientIp: req.ip,
+    isMember: async (pk) => (await rosterStore.memberships(pk)).length > 0,
+  });
+  if (!result.ok) {
+    const status = result.code === 'not_member' || result.code === 'use_owner_login' ? 403 : 401;
+    return reply.code(status).send({ ok: false, code: result.code || null, error: result.reason });
+  }
+  // No cookie: a member token must never satisfy nginx auth_request.
+  return { token: result.token, expires_at: result.expires_at };
+});
+
+app.get('/api/team/me', async (req, reply) => {
+  const c = teamCaller(req);
+  if (!c.ok) return reply.code(401).send({ error: c.error });
+  const projects = await rosterStore.memberships(c.pubkey);
+  return { pubkey: c.pubkey, owner: c.owner, projects };
+});
+
+app.get('/api/projects/:slug/roster', { preHandler: requireRole('read') }, async (req) => {
+  const stored = req.team.stored;
+  const out = { roster: stored?.roster ?? null, event: stored?.event ?? null, role: req.team.role };
+  if (req.team.owner) out.projection = projectRoster(stored?.roster ?? null);
+  return out;
 });
 
 app.put(

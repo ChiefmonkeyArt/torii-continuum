@@ -38,7 +38,7 @@
  * Not relay-published in this slice; the roster is private node state.
  */
 
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { verifyEvent } from 'nostr-tools/pure';
@@ -215,5 +215,31 @@ export function createRosterStore({ dir, audit = null, now = () => Math.floor(Da
     return run;
   }
 
-  return { get, put };
+  /**
+   * Every project this pubkey is on, with its effective role. Reads the
+   * current files each call (a handful at most), so a removal is seen at
+   * once. Unreadable/corrupt files are skipped, never fatal.
+   */
+  async function memberships(pubkey) {
+    let names = [];
+    try {
+      names = await readdir(dir);
+    } catch (e) {
+      if (e.code === 'ENOENT') return [];
+      throw e;
+    }
+    const out = [];
+    for (const n of names.sort()) {
+      if (!n.endsWith('.json')) continue;
+      const slug = n.slice(0, -5);
+      if (!SLUG_RE.test(slug)) continue;
+      let stored = null;
+      try { stored = await get(slug); } catch { continue; }
+      const role = stored ? effectiveRole(stored.roster, pubkey) : null;
+      if (role) out.push({ slug, role, caps: [...CAPS[role]] });
+    }
+    return out;
+  }
+
+  return { get, put, memberships };
 }
