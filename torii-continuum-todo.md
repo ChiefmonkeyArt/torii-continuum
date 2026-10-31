@@ -5,8 +5,8 @@
 - [x] `ops/fips-trial/vps.sh` + `runner.sh` + manual `fips-trial.yml`: firewall-first install, strict ACL, admit list, hardened `fipstrial` services, Q1–Q4 tests from a throwaway runner node, always-restore, teardown. `ops/test/fips-trial.test.sh`.
 - [x] Workarounds: cordn-server `[v6]` relay URLs (hosts name), ngit-grasp private origin (`NGIT_PRIVATE_PUBLIC_ORIGIN`).
 - [x] VPS side reuses the Torii Suite FIPS node (one identity per host): no `.deb`, no `/etc/fips`, tagged rules in `inet torii_fips input`, re-applied via `fips-trial-admit.service` (PartOf the Suite firewall).
-- [ ] Suite follow-up: `fips.d` include in `mesh.nft` for the roster projection (TEAMS-2d step 3); Suite FIPS 0.5.1 -> 0.5.3 upgrade.
-- [x] ngit npub1-truncation workaround: git host is the FIPS shortname `torii-team.fips`.
+- [x] Suite follow-up: `fips.d` include in `mesh.nft` for the roster projection (TEAMS-2d step 3); Suite FIPS 0.5.1 -> 0.5.3 upgrade (Suite v0.9.26-alpha).
+- [x] ngit npub1-truncation workaround: git host is the FIPS shortname `torii-teams.fips`.
 - [x] First `action=trial` on the VPS (2026-10-29): Q1, Q2, Q4 pass; Q3 inconclusive. `RESULTS.md`, `MEMBERS.md`.
 - [ ] Re-run Q3 later (routed session via test-uk01).
 - [ ] Owner admits the real team (`action=admit`), then live test; record Q1–Q4 in the trial README Results.
@@ -80,6 +80,9 @@
       add/remove, announcement maintainers (needs TEAMS-2b services).
   - [ ] TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path,
     `NGIT_USER_INDEX_RELAYS` = node relay) and cordn-rs, with backups.
+    - [x] Built: Suite v0.9.26-alpha `install-teams.sh` (chat public via the node
+      relay, git mesh-only; owner choice 2026-10-31). ADR addendum "TEAMS-2b packaging".
+    - [ ] Deploy to chiefmonkey.art after the Plebeian test + trial teardown (owner approval).
   - [ ] TEAMS-2c: (a) Torii Teams app (`torii-teams`, cordn-web basis, approved
     2026-10-31) opened from the Team view with roster roles — Torii Teams session;
     (b) clanker harness with a NIP-46 signer and an LLM in place of the trial's
@@ -93,7 +96,7 @@
       before first start, throwaway node keys, Q1 to Q4, abort + teardown).
     - [ ] Roster device entries (`["p", node, "device", human]`) and the
       fourth projection (FIPS peer allow list + `fips0` firewall drop-in).
-    - [ ] Suite packaging of the FIPS daemon (fold into TEAMS-2b).
+    - [x] Suite packaging of the FIPS daemon (Suite v0.9.26-alpha: 0.5.3 + `fips.d`).
     - [ ] Continuum napplet host (port Quest's sandboxed runtime) and a
       `nap-torii-team@1` contract draft; matching note in torii-quest.
     - [ ] Teams napplet UI (merges with TEAMS-2c).
