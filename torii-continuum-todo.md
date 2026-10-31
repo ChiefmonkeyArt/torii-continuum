@@ -80,8 +80,10 @@
       add/remove, announcement maintainers (needs TEAMS-2b services).
   - [ ] TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path,
     `NGIT_USER_INDEX_RELAYS` = node relay) and cordn-rs, with backups.
-  - [ ] TEAMS-2c: in-app team chat panel and clanker harness with a NIP-46
-    signer and an LLM in place of the trial's scripted change.
+  - [ ] TEAMS-2c: (a) Kesshū client (cordn-web basis, proposed 2026-10-31 in
+    `docs/adr-team-jobs.md`) mounted from the Team view with roster roles;
+    (b) clanker harness with a NIP-46 signer and an LLM in place of the trial's
+    scripted change. cordn-web already supports NIP-07/NIP-46/NIP-55 signers.
   - TEAMS-2d (proposed, docs-only so far): FIPS private mode + Teams napplet.
     See the ADR amendment "FIPS private mode and the Teams napplet".
     - [ ] FIPS trial on the VPS + one other machine (needs owner approval;
@@ -102,9 +104,15 @@
   - [x] Name: UK/EU trade mark registers and domains checked 2026-10-31; no
     conflicting mark; kesshu.com taken (expires 2026-12-19), most others free.
   - [ ] Domains: decide which to register (needs explicit approval).
-  - [ ] J1: "Make action" on messages, `torii.action/1` log in the Cordn group,
+  - [ ] J1: "Make action" on messages, action log in the Cordn group,
     role-checked fold, Actions panel (no AI), `/action` + `A` shortcut, source
-    badges, local status lines, decision log. After TEAMS-2c.
+    badges, local status lines, decision log.
+    - [x] Slice 1 (local, 2026-10-31): `actions.ts` kind + fold + views + parser in a
+      cordn-web checkout, 20 tests, full suite 627 passing. Not pushed.
+    - [ ] Approve cordn-web basis + private `kesshu` fork, then push slice 1.
+    - [ ] Slice 2: message-menu "Make action", right-panel Actions view, composer
+      `/action`, `A` shortcut, badges and status lines in the stream.
+    - [ ] Agree the action kind number with Cordn (provisional 1012).
   - [ ] J1b: threads, reactions, encrypted files/images, on-device search, pins
     (as far as Cordn supports).
   - [ ] J2: scribe clanker suggestions; per-group extraction setting, default off.
