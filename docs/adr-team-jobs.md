@@ -405,8 +405,30 @@ full cordn-web suite passes (627) and type checks are clean. Action ops are a ne
 in-group kind, provisionally 1012, to be agreed with Cordn before release. In J1 only
 people write actions: clankers, viewers and non-members are rejected by the fold.
 
+## Amendment: Torii Teams becomes its own app (2026-10-31)
+
+Owner decision. The team app is a standalone app in the Torii family, like Quest and
+Hibiki, not a part of Continuum:
+
+- **Repo:** private [`ChiefmonkeyArt/torii-teams`](https://github.com/ChiefmonkeyArt/torii-teams),
+  started from cordn-web v0.6.1 with its full history and MIT licence. Upstream tags
+  are not mirrored. `TORII.md` there credits Cordn and lists what Torii adds.
+- **Name:** working name Torii Teams. Kesshū 結集 is on hold (the bare romaji has
+  unwelcome homophones such as 血臭). The name checks above stay on record.
+- **Continuum's part:** the Team view opens the Torii Teams app and passes in the
+  signed roster; roles come from kind 30098. Contract ids `nap-torii-team@1` and
+  `nap-torii-jobs@1` are unchanged.
+- **Continuity files:** `torii-teams-strategy.md`, `-todo.md`, `-progress.md` and
+  `-handoff.md` in the Torii project now track the app. This ADR stays here as the
+  design record.
+- **J1 slice 1 is merged** in torii-teams PR #1 (actions kind, fold, views, `/action`
+  parser; 627 tests passing locally). GitHub Actions cannot run on that private repo
+  until the account's billing or spending limit is fixed.
+- **Session split:** the Torii Teams session owns the app, J1 onward and TEAMS-2c(a);
+  the Continuum Teams session owns TEAMS-2a/2b, FIPS, VPS deploys and TEAMS-2c(b).
+
 ## Open questions
 
-1. Approve the cordn-web basis and a private `ChiefmonkeyArt/kesshu` fork?
+1. ~~Approve the cordn-web basis and a private fork~~ Approved: `torii-teams`.
 2. Agree the action kind number with Cordn upstream (provisional 1012).
 3. Deposit size and refund rules for bids (J6).
