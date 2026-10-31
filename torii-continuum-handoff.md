@@ -1,5 +1,13 @@
 # Continuum — Session Handover
 
+## TEAMS-2b (2026-10-31, docs-only here)
+
+Packaging lives in Torii Suite v0.9.26-alpha (`installers/install-teams.sh`,
+`docs/TEAMS.md`); ADR addendum "TEAMS-2b packaging". It refuses to install
+while the FIPS trial holds :7334. Order: Plebeian test on the trial, trial
+`action=teardown`, then the owner-approved Suite install. TEAMS-2a-4 will write
+`/etc/torii/teams/{git-members,member-nodes}` from the signed roster.
+
 ## Teams FIPS trial automation (2026-10-29, ops-only, no version bump)
 
 `.github/workflows/fips-trial.yml` (manual) + `ops/fips-trial/{vps,runner}.sh`.

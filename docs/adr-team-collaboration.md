@@ -97,6 +97,19 @@ Status: **Proposed**, docs only. Nothing is built, packaged or deployed.
 
 **Order.** (1) This amendment. (2) A FIPS trial on the VPS and one other machine, needing approval: two daemons, services bound to `fips0`, the admission and firewall behaviour above, and Cordn + git over `.fips` names. (3) Roster device entries and the fourth projection. (4) Suite packaging, folded into TEAMS-2b. (5) The Continuum napplet host and the `nap-torii-team@1` draft. (6) The Teams napplet UI, merging with TEAMS-2c.
 
+## Addendum: TEAMS-2b packaging (Torii Suite v0.9.26-alpha, 2026-10-31)
+
+Status: **Accepted** for the Suite PR; no Continuum code or VPS change.
+
+- **Reach (owner choice 2026-10-31): chat public, git mesh-only.** The Cordn coordinator talks only to the node's loopback strfry (`ws://127.0.0.1:7777`); members' apps use the existing `wss://relay.<domain>`, since an https page cannot open `ws://`. Chat content stays MLS-encrypted, so a public relay exposes only the metadata already listed below. ngit-grasp runs in private mode bound to the node's FIPS address on port 7334, with no nginx route; `NGIT_BASE_PATH` stays `/` until a public git option is approved.
+- **Two network gates for git.** GRASP-08 membership (`/etc/torii/teams/git-members`) plus a per-device firewall allow list (`member-nodes`, rendered into a new `members` chain of the Suite FIPS firewall through `/etc/torii/fips/fips.d/*.nft`). This is step (3)'s firewall drop-in; TEAMS-2a-4 will write both files from the signed roster.
+- **Git host name.** The FIPS shortname `torii-teams.fips:7334`, never `<npub>.fips` (ngit truncates URLs at the first `npub1`).
+- **Binaries.** Pinned SHA-256s. cordn-server v0.5.1-next.3 from the Cordn release; cordn-rs is MIT, which settles the bundling question for the server (the Cordn core licence question in cordn-web #51 still matters for the app). ngit-grasp v3.0.10 (MIT) has no binary release, so a Suite workflow builds it at the pinned commit and publishes an attested prerelease; no compiler on any VPS.
+- **Keys.** The coordinator key is a service identity generated on the node, root-only, passed with systemd `LoadCredential`, never replaced on rerun. No person's nsec is involved.
+- **Backups.** Daily root-only tarball of the key, member lists and both data directories, with a brief service stop for consistency and 7-day retention.
+- **FIPS** moves to v0.5.3 in the Suite (the trial's version).
+- **Rollout.** The trial also binds :7334, so the installer refuses while it runs. Deploy to chiefmonkey.art only after the Plebeian test and trial teardown, with owner approval; the trial coordinator key can be carried over to keep its groups.
+
 ## Consequences and risks
 
 - **Server-visible code.** GRASP-08 controls who can read, but the operator's server holds plaintext repositories ([ngit](https://ngit.dev/self-host/ngit-grasp/private-service/)). The owner's node is the team's trust boundary for code; chat is protected even from it.
@@ -112,6 +125,6 @@ Status: **Proposed**, docs only. Nothing is built, packaged or deployed.
 1. Confirm the Cordn core licence and whether cordn-web supports NIP-07/NIP-46 signers.
 2. ~~Report the post-handoff defect to Cordn~~ — filed as [cordn-web #51](https://github.com/Cordn-msg/cordn-web/issues/51) (2026-10-29), which also asks the core licence. Until fixed: one coordinator per team, no handoff, or persist `stream` in Continuum's own @cordn/core integration.
 3. TEAMS-2a: make the roster load-bearing (signed roster event, NIP-17 invite/accept), with Continuum projecting it to Cordn and ngit-grasp.
-4. TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path) and cordn-rs, with backups for both data directories.
+4. TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path) and cordn-rs, with backups for both data directories. Built in Suite v0.9.26-alpha (see the addendum); deploy pending.
 5. TEAMS-2c: in-app team chat panel and the clanker harness with a remote signer and an LLM in place of the trial's scripted change.
 6. TEAMS-2d: FIPS private mode and the Teams napplet (see the amendment above); starts with a VPS trial.

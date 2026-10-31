@@ -1,5 +1,13 @@
 # Torii Continuum — Progress log
 
+## TEAMS-2b packaging decision (2026-10-31, docs-only)
+
+The permanent Teams services are now packaged in Torii Suite v0.9.26-alpha:
+team chat runs through the node's public relay, and private code is reachable
+only over the private mesh, as the owner chose. Recorded as an ADR addendum.
+Nothing changes on the VPS until the Plebeian test is over and the owner
+approves the switch from the trial.
+
 ## Teams FIPS trial automation (2026-10-29, ops-only)
 
 The FIPS trial can now be run from GitHub with one button. A throwaway GitHub
