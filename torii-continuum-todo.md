@@ -96,9 +96,10 @@
       `nap-torii-team@1` contract draft; matching note in torii-quest.
     - [ ] Teams napplet UI (merges with TEAMS-2c).
 
-- **TEAMS-JOBS-ADR (proposed 2026-10-30, docs-only):** chat-to-actions panel,
+- **TEAMS-JOBS-ADR (proposed 2026-10-30, docs-only; name Kesshū 結集 chosen 2026-10-31):** chat-to-actions panel,
   Jobs page, in-house clanker jobs and an optional open clanker market. See
   `docs/adr-team-jobs.md`. Each step needs its own approval.
+  - [ ] Name: check UK/EU trade mark registers and domains for Kesshū / kesshu.
   - [ ] J1: "Make action" on messages, `torii.action/1` log in the Cordn group,
     role-checked fold, Actions panel (no AI). After TEAMS-2c.
   - [ ] J2: scribe clanker suggestions; per-group extraction setting, default off.
