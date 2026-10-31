@@ -98,8 +98,8 @@ cmd_wait() {
   echo "$fd fips-trial-relay" | sudo tee -a /etc/hosts >/dev/null
   # ngit cuts URLs at the first "npub1" (normalize_grasp_server_url), so the
   # canonical <npub>.fips name breaks it. Use a FIPS shortname instead.
-  sudo sed -i '/^torii-team /d' /etc/fips/hosts
-  echo "torii-team $VPS_NPUB" | sudo tee -a /etc/fips/hosts >/dev/null
+  sudo sed -i '/^torii-teams /d' /etc/fips/hosts
+  echo "torii-teams $VPS_NPUB" | sudo tee -a /etc/fips/hosts >/dev/null
   for i in $(seq 60); do
     if ping -6 -c1 -W2 "$fd" >/dev/null 2>&1; then log "mesh ping to VPS ok after ${i} tries"; return 0; fi
     sleep 2
@@ -118,7 +118,7 @@ c() { # cordn as identity $1
 
 g() { # git/ngit as identity $1 with isolated config
   local n=$1; shift; local h="$W/home/$n"; mkdir -p "$h"
-  local grasp="ws://torii-team.fips:7334" relay="ws://fips-trial-relay:10547"
+  local grasp="ws://torii-teams.fips:7334" relay="ws://fips-trial-relay:10547"
   HOME="$h" GIT_CONFIG_GLOBAL="$h/.gitconfig" GIT_CONFIG_NOSYSTEM=1 XDG_CONFIG_HOME="$h/.config" \
   GIT_TERMINAL_PROMPT=0 NGIT_INTERACTIVE_MODE=false \
   NGIT_GRASP_DEFAULT_SET="$grasp" NGIT_RELAY_DEFAULT_SET="$relay" NGIT_RELAY_ANNOUNCEMENT_INDEXER_SET="$grasp" \
@@ -129,26 +129,26 @@ cmd_q1() {
   log "Q1 .fips name resolution"
   getent ahosts "$VPS_NPUB.fips" | head -1 | has '^fd' && echo "PASS $VPS_NPUB.fips resolves to the mesh address" \
     || die ".fips name does not resolve (fips-dns)"
-  local i; for i in $(seq 15); do getent ahosts torii-team.fips | head -1 | has '^fd' && break; sleep 2; done
-  getent ahosts torii-team.fips | head -1 | has '^fd' && echo "PASS torii-team.fips (FIPS shortname) resolves to the mesh address" \
-    || die "FIPS shortname torii-team.fips does not resolve"
+  local i; for i in $(seq 15); do getent ahosts torii-teams.fips | head -1 | has '^fd' && break; sleep 2; done
+  getent ahosts torii-teams.fips | head -1 | has '^fd' && echo "PASS torii-teams.fips (FIPS shortname) resolves to the mesh address" \
+    || die "FIPS shortname torii-teams.fips does not resolve"
   log "Q1 chat: alice creates the team group, bob joins, both directions"
   c bob gen-kp bob | tail -1
   c bob publish-kp bob | tail -1
-  c alice create-group torii-team | tail -1
-  c alice add-member torii-team "$(cat "$W/keys/bob.pk")" | tail -1
+  c alice create-group torii-teams | tail -1
+  c alice add-member torii-teams "$(cat "$W/keys/bob.pk")" | tail -1
   c bob fetch-welcomes | tail -1
   local ref; ref=$(c bob welcomes | grep -o 'keyPackageRef=[0-9a-f]*' | head -1 | cut -d= -f2)
   [ -n "$ref" ] || die "bob received no welcome"
-  c bob accept-welcome "$ref" torii-team | tail -1
-  c alice send-to torii-team "hello team over FIPS" | tail -1
-  c bob sync torii-team >/dev/null
-  c bob messages torii-team | has 'hello team over FIPS' && echo "PASS bob read alice's message" || die "bob did not get the message"
-  c bob send-to torii-team "hi alice" | tail -1
-  c alice sync torii-team >/dev/null
-  c alice messages torii-team | has 'hi alice' && echo "PASS alice read bob's reply" || die "alice did not get the reply"
+  c bob accept-welcome "$ref" torii-teams | tail -1
+  c alice send-to torii-teams "hello team over FIPS" | tail -1
+  c bob sync torii-teams >/dev/null
+  c bob messages torii-teams | has 'hello team over FIPS' && echo "PASS bob read alice's message" || die "bob did not get the message"
+  c bob send-to torii-teams "hi alice" | tail -1
+  c alice sync torii-teams >/dev/null
+  c alice messages torii-teams | has 'hi alice' && echo "PASS alice read bob's reply" || die "alice did not get the reply"
   c carol fetch-welcomes | tail -1
-  if c carol messages torii-team | has 'hello team'; then die "outsider read the group"; else echo "PASS outsider carol cannot read the group"; fi
+  if c carol messages torii-teams | has 'hello team'; then die "outsider read the group"; else echo "PASS outsider carol cannot read the group"; fi
 
   log "Q1 private git: alice creates, bob clones + opens a PR, carol is refused"
   local n
@@ -160,7 +160,7 @@ cmd_q1() {
   mkdir -p "$W/repo/alice" && cd "$W/repo/alice"
   g alice git init -q . && echo "team art" >README.md && g alice git add . && g alice git commit -qm init
   g alice timeout 120 ngit init --name team-art --identifier team-art --description "Teams FIPS trial" \
-    --grasp-server "ws://torii-team.fips:7334" --private --repo-relay-only -d 2>&1 | mask | tail -40 || true
+    --grasp-server "ws://torii-teams.fips:7334" --private --repo-relay-only -d 2>&1 | mask | tail -40 || true
   g alice timeout 120 git push origin master 2>&1 | mask | tail -40
   local url; url=$(g alice git remote get-url origin)
   cd "$W/repo"

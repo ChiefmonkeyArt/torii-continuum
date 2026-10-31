@@ -7,7 +7,7 @@ interoperate (no wire change in 0.5.2/0.5.3).
 
 | Question | Result |
 |---|---|
-| Q1 services over the mesh | **Pass.** `<npub>.fips` and the `torii-team.fips` shortname resolve. Chat: group created, member joined, messages both ways, outsider cannot read. Git: maintainer created a private repo and pushed, member cloned and opened a `pr/` branch, outsider clone refused. |
+| Q1 services over the mesh | **Pass.** `<npub>.fips` and the FIPS shortname resolve (then `torii-team.fips`; renamed `torii-teams.fips` on 2026-10-31). Chat: group created, member joined, messages both ways, outsider cannot read. Git: maintainer created a private repo and pushed, member cloned and opened a `pr/` branch, outsider clone refused. |
 | Q2 nothing on the public address | **Pass.** 7334, 10547, 5354 and 8443 closed on the public address. |
 | Q3 routed session via test-uk01 | **Inconclusive.** No routed session formed within the timeout. Removing the device's firewall rule still blocked it. On a Suite host there is no peer ACL, so admission rests on the `fips0` firewall either way. Not needed for direct-peer teams. |
 | Q4 firewall is the gate | **Pass.** A linked peer without an allow rule is refused on 7334 and 10547; re-admitting restores access. |
