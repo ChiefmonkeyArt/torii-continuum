@@ -99,9 +99,14 @@
 - **TEAMS-JOBS-ADR (proposed 2026-10-30, docs-only; name Kesshū 結集 chosen 2026-10-31):** chat-to-actions panel,
   Jobs page, in-house clanker jobs and an optional open clanker market. See
   `docs/adr-team-jobs.md`. Each step needs its own approval.
-  - [ ] Name: check UK/EU trade mark registers and domains for Kesshū / kesshu.
+  - [x] Name: UK/EU trade mark registers and domains checked 2026-10-31; no
+    conflicting mark; kesshu.com taken (expires 2026-12-19), most others free.
+  - [ ] Domains: decide which to register (needs explicit approval).
   - [ ] J1: "Make action" on messages, `torii.action/1` log in the Cordn group,
-    role-checked fold, Actions panel (no AI). After TEAMS-2c.
+    role-checked fold, Actions panel (no AI), `/action` + `A` shortcut, source
+    badges, local status lines, decision log. After TEAMS-2c.
+  - [ ] J1b: threads, reactions, encrypted files/images, on-device search, pins
+    (as far as Cordn supports).
   - [ ] J2: scribe clanker suggestions; per-group extraction setting, default off.
   - [ ] J3: job spec + promotion; in-house dispatch; per-job reservation from
     the Coco agent allowance.

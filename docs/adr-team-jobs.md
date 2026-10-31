@@ -1,6 +1,6 @@
 # Kesshū 結集 jobs: chat-to-actions, the Jobs page and the clanker marketplace
 
-Date: 2026-10-30. Status: **Proposed**. Docs only: no code, release, tag or VPS change.
+Date: 2026-10-30 (amended 2026-10-31: name, chat flow). Status: **Proposed**. Docs only: no code, release, tag or VPS change.
 Builds on `docs/adr-team-collaboration.md` (Cordn + private GRASP + roster-scoped
 clankers, plus the FIPS / Teams napplet amendment) and `docs/adr-coco-wallet-transition.md`
 (human wallet separate from a bounded agent allowance). Supersedes nothing.
@@ -10,9 +10,17 @@ purpose". Always show it with its kanji, because the bare romaji "kesshu" has un
 homophones (血臭, 血腫). Use "Kesshū 結集" in UI and outreach, and "kesshu" in ASCII-only
 places (repo names, slugs, file names). This replaces the earlier working names "Teams",
 "team jobs" and "chat-to-jobs". The napplet contract ids `nap-torii-team@1` and
-`nap-torii-jobs@1` stay as they are; renaming them is a separate decision. Name checks
-so far are web and app-store searches only; UK/EU trade mark registers and domains are
-still to check before public launch.
+`nap-torii-jobs@1` stay as they are; renaming them is a separate decision. Name checks (2026-10-31, register searches, not formal legal clearance):
+
+- **UK IPO and EUIPO:** no mark for `kesshu`, `kesshū`, `kesshuu` or `結集`. Nearest
+  marks are different words or unrelated classes: KESHU (UK, class 11), KESSI/KESSY
+  (UK), YIKESHU (EU, class 9), kesshō (EU, food and drink), KESSHÖ (expired). TMview was
+  unreachable at the time; EUIPO eSearch was used instead. A UK filing would sit in
+  classes 9, 38 and 42.
+- **Domains:** `kesshu.com` is registered (2019, private placeholder page, expires
+  2026-12-19). Free at the time of checking: `kesshu.net/.org/.app/.dev/.io/.social/
+  .eu/.uk/.co.uk/.jp`, `kesshū.com`, `kesshuu.com`, `getkesshu.com`, `結集.com/.net/.jp`.
+  Nothing has been registered; buying domains needs explicit approval.
 
 ## Context
 
@@ -115,6 +123,48 @@ and `design` can be promoted to jobs at first.
   setting when they join.
 - Suggestions are kept for 7 days and then dropped. Dismissed suggestions are not
   shown again for the same messages.
+
+### 2a. Chat features and making an action
+
+**Chat (decided, from `docs/adr-team-collaboration.md`).** Cordn MLS end-to-end
+encrypted group chat for at most 12 people plus clankers; one owner-signed roster with
+Owner / Maintainer / Contributor / Viewer roles (agents capped at Contributor); clankers
+answer only when addressed (`@clanker …`) and reply with a `pr/` branch; PR list and
+clanker status beside the chat.
+
+**Making an action (the J1 flow).**
+
+1. **Pick the message.** Desktop: hover and choose "Make action" from the message
+   menu. Phone: long-press. Several messages: select them, then "Make action" once;
+   the action cites all of them.
+2. **Draft in the right panel.** The title is pre-filled from the message text and the
+   source links are attached. The member sets type (`todo`, `decision`, `question`,
+   `code`), owner and an optional due date.
+3. **Save.** A `create` operation goes into the group; it shows as an Open action for
+   everyone. Contributors and above may create; Viewers cannot.
+4. **Scribe suggestions** (only if extraction is on) show under Suggestions with
+   Accept, Edit or Dismiss. Accepting is the same `create` operation, signed by the
+   member who accepted.
+5. **Promote.** A Maintainer or Owner turns a `code` action into a job (section 4).
+
+**Additions (adopted in this amendment, 2026-10-31).**
+
+- **Quick capture.** A slash command in the composer,
+  `/action <title> [@owner] [due]`, and a keyboard shortcut (`A`) on the focused
+  message. Both open the same draft; nothing is saved without a click or Enter.
+- **Source badges.** A message that is the source of an action shows a small badge
+  with the action's status (open, in progress, done) and opens it in the panel.
+- **Status lines in chat.** When an action is done, or a job's PR is ready or merged,
+  each client renders a one-line system note in the conversation. These are drawn
+  locally from the action log, not posted as messages, so the scribe still never
+  posts unless addressed.
+- **Decision log.** A filtered panel view of all `decision` actions, with their source
+  messages, so a team can see what it agreed and why.
+- **Chat basics.** Replies in threads, reactions, encrypted file and image sharing,
+  search, and pinned messages. Search runs on the device only, because the server
+  cannot read the chat. Pins use the same typed-payload style as actions
+  (`pin` / `unpin`). Each depends on what Cordn supports; gaps are filed upstream
+  rather than worked around with a second server.
 
 ### 3. Where actions and jobs live
 
@@ -254,7 +304,10 @@ Each step is its own PR and needs its own approval:
 
 - **J0**: this decision record.
 - **J1**: "Make action" on messages, the `torii.action/1` log, fold with role checks,
-  and the Actions panel. No AI, team-only. Depends on TEAMS-2c chat panel.
+  and the Actions panel, plus quick capture, source badges, status lines and the
+  decision log (section 2a). No AI, team-only. Depends on TEAMS-2c chat panel.
+- **J1b**: chat basics: threads, reactions, encrypted files and images, on-device
+  search and pins, as far as Cordn supports them.
 - **J2**: the scribe. Per-group extraction setting (default `off`), suggestions,
   dedupe and rate limits.
 - **J3**: job spec and promotion; in-house dispatch to roster clankers; per-job
