@@ -18,7 +18,7 @@ transports:
     outbound_only: true       # client posture: dial out, accept nothing new
 peers:
   - npub: "VPS_NPUB"
-    alias: "torii-team"
+    alias: "torii-teams"
     addresses:
       - transport: udp
         addr: "VPS_PUBLIC:2121"
