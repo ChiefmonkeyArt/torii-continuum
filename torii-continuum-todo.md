@@ -80,8 +80,8 @@
       add/remove, announcement maintainers (needs TEAMS-2b services).
   - [ ] TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path,
     `NGIT_USER_INDEX_RELAYS` = node relay) and cordn-rs, with backups.
-  - [ ] TEAMS-2c: (a) Kesshū client (cordn-web basis, proposed 2026-10-31 in
-    `docs/adr-team-jobs.md`) mounted from the Team view with roster roles;
+  - [ ] TEAMS-2c: (a) Torii Teams app (`torii-teams`, cordn-web basis, approved
+    2026-10-31) opened from the Team view with roster roles — Torii Teams session;
     (b) clanker harness with a NIP-46 signer and an LLM in place of the trial's
     scripted change. cordn-web already supports NIP-07/NIP-46/NIP-55 signers.
   - TEAMS-2d (proposed, docs-only so far): FIPS private mode + Teams napplet.
@@ -98,7 +98,7 @@
       `nap-torii-team@1` contract draft; matching note in torii-quest.
     - [ ] Teams napplet UI (merges with TEAMS-2c).
 
-- **TEAMS-JOBS-ADR (proposed 2026-10-30, docs-only; name Kesshū 結集 chosen 2026-10-31):** chat-to-actions panel,
+- **TEAMS-JOBS-ADR (proposed 2026-10-30, docs-only; app moved to `torii-teams` 2026-10-31, name on hold):** chat-to-actions panel,
   Jobs page, in-house clanker jobs and an optional open clanker market. See
   `docs/adr-team-jobs.md`. Each step needs its own approval.
   - [x] Name: UK/EU trade mark registers and domains checked 2026-10-31; no
@@ -107,12 +107,9 @@
   - [ ] J1: "Make action" on messages, action log in the Cordn group,
     role-checked fold, Actions panel (no AI), `/action` + `A` shortcut, source
     badges, local status lines, decision log.
-    - [x] Slice 1 (local, 2026-10-31): `actions.ts` kind + fold + views + parser in a
-      cordn-web checkout, 20 tests, full suite 627 passing. Not pushed.
-    - [ ] Approve cordn-web basis + private `kesshu` fork, then push slice 1.
-    - [ ] Slice 2: message-menu "Make action", right-panel Actions view, composer
-      `/action`, `A` shortcut, badges and status lines in the stream.
-    - [ ] Agree the action kind number with Cordn (provisional 1012).
+    - [x] Slice 1 merged in `ChiefmonkeyArt/torii-teams` PR #1 (2026-10-31).
+    - [ ] Slices 2+ tracked in `torii-teams-todo.md` (Torii project files); the
+      team app is now its own app, `torii-teams`.
   - [ ] J1b: threads, reactions, encrypted files/images, on-device search, pins
     (as far as Cordn supports).
   - [ ] J2: scribe clanker suggestions; per-group extraction setting, default off.
