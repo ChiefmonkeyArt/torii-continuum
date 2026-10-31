@@ -1,12 +1,18 @@
-# Team jobs: chat-to-actions, the Jobs page and the clanker marketplace
+# Kesshū 結集 jobs: chat-to-actions, the Jobs page and the clanker marketplace
 
 Date: 2026-10-30. Status: **Proposed**. Docs only: no code, release, tag or VPS change.
 Builds on `docs/adr-team-collaboration.md` (Cordn + private GRASP + roster-scoped
 clankers, plus the FIPS / Teams napplet amendment) and `docs/adr-coco-wallet-transition.md`
 (human wallet separate from a bounded agent allowance). Supersedes nothing.
 
-Working name: "Teams" / `nap-torii-team@1`. The public product name (Irori was the
-front-runner) is still open and does not affect this decision.
+Product name (chosen 2026-10-31): **Kesshū 結集**, "gathering together for a shared
+purpose". Always show it with its kanji, because the bare romaji "kesshu" has unrelated
+homophones (血臭, 血腫). Use "Kesshū 結集" in UI and outreach, and "kesshu" in ASCII-only
+places (repo names, slugs, file names). This replaces the earlier working names "Teams",
+"team jobs" and "chat-to-jobs". The napplet contract ids `nap-torii-team@1` and
+`nap-torii-jobs@1` stay as they are; renaming them is a separate decision. Name checks
+so far are web and app-store searches only; UK/EU trade mark registers and domains are
+still to check before public launch.
 
 ## Context
 
@@ -288,7 +294,8 @@ Each step is its own PR and needs its own approval:
 
 ## Open questions
 
-1. Public product name for Teams, and whether the market gets its own name.
+1. Name chosen: Kesshū 結集. Still open: whether the standalone app and the Continuum
+   feature share it, and whether the market gets its own name.
 2. Should the scribe also offer an end-of-day digest of decisions, or stay
    strictly one item per suggestion?
 3. Who may publish to the market: Owner only, or Owner and Maintainers?
