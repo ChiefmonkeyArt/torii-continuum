@@ -1,5 +1,13 @@
 # Continuum — Session Handover
 
+## v0.2.193-alpha: Team view link (2026-10-31)
+
+`agent/core/config.mjs` `normalizeTeamsAppUrl` (bare https origin or null) on
+`teams.app_url`; `GET /api/team/me` adds `teams_app_url`; `renderTeamChatLink`
+in `src/views/team-roster.js`; client `teamMe()`. Suite v0.9.28-alpha writes
+the config key. Deploying needs owner approval (with v0.2.192), after the
+Plebeian test.
+
 ## v0.2.192-alpha: TEAMS-2a slice 2 (2026-10-31)
 
 `agent/core/auth.mjs` adds `verifyMemberLogin` and `verifyMemberToken` (`m1.`

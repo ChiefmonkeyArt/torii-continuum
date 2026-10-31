@@ -76,6 +76,13 @@ server:
 
 
 # ─────────────────────────────────────────────────────────────
+# Torii Teams app (optional). Suite's install-teams-app.sh sets this; the Team
+# view then shows "Open team chat". Bare https origin only, or it is ignored.
+# ─────────────────────────────────────────────────────────────
+# teams:
+#   app_url: "https://teams.your-torii-domain.example"
+
+# ─────────────────────────────────────────────────────────────
 # Cashu wallet (on-VPS, pay-per-request float)
 # ─────────────────────────────────────────────────────────────
 #

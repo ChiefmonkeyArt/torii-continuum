@@ -16,8 +16,8 @@ import * as store from '../data/store.js';
 import { shortNpub } from '../lib/npub.js';
 import { setChatContext } from '../chat.js';
 import { isDemo, demoSource, demoBanner, goToLogin } from '../demo/demo-mode.js';
-import { renderProjectRosters } from './team-roster.js';
-import { projectRoster, putProjectRoster } from '../data/agent.js';
+import { renderProjectRosters, renderTeamChatLink } from './team-roster.js';
+import { projectRoster, putProjectRoster, teamMe } from '../data/agent.js';
 
 let storeUnsub = null;
 
@@ -42,6 +42,7 @@ export function renderTeam(mount, opts = {}) {
   ]);
   mount.appendChild(header);
 
+  if (!demo) mount.appendChild(renderTeamChatLink({ teamMe }));
   mount.appendChild(renderProjectRosters({
     api: { projectRoster, putProjectRoster },
     projects: () => S.listProjects(),

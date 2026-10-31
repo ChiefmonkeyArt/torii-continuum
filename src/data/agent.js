@@ -543,6 +543,11 @@ export async function projectRoster(slug) {
   return req('GET', `/api/projects/${encodeURIComponent(slug)}/roster`);
 }
 
+/** GET /api/team/me — { pubkey, owner, projects:[{slug, role, caps}], teams_app_url }. */
+export async function teamMe() {
+  return req('GET', '/api/team/me');
+}
+
 /** PUT /api/projects/:slug/roster — replace with a newer owner-signed event. */
 export async function putProjectRoster(slug, event) {
   return req('PUT', `/api/projects/${encodeURIComponent(slug)}/roster`, { event });

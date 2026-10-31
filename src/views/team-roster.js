@@ -201,3 +201,32 @@ export function renderProjectRosters(deps) {
   }
   return card;
 }
+
+/**
+ * "Open team chat" — shown only when the agent reports a Torii Teams app
+ * origin (config teams.app_url, set by Suite's install-teams-app.sh). The
+ * agent only ever returns a bare https origin; this re-checks it anyway so a
+ * bad value can never become a javascript: or cross-path link.
+ * @param {{teamMe:Function}} api
+ * @returns {HTMLElement} a placeholder that fills in (or stays empty)
+ */
+export function renderTeamChatLink(api) {
+  const slot = h('div', { class: 'team-chat-link' });
+  Promise.resolve(api.teamMe()).then((r) => {
+    const url = r?.ok ? safeAppOrigin(r.data?.teams_app_url) : null;
+    if (!url) return;
+    slot.appendChild(h('div', { class: 'card', style: 'display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px;' }, [
+      h('div', { class: 'muted', style: 'font-size: 12.5px;', text: 'Encrypted chat and code for everyone on your rosters.' }),
+      h('a', { class: 'team-chat-open', href: `${url}/chat`, target: '_blank', rel: 'noopener noreferrer', text: 'Open team chat', style: 'display: inline-flex; align-items: center; min-height: 40px; padding: 8px 14px; border-radius: calc(var(--radius) - 0.25rem); background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); font-weight: 600; text-decoration: none;' }),
+    ]));
+  }).catch(() => {});
+  return slot;
+}
+
+export function safeAppOrigin(raw) {
+  if (typeof raw !== 'string') return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' && !u.username && !u.password ? u.origin : null;
+  } catch { return null; }
+}

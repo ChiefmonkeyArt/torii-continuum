@@ -77,6 +77,10 @@
       (signed with NIP-07/NIP-46); roster members sign in at
       `POST /api/team/auth/verify` (separate `m1.` token), `GET /api/team/me`,
       role-scoped roster read via `requireRole` checked live per request.
+    - [x] TEAMS-2a Team view link (v0.2.193-alpha): "Open team chat" →
+      `<teams.app_url>/chat`, shown only when the agent config has
+      `teams.app_url` (bare https origin, written by Suite v0.9.28-alpha
+      `install-teams-app.sh`); exposed as `teams_app_url` on `GET /api/team/me`.
     - [ ] 2a-3: NIP-17 gift-wrapped invite/accept; accepted members only.
     - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
       add/remove, announcement maintainers (needs TEAMS-2b services).

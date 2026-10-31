@@ -1,5 +1,11 @@
 # Torii Continuum — Progress log
 
+## v0.2.193-alpha: "Open team chat" link (2026-10-31)
+
+When the Torii Teams app is installed, the Team view shows an "Open team chat"
+button that opens the team's encrypted chat in a new tab. Without the app,
+nothing changes. Not deployed yet.
+
 ## v0.2.192-alpha: TEAMS-2a slice 2, roster editor + member sign-in (2026-10-31)
 
 The owner can now set who is on each project, and in what role, from the Team
