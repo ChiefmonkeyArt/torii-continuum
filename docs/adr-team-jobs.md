@@ -345,12 +345,68 @@ Each step is its own PR and needs its own approval:
 - **Standards churn.** Kind 9806 is a draft profile. Keeping `torii-job/1` versioned
   and assigning no kind number limits the cost of following it.
 
+## Amendment: owner decisions and the Kesshū client (2026-10-31)
+
+**Owner decisions** (answers to the open questions):
+
+1. **Name.** Kesshū 結集 is the name of both the standalone app and the Continuum
+   feature. The market stays unnamed for now. People may well say "Continuum team";
+   that is fine. In Continuum the nav item reads "Team", with "Kesshū 結集" as the
+   app title inside it, so either name leads to the same place.
+2. **Who promotes and publishes.** Owners and Maintainers may promote actions to
+   jobs and send jobs out, in-house or to the market. Contributors make actions;
+   they do not promote.
+3. **Domains** wait.
+4. **Scribe style.** One suggestion at a time, plus an end-of-day digest of the day's
+   suggestions, decisions and finished actions, shown in the panel (not posted).
+5. **Default model when extraction is on: local.** Measured on the current node
+   (2 vCPU, no GPU), `qwen3:4b` produced about 3 tokens a second, with a 41 s first
+   reply after a cold load. That is too slow for live suggestions but fine for a
+   digest. So: the digest runs on the node's local model; live suggestions run on a
+   local model only where it is fast enough (a member's laptop, or a node with more
+   cores or a GPU), otherwise they stay off unless the owner picks a named provider.
+   Disk: `qwen3:1.7b` 1.4 GB, `qwen3:4b` 2.5 GB, `qwen3:8b` 5.2 GB
+   ([Ollama](https://ollama.com/library/qwen3/tags)); RAM needed is about the same
+   again. The node has a 15 GB root disk, so one 4B model at most.
+6. **Fees.** No marketplace fee at launch. Job pages and accepted deliveries carry a
+   value-for-value prompt (an optional zap to the project).
+7. **Bid filter.** Bidders need both a low web-of-trust threshold (proof of a real
+   human-backed key, not a reputation bar) and a refundable bid deposit, returned
+   when the bid is withdrawn, rejected or delivered; kept only on no-show.
+
+**Client basis for Kesshū (proposed, needs owner approval).** Build Kesshū on
+[cordn-web](https://github.com/Cordn-msg/cordn-web) (MIT) rather than a new chat
+client inside Continuum. Findings from reading its source (v0.6.1):
+
+- It already signs with NIP-07 extensions, NIP-46 bunkers and NIP-55 (Amber), which
+  answers the signer question in `docs/adr-team-collaboration.md`.
+- It already has threads (kind 1111), reactions, edits, deletes, message pins (kind
+  1011), polls, encrypted Blossom media, mentions and search, so most of J1b exists.
+- New message types plug into a kind registry with a compact in-stream renderer and
+  a rich right-sidebar renderer, which is where the Actions panel goes.
+- The published `@cordn/core` and `@cordn/cli` packages declare MIT on npm; the core
+  repository still has no licence file and cordn-web #51 has no reply yet.
+- It is about 70,000 lines of Svelte 5 and TypeScript. Rewriting it inside
+  Continuum's plain-JS frontend would duplicate MLS state handling for no gain.
+
+Shape: a private fork `ChiefmonkeyArt/kesshu` carries the Kesshū additions, keeping
+them in separate files so they can be offered upstream. Continuum mounts the same
+build through Torii Base and opens it from the project's Team view, passing the
+signed roster so roles come from kind 30098 (standalone groups fall back to group
+admins as Maintainers). TEAMS-2c becomes: (a) the Kesshū client and its Continuum
+mount, (b) the clanker harness with a NIP-46 signer and an LLM. Live use still needs
+a coordinator on the node (TEAMS-2b).
+
+**J1 slice 1 (built locally, not yet pushed anywhere).** `src/lib/chat/actions.ts` in
+a cordn-web checkout: the action operation kind (create, update, status, promote),
+the role-checked fold in coordinator-cursor order, panel groups, source badges, the
+decision log, locally drawn status lines and the `/action` parser, with 20 tests; the
+full cordn-web suite passes (627) and type checks are clean. Action ops are a new
+in-group kind, provisionally 1012, to be agreed with Cordn before release. In J1 only
+people write actions: clankers, viewers and non-members are rejected by the fold.
+
 ## Open questions
 
-1. Name chosen: Kesshū 結集. Still open: whether the standalone app and the Continuum
-   feature share it, and whether the market gets its own name.
-2. Should the scribe also offer an end-of-day digest of decisions, or stay
-   strictly one item per suggestion?
-3. Who may publish to the market: Owner only, or Owner and Maintainers?
-4. Should there be a platform fee? The default assumption is none.
-5. Is the web-of-trust filter enough at launch, or should a bid bond come earlier?
+1. Approve the cordn-web basis and a private `ChiefmonkeyArt/kesshu` fork?
+2. Agree the action kind number with Cordn upstream (provisional 1012).
+3. Deposit size and refund rules for bids (J6).
