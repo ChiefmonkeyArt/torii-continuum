@@ -1,5 +1,13 @@
 # Continuum — Session Handover
 
+## v0.2.194-alpha: Teams MVP embed (2026-11-04)
+
+`verifyMemberLogin` accepts the owner (scoped `m1.` token; `use_owner_login`
+removed). `renderTeamChatLink` in `src/views/team-roster.js` now frames
+`<app_url>/chat?embed=1`. The Teams app (f4fe313e) ships 0.6.1-torii.2 with
+embed mode, and Suite v0.9.30-alpha sets frame-ancestors. Next: Suite
+v0.9.31-alpha `continuum.<domain>` vhost. Deploy only on owner confirmation.
+
 ## v0.2.193-alpha: Team view link (2026-10-31)
 
 `agent/core/config.mjs` `normalizeTeamsAppUrl` (bare https origin or null) on

@@ -203,10 +203,13 @@ export function renderProjectRosters(deps) {
 }
 
 /**
- * "Open team chat" — shown only when the agent reports a Torii Teams app
- * origin (config teams.app_url, set by Suite's install-teams-app.sh). The
- * agent only ever returns a bare https origin; this re-checks it anyway so a
- * bad value can never become a javascript: or cross-path link.
+ * Team chat (TEAMS-2a Team view link → embed, v0.2.194). Shown only when the
+ * agent reports a Torii Teams app origin (config teams.app_url, written by
+ * Suite's install-teams-app.sh). The app is framed at <origin>/chat?embed=1:
+ * it stays on its OWN origin, so its chat keys never share storage with
+ * Continuum. "Open in full window" is the fallback for signers that do not
+ * inject into frames. The agent only returns a bare https origin; it is
+ * re-checked here so a bad value can never become a javascript: link or src.
  * @param {{teamMe:Function}} api
  * @returns {HTMLElement} a placeholder that fills in (or stays empty)
  */
@@ -215,9 +218,22 @@ export function renderTeamChatLink(api) {
   Promise.resolve(api.teamMe()).then((r) => {
     const url = r?.ok ? safeAppOrigin(r.data?.teams_app_url) : null;
     if (!url) return;
-    slot.appendChild(h('div', { class: 'card', style: 'display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px;' }, [
-      h('div', { class: 'muted', style: 'font-size: 12.5px;', text: 'Encrypted chat and code for everyone on your rosters.' }),
-      h('a', { class: 'team-chat-open', href: `${url}/chat`, target: '_blank', rel: 'noopener noreferrer', text: 'Open team chat', style: 'display: inline-flex; align-items: center; min-height: 40px; padding: 8px 14px; border-radius: calc(var(--radius) - 0.25rem); background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); font-weight: 600; text-decoration: none;' }),
+    const frame = h('iframe', {
+      class: 'team-chat-frame',
+      src: `${url}/chat?embed=1`,
+      title: 'Team chat',
+      allow: 'microphone; clipboard-write',
+      sandbox: 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads',
+      referrerpolicy: 'no-referrer',
+      loading: 'lazy',
+      style: 'display: block; width: 100%; height: max(480px, calc(100vh - 260px)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: transparent;',
+    });
+    slot.appendChild(h('div', { class: 'card', style: 'margin-bottom: 16px;' }, [
+      h('div', { style: 'display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px;' }, [
+        h('strong', { text: 'Team chat' }),
+        h('a', { class: 'team-chat-open', href: `${url}/chat`, target: '_blank', rel: 'noopener noreferrer', text: 'Open in full window', style: 'font-size: 12.5px;' }),
+      ]),
+      frame,
     ]));
   }).catch(() => {});
   return slot;

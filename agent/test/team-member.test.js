@@ -74,7 +74,11 @@ test('member login: members get an m1 token; owner, strangers and replays are re
   // Replay of the same signed challenge: consumed.
   assert.equal((await auth.verifyMemberLogin(ev, { isMember })).code, 'challenge_expired');
 
-  assert.equal((await auth.verifyMemberLogin(signed(auth, OWNER), { isMember: async () => true })).code, 'use_owner_login');
+  // The owner gets a scoped m1 token even when isMember says no (no rosters yet).
+  const own = await auth.verifyMemberLogin(signed(auth, OWNER), { isMember: async () => false });
+  assert.equal(own.ok, true);
+  assert.equal(auth.verifyMemberToken(own.token).pubkey, OWNER.pk);
+  assert.equal(auth.verifySessionToken(own.token).ok, false, 'owner m1 is not an admin session');
   assert.equal((await auth.verifyMemberLogin(signed(auth, EVE), { isMember })).code, 'not_member');
   // A refused stranger still burns the challenge (no free retries on one sig).
   const eveEv = signed(auth, EVE);
@@ -157,7 +161,7 @@ async function setup(over = {}) {
   return { app, auth, rosterStore, OH, login, H, done: async () => { await app.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
-test('route: member sign-in returns a token without a cookie; owner and strangers get 403 codes', async () => {
+test('route: member and owner sign-in return m1 tokens without a cookie; strangers get 403', async () => {
   const { login, done } = await setup();
   try {
     const ok = await login(BOB);
@@ -165,8 +169,9 @@ test('route: member sign-in returns a token without a cookie; owner and stranger
     assert.match(ok.json().token, /^m1\./);
     assert.equal(ok.headers['set-cookie'], undefined, 'member tokens must never reach nginx auth_request');
     const own = await login(OWNER);
-    assert.equal(own.statusCode, 403);
-    assert.equal(own.json().code, 'use_owner_login');
+    assert.equal(own.statusCode, 200);
+    assert.match(own.json().token, /^m1\./);
+    assert.equal(own.headers['set-cookie'], undefined);
     const eve = await login(EVE);
     assert.equal(eve.statusCode, 403);
     assert.equal(eve.json().code, 'not_member');
@@ -279,4 +284,24 @@ test('loadConfig wires teams.app_url through the normaliser', () => {
     writeFileSync(p3, base.join('\n'), { mode: 0o600 });
     assert.equal(loadConfig(p3).teams.app_url, null);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('route: the owner m1 token is scoped: owner role on rosters, never admin', async () => {
+  const { app, login, done } = await setup();
+  try {
+    const H = { authorization: `Bearer ${(await login(OWNER)).json().token}` };
+    const me = (await app.inject({ method: 'GET', url: '/api/team/me', headers: H })).json();
+    assert.equal(me.owner, false);
+    assert.deepEqual(me.projects.map((p) => [p.slug, p.role]), [['alpha', 'owner'], ['beta', 'owner']]);
+    const r = (await app.inject({ method: 'GET', url: '/api/projects/alpha/roster', headers: H })).json();
+    assert.equal(r.role, 'owner');
+    assert.equal(r.projection, undefined, 'no service projections on a scoped token');
+    const put = await app.inject({ method: 'PUT', url: '/api/projects/alpha/roster', headers: H,
+      payload: { event: rosterEv('alpha', [['p', BOB.pk, 'maintainer']], NOW + 1) } });
+    assert.equal(put.statusCode, 401);
+    for (const url of ['/api/auth/session', '/api/genesis']) {
+      assert.notEqual((await app.inject({ method: 'GET', url, headers: H })).statusCode, 200, url);
+    }
+    assert.equal((await app.inject({ method: 'POST', url: '/api/auth/refresh', headers: H })).statusCode, 401);
+  } finally { await done(); }
 });

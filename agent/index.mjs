@@ -1035,7 +1035,7 @@ app.post('/api/team/auth/verify', { config: rateLimitConfig(authVerifyMax, '/api
     isMember: async (pk) => (await rosterStore.memberships(pk)).length > 0,
   });
   if (!result.ok) {
-    const status = result.code === 'not_member' || result.code === 'use_owner_login' ? 403 : 401;
+    const status = result.code === 'not_member' ? 403 : 401;
     return reply.code(status).send({ ok: false, code: result.code || null, error: result.reason });
   }
   // No cookie: a member token must never satisfy nginx auth_request.
