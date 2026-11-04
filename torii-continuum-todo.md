@@ -50,6 +50,8 @@
 
 ### Active tasks
 
+- [ ] **HIGH PRIORITY — FIPS-DEFAULT-1: FIPS on by default across all apps** (owner, 2026-11-04; schedule after the Teams MVP). Scope: Plebeian (market), Torii Quest, Torii Continuum and the marketplace. Rules: (1) each app gets an ADR before its behaviour changes; (2) any edit to PlebeianApp/market needs the owner's explicit approval, and analysis there stays read-only; (3) the FIPS trial teardown (removing fips-trial relay/coord/grasp, which hold :7334) does not remove or pause FIPS. It only frees the port for the real Teams FIPS install.
+
 - **CONT-CONNECTIONS-READONLY (v0.2.188-alpha):** implement Settings → Connections,
   GitHub App setup validation/device authorization, encrypted expiring credentials,
   approved repository browsing and project links. Ship only after route/security,
