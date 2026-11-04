@@ -121,6 +121,15 @@ Status: **Accepted** for the Suite PR; no Continuum code or VPS change.
 - **FIPS** moves to v0.5.3 in the Suite (the trial's version).
 - **Rollout.** The trial also binds :7334, so the installer refuses while it runs. Deploy to chiefmonkey.art only after the Plebeian test and trial teardown, with owner approval; the trial coordinator key can be carried over to keep its groups.
 
+## Decision: access model (owner, 2026-11-04)
+
+- **Tuned for small groups.** A handful of people per project is normal; 12 people (owner included) is the hard maximum, as enforced today.
+- **The project is the only unit of access.** Being invited to a project means being in its Cordn group chat and its private repo. There is no lobby, no team-wide chat and no separate team list or team record.
+- **"The team" is derived:** everyone on any project roster, plus pending invites. There is no limit on how many people one owner works with across projects; the limit is per project.
+- **Removal:** taking someone off a project removes them from that group and repo. A "remove everywhere" action in Continuum re-signs each affected project roster (a handful at most).
+- **Split of work:** the access model, invites (2a-3) and projections into Cordn/ngit (2a-4) stay in Continuum/Suite. The Teams app shows the caller's projects as channels from `GET /api/team/me` and handles invite links.
+- **Efficiency:** `memberships(pubkey)` will move from a directory scan to an in-memory index rebuilt on roster writes.
+
 ## Consequences and risks
 
 - **Server-visible code.** GRASP-08 controls who can read, but the operator's server holds plaintext repositories ([ngit](https://ngit.dev/self-host/ngit-grasp/private-service/)). The owner's node is the team's trust boundary for code; chat is protected even from it.
