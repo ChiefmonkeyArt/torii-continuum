@@ -1,5 +1,9 @@
 # Continuum — Session Handover
 
+## Live state (2026-11-04)
+
+VPS: Continuum 0.2.194-alpha on `https://continuum.chiefmonkey.art/continuum/` (main domain redirects; `/api/` on both). Suite checkout v0.9.32-alpha. Teams services and the app (0.6.1-torii.2) are installed; the FIPS trial is gone. Owner sessions are per-origin, so everyone signs in once on the new host.
+
 ## Ops: Suite stages workflow (2026-11-04, no version bump)
 
 `.github/workflows/suite-stages-vps.yml` runs `ops/lib/run-suite-stages.sh` on the VPS as root over the same pinned SSH as the deploy. It selects a merged Suite tag (`select-suite-release.sh`), refuses to run unless the checkout is exactly at that tag, then runs allowlisted stage installers in the given order: `fips`, `teams`, `continuum_host`, `teams_app`. `enable=true` persists the matching `INSTALL_*=1` flags to `.env` first. The output is masked (npubs, long hex, IPv4/IPv6) because the logs are public. Operator approval is required for every run.

@@ -86,11 +86,12 @@
     - [x] Teams MVP embed (v0.2.194-alpha): Team view frames
       `<teams.app_url>/chat?embed=1` (sandboxed) with a full-window link; owner
       signs in to the Teams app with a scoped `m1.` token, never the admin one.
-    - [ ] Continuum on `continuum.<domain>` (Suite v0.9.31-alpha vhost; old
+    - [x] Continuum on `continuum.<domain>` (Suite v0.9.31-alpha vhost; old
       `<domain>/continuum/*` 301s there). Moves the owner session off the origin
       Quest shares.
       Suite v0.9.31-alpha code is in Suite PR #67; deploy runs through
       `suite-stages-vps.yml` (ops-only workflow, stages fips/teams/continuum_host/teams_app).
+      DEPLOYED 2026-11-04 with v0.2.194-alpha + Suite v0.9.32-alpha (owner-approved).
     - [ ] 2a-3: NIP-17 gift-wrapped invite/accept; accepted members only.
     - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
       add/remove, announcement maintainers (needs TEAMS-2b services).
