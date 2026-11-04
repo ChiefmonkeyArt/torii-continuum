@@ -89,6 +89,8 @@
     - [ ] Continuum on `continuum.<domain>` (Suite v0.9.31-alpha vhost; old
       `<domain>/continuum/*` 301s there). Moves the owner session off the origin
       Quest shares.
+      Suite v0.9.31-alpha code is in Suite PR #67; deploy runs through
+      `suite-stages-vps.yml` (ops-only workflow, stages fips/teams/continuum_host/teams_app).
     - [ ] 2a-3: NIP-17 gift-wrapped invite/accept; accepted members only.
     - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
       add/remove, announcement maintainers (needs TEAMS-2b services).

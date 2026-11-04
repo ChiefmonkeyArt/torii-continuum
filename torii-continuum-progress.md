@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## Ops: Suite stages workflow (2026-11-04, ops only)
+
+Added `suite-stages-vps.yml` + `ops/lib/run-suite-stages.sh` so the owner-approved Teams MVP stages (FIPS refresh, Teams services, Continuum host, Teams app) run on the VPS from a merged Suite tag, with masked public logs. No app change, no version bump.
+
 ## Roadmap: FIPS on by default (2026-11-04, docs only)
 
 Added a high-priority item to make FIPS the default across Plebeian, Quest, Continuum and the marketplace, after the Teams MVP. Each app gets an ADR first, and the market needs owner approval.

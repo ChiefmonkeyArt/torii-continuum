@@ -1,5 +1,9 @@
 # Continuum — Session Handover
 
+## Ops: Suite stages workflow (2026-11-04, no version bump)
+
+`.github/workflows/suite-stages-vps.yml` runs `ops/lib/run-suite-stages.sh` on the VPS as root over the same pinned SSH as the deploy. It selects a merged Suite tag (`select-suite-release.sh`), refuses to run unless the checkout is exactly at that tag, then runs allowlisted stage installers in the given order: `fips`, `teams`, `continuum_host`, `teams_app`. `enable=true` persists the matching `INSTALL_*=1` flags to `.env` first. The output is masked (npubs, long hex, IPv4/IPv6) because the logs are public. Operator approval is required for every run.
+
 ## v0.2.194-alpha: Teams MVP embed (2026-11-04)
 
 `verifyMemberLogin` accepts the owner (scoped `m1.` token; `use_owner_login`
