@@ -1,5 +1,11 @@
 # Torii Continuum — Progress log
 
+## v0.2.194-alpha: team chat inside Continuum (2026-11-04)
+
+The Team view now shows the team chat inside Continuum, with a link to open it
+in its own window. You can sign in to the Teams app with your Nostr key, and
+the app only ever gets a limited team login, never your full owner login.
+
 ## v0.2.193-alpha: "Open team chat" link (2026-10-31)
 
 When the Torii Teams app is installed, the Team view shows an "Open team chat"

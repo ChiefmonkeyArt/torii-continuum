@@ -118,7 +118,7 @@ test('demo mode never loads or signs; Sign and save goes to login', async () => 
   expect(signEvent).not.toHaveBeenCalled();
 });
 
-test('team chat link: shown only for an https origin, opens /chat safely', async () => {
+test('team chat: embedded only for an https origin, with a full-window fallback', async () => {
   vi.resetModules();
   dom = new JSDOM('<main></main>', { url: 'https://test.invalid/continuum/#/team' });
   for (const key of ['window', 'document']) vi.stubGlobal(key, dom.window[key]);
@@ -129,11 +129,17 @@ test('team chat link: shown only for an https origin, opens /chat safely', async
   const down = renderTeamChatLink({ teamMe: async () => ({ ok: false, offline: true }) });
   const threw = renderTeamChatLink({ teamMe: async () => { throw new Error('x'); } });
   await tick();
+  const f = shown.querySelector('iframe');
+  expect(f.getAttribute('src')).toBe('https://teams.example.org/chat?embed=1');
+  expect(f.getAttribute('allow')).toBe('microphone; clipboard-write');
+  expect(f.getAttribute('sandbox')).not.toContain('allow-top-navigation');
+  expect(f.getAttribute('referrerpolicy')).toBe('no-referrer');
   const a = shown.querySelector('a');
+  expect(a.textContent).toBe('Open in full window');
   expect(a.getAttribute('href')).toBe('https://teams.example.org/chat');
   expect(a.getAttribute('rel')).toBe('noopener noreferrer');
   expect(a.getAttribute('target')).toBe('_blank');
-  for (const el of [none, evil, down, threw]) expect(el.querySelector('a')).toBeNull();
+  for (const el of [none, evil, down, threw]) { expect(el.querySelector('a')).toBeNull(); expect(el.querySelector('iframe')).toBeNull(); }
   expect(safeAppOrigin('http://teams.example.org')).toBeNull();
   expect(safeAppOrigin('https://u:p@teams.example.org')).toBeNull();
 });

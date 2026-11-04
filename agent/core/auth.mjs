@@ -557,12 +557,13 @@ export function createAuth(cfg, deps = {}) {
   const memberKey = createHmac('sha256', cfg.session_secret).update('continuum-member-session-v1').digest();
 
   /**
-   * Sign-in for a roster member (never the owner, who uses verifyChallenge).
+   * Scoped team sign-in for a roster member or the owner (the owner's full
+   * admin session still comes only from verifyChallenge).
    * @param {object} event  NIP-07/NIP-46 signed kind-22242 challenge
    * @param {{clientIp?:string, isMember:(hex:string)=>Promise<boolean>}} opts
    * @returns Promise<{ok:true, token, expires_at, pubkey}|{ok:false, code, reason}>
    * Codes: malformed_event · wrong_kind · challenge_expired · bad_signature ·
-   * use_owner_login · not_member.
+   * not_member.
    */
   async function verifyMemberLogin(event, { clientIp, isMember } = {}) {
     if (typeof isMember !== 'function') return { ok: false, code: 'not_member', reason: 'no roster' };
@@ -573,10 +574,11 @@ export function createAuth(cfg, deps = {}) {
     }
     // Valid signature: burn the challenge before any further decision.
     challenges.delete(checked.challenge);
-    if (adminHex && event.pubkey === adminHex) {
-      return { ok: false, code: 'use_owner_login', reason: 'the owner signs in through /api/auth/verify' };
-    }
-    if (!HEX64_RE.test(event.pubkey) || !(await isMember(event.pubkey))) {
+    // The owner may take a scoped m1 token too (v0.2.194): it is how the
+    // Teams app on its own origin signs the owner in WITHOUT ever holding the
+    // admin session. The m1 token never opens requireAdmin routes.
+    const isOwner = Boolean(adminHex) && event.pubkey === adminHex;
+    if (!isOwner && (!HEX64_RE.test(event.pubkey) || !(await isMember(event.pubkey)))) {
       log.warn({ evt: 'auth.member.fail', ip_prefix: prefix(clientIp || '', 12), pubkey_prefix: prefix(event.pubkey || ''), reason: 'not_member' });
       return { ok: false, code: 'not_member', reason: 'not on any project roster' };
     }
