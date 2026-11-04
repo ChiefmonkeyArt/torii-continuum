@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## Deploy: Teams app 0.6.1-torii.3 (2026-11-04, docs only)
+
+`suite-stages-vps.yml` ran teams_app from Suite v0.9.33-alpha (owner-approved). Live MANIFEST shows 0.6.1-torii.3 (ec2bc86); node file and frame-ancestors are unchanged.
+
 ## Deploy: Teams MVP on chiefmonkey.art (2026-11-04, docs only)
 
 Owner approval ("do all the things immediately"), relayed by the Teams session. In order: Suite v0.9.31-alpha (Continuum host) merged and tagged; FIPS trial torn down (port 7334 freed, FIPS stays on); `deploy-continuum-vps.yml` deployed v0.2.194-alpha with `suite_tag=v0.9.31-alpha` (box Suite v0.9.25 to v0.9.31); `suite-stages-vps.yml` ran fips, teams, continuum_host and teams_app with `enable=true`. The live check found the Teams installer never detected Continuum (wrong config path); fixed in Suite v0.9.32-alpha and teams_app rerun. Verified: `https://continuum.chiefmonkey.art/continuum/` 200, main-domain `/continuum/*` 301 there, Teams node file `continuum` = the Continuum host, Teams `frame-ancestors` lists both hosts, CORS preflight from the Teams origin allowed, `/api/team/auth/verify` refuses non-members, forged `m1.` tokens get 401. The fips-trial teardown log printed a mesh address, so its logs were deleted and that workflow now masks output. Pending: owner browser sign-in on the new host and the Team view iframe.

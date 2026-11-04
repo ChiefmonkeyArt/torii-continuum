@@ -2,7 +2,7 @@
 
 ## Live state (2026-11-04)
 
-VPS: Continuum 0.2.194-alpha on `https://continuum.chiefmonkey.art/continuum/` (main domain redirects; `/api/` on both). Suite checkout v0.9.32-alpha. Teams services and the app (0.6.1-torii.2) are installed; the FIPS trial is gone. Owner sessions are per-origin, so everyone signs in once on the new host.
+VPS: Continuum 0.2.194-alpha on `https://continuum.chiefmonkey.art/continuum/` (main domain redirects; `/api/` on both). Suite checkout v0.9.33-alpha. Teams services and the app (0.6.1-torii.3, no public Cordn coordinator) are installed; the FIPS trial is gone. Owner sessions are per-origin, so everyone signs in once on the new host.
 
 ## Ops: Suite stages workflow (2026-11-04, no version bump)
 
