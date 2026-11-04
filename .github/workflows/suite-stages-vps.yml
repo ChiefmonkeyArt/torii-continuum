@@ -31,6 +31,10 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash  # -eo pipefail, so a failed ssh is not hidden by the log mask
+
 jobs:
   stages:
     runs-on: ubuntu-latest

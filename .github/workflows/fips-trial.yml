@@ -53,6 +53,10 @@ env:
   NGIT_URL: https://github.com/DanConwayDev/ngit-cli/releases/download/v3.0.5/ngit-v3.0.5-x86_64-unknown-linux-musl.tar.gz
   NGIT_SHA: d908fd2e8b818ad3c2427b54245c4dc98e765f4840846a321c98343ff3a773ba
 
+defaults:
+  run:
+    shell: bash  # -eo pipefail, so a failed ssh is not hidden by the log mask
+
 jobs:
   build-grasp:
     if: inputs.action == 'trial' || inputs.action == 'admit'
@@ -128,15 +132,18 @@ jobs:
           [ -n "$ip" ] && echo "$ip $host_only" | sudo tee -a /etc/hosts >/dev/null
           printf '#!/bin/sh\nexec ssh -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 "%s" "$@"\n' "$SSH_HOST" > ~/vssh
           chmod 700 ~/vssh
+          # Public logs: mask npubs, long hex, IPv4 and IPv6 in everything shown.
+          printf '%s\n' "sed -u -E -e 's/npub1[02-9ac-hj-np-z]{8,}/npub1<masked>/g' -e 's/[0-9a-fA-F]{12,}/<hex>/g' -e 's/([0-9]{1,3}\\.){3}[0-9]{1,3}/<ipv4>/g' -e 's/[0-9a-fA-F]{1,4}(:[0-9a-fA-F]{0,4}){2,7}/<ipv6>/g'" > ~/mask
+          chmod 700 ~/mask
           mkdir -p "$BIN"
 
       - name: Read-only status
         if: env.ACTION == 'status'
-        run: ~/vssh sudo -n bash -s -- status < ops/fips-trial/vps.sh
+        run: ~/vssh sudo -n bash -s -- status < ops/fips-trial/vps.sh 2>&1 | bash ~/mask
 
       - name: Teardown
         if: env.ACTION == 'teardown'
-        run: ~/vssh sudo -n bash -s -- teardown < ops/fips-trial/vps.sh
+        run: ~/vssh sudo -n bash -s -- teardown < ops/fips-trial/vps.sh 2>&1 | bash ~/mask
 
       - uses: actions/download-artifact@v4
         if: env.ACTION == 'trial' || env.ACTION == 'admit'
@@ -169,7 +176,7 @@ jobs:
         if: env.ACTION == 'trial' || env.ACTION == 'admit'
         run: |
           set -euo pipefail
-          ~/vssh sudo -n bash -s -- prepare < ops/fips-trial/vps.sh | tee /tmp/install.txt
+          ~/vssh sudo -n bash -s -- prepare < ops/fips-trial/vps.sh 2>&1 | tee /tmp/install.txt | bash ~/mask
           echo "VPS_NPUB=$(sed -n 's/^== node npub: //p' /tmp/install.txt)" >> "$GITHUB_ENV"
 
       - name: Phase 1-2 on the runner (second machine)
@@ -184,8 +191,8 @@ jobs:
         if: env.ACTION == 'trial'
         run: |
           set -euo pipefail
-          ~/vssh sudo -n bash -s -- admit "$RUNNER_NODE${MEMBER_NODES:+,$MEMBER_NODES}" < ops/fips-trial/vps.sh
-          ~/vssh sudo -n bash -s -- services "$BUNDLE" "$ALICE,$BOB${GIT_MEMBERS:+,$GIT_MEMBERS}" < ops/fips-trial/vps.sh | tee /tmp/status.txt
+          ~/vssh sudo -n bash -s -- admit "$RUNNER_NODE${MEMBER_NODES:+,$MEMBER_NODES}" < ops/fips-trial/vps.sh 2>&1 | bash ~/mask
+          ~/vssh sudo -n bash -s -- services "$BUNDLE" "$ALICE,$BOB${GIT_MEMBERS:+,$GIT_MEMBERS}" < ops/fips-trial/vps.sh 2>&1 | tee /tmp/status.txt | bash ~/mask
           echo "COORD_PK=$(sed -n 's/^== coordinator pubkey: //p' /tmp/status.txt)" >> "$GITHUB_ENV"
 
       - name: Q1 services over the mesh
@@ -219,7 +226,7 @@ jobs:
           # Runner drops its direct link to the VPS and peers only test-uk01;
           # the VPS links test-uk01 at runtime. Runner keeps its allow rule.
           # The Suite node has no peer ACL, so the firewall is the only gate.
-          ~/vssh sudo -n bash -s -- route on < ops/fips-trial/vps.sh
+          ~/vssh sudo -n bash -s -- route on < ops/fips-trial/vps.sh 2>&1 | bash ~/mask
           bash ops/fips-trial/runner.sh via-test-node
           if bash ops/fips-trial/runner.sh wait && bash ops/fips-trial/runner.sh reach; then
             echo "RESULT Q3: a node with no direct link reached the services over a routed session; the fips0 firewall is the gate"
@@ -240,4 +247,4 @@ jobs:
             ~/vssh sudo -n bash -s -- services "$BUNDLE" "$GIT_MEMBERS" < ops/fips-trial/vps.sh >/dev/null
           fi
           ~/vssh 'rm -rf ~/fips-trial-bundle'
-          ~/vssh sudo -n bash -s -- status < ops/fips-trial/vps.sh
+          ~/vssh sudo -n bash -s -- status < ops/fips-trial/vps.sh 2>&1 | bash ~/mask
