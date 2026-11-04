@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## Deploy: Teams app 0.6.1-torii.4 (2026-11-04, docs only)
+
+`suite-stages-vps.yml` ran teams_app from Suite v0.9.34-alpha (owner approved "Deploy torii.4 when it's tagged"). Live MANIFEST shows 0.6.1-torii.4 (7382de5); manifest name "Teams", Permissions-Policy `microphone=()`, and the service worker installs. The app now shows its own simple Teams screens. The Continuum project roster is the chat membership: the owner starts each project chat once, then their open Teams page adds or removes people as the roster changes (torii-teams ADR 0005). No Continuum code change; the Team view still frames `<app_url>/chat?embed=1`. TEAMS-2c(a) UI work moved to this Teams UI session; the Teams services session handed it over.
+
 ## Deploy: Teams app 0.6.1-torii.3 (2026-11-04, docs only)
 
 `suite-stages-vps.yml` ran teams_app from Suite v0.9.33-alpha (owner-approved). Live MANIFEST shows 0.6.1-torii.3 (ec2bc86); node file and frame-ancestors are unchanged.
