@@ -4,7 +4,7 @@
 
 When the Torii Teams app is installed, the Team view shows an "Open team chat"
 button that opens the team's encrypted chat in a new tab. Without the app,
-nothing changes. Not deployed yet.
+nothing changes. Deployed with v0.2.192 to chiefmonkey.art on 2026-11-04 (owner-approved).
 
 ## v0.2.192-alpha: TEAMS-2a slice 2, roster editor + member sign-in (2026-10-31)
 
