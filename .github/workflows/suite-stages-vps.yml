@@ -1,0 +1,94 @@
+name: Suite stages on VPS
+
+# Ops-only. Runs named Torii Suite stage installers on the operator's VPS from
+# an explicit, merged Suite release tag (ops/lib/run-suite-stages.sh). Used for
+# opt-in stages the Continuum deploy does not run: fips, teams,
+# continuum_host, teams_app. Operator approval is required before each run.
+# Same secrets and host-key pinning as deploy-continuum-vps.yml. Logs are
+# public: remote output is masked (addresses, keys, npubs).
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite_tag:
+        description: 'Merged Suite release tag to select and run from (e.g. v0.9.31-alpha)'
+        required: true
+        type: string
+      stages:
+        description: 'Comma list, in order: fips, teams, continuum_host, teams_app'
+        required: true
+        type: string
+      enable:
+        description: 'Persist INSTALL_TEAMS / INSTALL_CONTINUUM_HOST / INSTALL_TEAMS_APP=1 in .env for these stages'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  stages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate inputs
+        env:
+          SUITE_TAG: ${{ inputs.suite_tag }}
+          STAGES: ${{ inputs.stages }}
+        run: |
+          set -euo pipefail
+          [[ "$SUITE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::bad suite_tag"; exit 1; }
+          [[ "$STAGES" =~ ^(fips|teams|continuum_host|teams_app)(,(fips|teams|continuum_host|teams_app))*$ ]] || { echo "::error::bad stages"; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            ops/lib/select-suite-release.sh
+            ops/lib/run-suite-stages.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Install SSH key (host key pinned)
+        env:
+          SSH_KEY: ${{ secrets.VPS_DEPLOY_SSH_KEY }}
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+          VPS_DEPLOY_HOST_KEY: ${{ secrets.VPS_DEPLOY_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          [[ -n "${SSH_KEY:-}" && -n "${SSH_HOST:-}" && -n "${VPS_DEPLOY_HOST_KEY:-}" ]] || { echo "::error::deploy secrets missing"; exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          umask 077
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519_torii
+          host_only="${SSH_HOST#*@}"
+          scan="$(mktemp)"
+          ssh-keyscan -T 10 -t ed25519 "$host_only" > "$scan" 2>/dev/null || true
+          live_fp="$(ssh-keygen -lf "$scan" -E sha256 2>/dev/null | awk 'NF >= 2 {print $2}' | head -n1)"
+          expected="$VPS_DEPLOY_HOST_KEY"; [[ "$expected" == SHA256:* ]] || expected="SHA256:$expected"
+          [[ -n "$live_fp" && "$live_fp" == "$expected" ]] || { echo "::error::VPS host key mismatch"; exit 1; }
+          cat "$scan" >> ~/.ssh/known_hosts; rm -f "$scan"
+          printf '#!/bin/sh\nexec ssh -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 "%s" "$@"\n' "$SSH_HOST" > ~/vssh
+          chmod 700 ~/vssh
+          # Public logs: mask npubs, long hex (keys, hashes), IPv4 and IPv6.
+          printf '%s\n' "sed -u -E -e 's/npub1[02-9ac-hj-np-z]{8,}/npub1<masked>/g' -e 's/[0-9a-fA-F]{12,}/<hex>/g' -e 's/([0-9]{1,3}\\.){3}[0-9]{1,3}/<ipv4>/g' -e 's/[0-9a-fA-F]{1,4}(:[0-9a-fA-F]{0,4}){2,7}/<ipv6>/g'" > ~/mask
+          chmod 700 ~/mask
+
+      - name: Select Suite release
+        env:
+          SUITE_TAG: ${{ inputs.suite_tag }}
+        run: |
+          set -euo pipefail
+          ~/vssh sudo -n bash -s -- "$SUITE_TAG" < ops/lib/select-suite-release.sh 2>&1 | bash ~/mask
+
+      - name: Run stages
+        env:
+          SUITE_TAG: ${{ inputs.suite_tag }}
+          STAGES: ${{ inputs.stages }}
+          ENABLE: ${{ inputs.enable && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          ~/vssh sudo -n bash -s -- "$SUITE_TAG" "$STAGES" "$ENABLE" < ops/lib/run-suite-stages.sh 2>&1 | bash ~/mask
