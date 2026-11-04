@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## Roadmap: FIPS on by default (2026-11-04, docs only)
+
+Added a high-priority item to make FIPS the default across Plebeian, Quest, Continuum and the marketplace, after the Teams MVP. Each app gets an ADR first, and the market needs owner approval.
+
 ## v0.2.194-alpha: team chat inside Continuum (2026-11-04)
 
 The Team view now shows the team chat inside Continuum, with a link to open it
