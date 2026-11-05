@@ -92,6 +92,12 @@
       Suite v0.9.31-alpha code is in Suite PR #67; deploy runs through
       `suite-stages-vps.yml` (ops-only workflow, stages fips/teams/continuum_host/teams_app).
       DEPLOYED 2026-11-04 with v0.2.194-alpha + Suite v0.9.32-alpha (owner-approved).
+    - [x] Membership signals, people search, automatic project chat
+      (v0.2.195-alpha, `docs/adr-teams-membership-signals.md`): ready/added
+      signals and chat record, Continuum-served profiles/avatars, people search
+      by name, NIP-05 or npub with avatar and display name, chat offer after
+      project create, 60 s quiet roster re-read. Needs Teams 0.6.1-torii.6
+      (Suite v0.9.36-alpha).
     - [ ] 2a-3: NIP-17 gift-wrapped invite/accept; accepted members only.
     - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
       add/remove, announcement maintainers (needs TEAMS-2b services).

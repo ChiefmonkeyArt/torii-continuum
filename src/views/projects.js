@@ -5,6 +5,8 @@ import { navigate } from '../router.js';
 import { setChatContext } from '../chat.js';
 import { renderSidebar } from '../shell.js';
 import { isDemo, demoSource, demoBanner, demoPath, goToLogin } from '../demo/demo-mode.js';
+import { teamMe, putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob } from '../data/agent.js';
+import { openTeamChatSetup } from './team-chat-setup.js';
 
 export function renderProjects(mount, opts = {}) {
   const demo = isDemo(opts);
@@ -175,8 +177,24 @@ function openNewProject() {
       modal.close();
       renderSidebar();
       navigate(`/projects/${ev.content.slug}`);
+      offerTeamChat(ev.content);
     } catch (e) {
       errorEl.textContent = e.message;
     }
   }
+}
+
+/**
+ * After a project is created: when Torii Teams is installed, offer its team
+ * chat and teammate invites (docs/adr-teams-membership-signals.md). Silent
+ * when Teams is absent or the agent is offline.
+ */
+async function offerTeamChat(project) {
+  const r = await teamMe().catch(() => null);
+  if (!r?.ok || !r.data?.owner || !r.data?.teams_app_url) return;
+  openTeamChatSetup({
+    project: { slug: project.slug, name: project.name },
+    api: { putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob },
+    navigate,
+  });
 }

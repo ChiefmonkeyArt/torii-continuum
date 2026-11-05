@@ -553,6 +553,35 @@ export async function putProjectRoster(slug, event) {
   return req('PUT', `/api/projects/${encodeURIComponent(slug)}/roster`, { event });
 }
 
+// Teams people + profiles (docs/adr-teams-membership-signals.md). The agent
+// reads profile relays and avatar hosts; the browser never contacts them.
+
+/** GET /api/team/people?q= — owner-only search by name, NIP-05 or npub. */
+export async function peopleSearch(q) {
+  return req('GET', `/api/team/people?q=${encodeURIComponent(q)}`);
+}
+
+/** GET /api/team/profiles?p=hex,… (≤ 50) — { profiles: { hex: {name, display_name, nip05, avatar} } }. */
+export async function teamProfiles(pubkeys) {
+  return req('GET', `/api/team/profiles?p=${pubkeys.map(encodeURIComponent).join(',')}`);
+}
+
+/**
+ * GET /api/team/avatar/:hex as a Blob (bearer-authenticated, so no <img src>
+ * to the agent). Returns null on any failure; callers show initials.
+ */
+export async function teamAvatarBlob(hex) {
+  const base = agentUrl();
+  const tok = getStoredToken();
+  if (base === null || !tok || !/^[0-9a-f]{64}$/.test(hex)) return null;
+  try {
+    const res = await fetch(`${base}/api/team/avatar/${hex}`, { headers: { Authorization: `Bearer ${tok}` }, credentials: 'omit' });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return /^image\/(jpeg|png|gif|webp)$/.test(blob.type) ? blob : null;
+  } catch { return null; }
+}
+
 // ─── Noticeboard (NAP-BRIDGE-8) ─────────────────────────────
 // The node only ever DRAFTS. It returns the unsigned kind-30078 event plus the
 // relay the operator must sign (NIP-07, in-browser) and publish to. The node has

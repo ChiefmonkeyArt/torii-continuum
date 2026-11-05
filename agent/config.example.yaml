@@ -81,6 +81,13 @@ server:
 # ─────────────────────────────────────────────────────────────
 # teams:
 #   app_url: "https://teams.your-torii-domain.example"
+#   # Profiles, avatars and people search are read by the agent, never by the
+#   # browser (docs/adr-teams-membership-signals.md). Defaults: the node relay
+#   # (noticeboard.relay) plus purplepag.es, relay.damus.io and nos.lol for
+#   # profiles; relay.ditto.pub, nostr.wine and search.nos.today (NIP-50) for
+#   # name search. wss:// only, at most 8 each. An empty list turns that off.
+#   profile_relays: ["wss://relay.example"]
+#   search_relays: []
 
 # ─────────────────────────────────────────────────────────────
 # Cashu wallet (on-VPS, pay-per-request float)

@@ -17,7 +17,16 @@ import { shortNpub } from '../lib/npub.js';
 import { setChatContext } from '../chat.js';
 import { isDemo, demoSource, demoBanner, goToLogin } from '../demo/demo-mode.js';
 import { renderProjectRosters, renderTeamChatLink } from './team-roster.js';
-import { projectRoster, putProjectRoster, teamMe } from '../data/agent.js';
+import { TEAM_CHAT_PROJECT_KEY } from './team-chat-setup.js';
+import { projectRoster, putProjectRoster, teamMe, peopleSearch, teamProfiles, teamAvatarBlob } from '../data/agent.js';
+
+function takeChatProject() {
+  try {
+    const v = sessionStorage.getItem(TEAM_CHAT_PROJECT_KEY);
+    sessionStorage.removeItem(TEAM_CHAT_PROJECT_KEY);
+    return v;
+  } catch { return null; }
+}
 
 let storeUnsub = null;
 
@@ -42,9 +51,11 @@ export function renderTeam(mount, opts = {}) {
   ]);
   mount.appendChild(header);
 
-  if (!demo) mount.appendChild(renderTeamChatLink({ teamMe }));
+  const chatProject = demo ? null : takeChatProject();
+  if (!demo) mount.appendChild(renderTeamChatLink({ teamMe }, { projectSlug: chatProject }));
   mount.appendChild(renderProjectRosters({
-    api: { projectRoster, putProjectRoster },
+    api: { projectRoster, putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob },
+    initialSlug: chatProject,
     projects: () => S.listProjects(),
     demo,
     onDemo: goToLogin,

@@ -59,7 +59,7 @@ export function isOnionUrl(url) {
  * broadcast ranges. A discovered announcement is UNTRUSTED, so a literal IP that
  * resolves to a local/private network must never become a fetch or payment target.
  */
-function isUnsafeIPv4(ip) {
+export function isUnsafeIPv4(ip) {
   const o = ip.split('.').map(Number);
   if (o.length !== 4 || o.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
   const [a, b] = o;
@@ -109,7 +109,7 @@ function mappedIPv4Octets(ip) {
  * IPv4-mapped ranges. Recurse into an IPv4-mapped tail so a smuggled
  * `::ffff:127.0.0.1` cannot slip through.
  */
-function isUnsafeIPv6(ip) {
+export function isUnsafeIPv6(ip) {
   const lower = ip.toLowerCase();
   if (lower === '::' || lower === '::1') return true;
   if (lower.startsWith('fc') || lower.startsWith('fd')) return true;     // fc00::/7 ULA
@@ -130,7 +130,7 @@ function isUnsafeIPv6(ip) {
  * private address is an operator-network-policy concern, not silently reachable
  * through a bare IP.
  */
-function isUnsafeHostname(hostname) {
+export function isUnsafeHostname(hostname) {
   let h = String(hostname || '').trim().toLowerCase();
   if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
   if (!h) return true;
