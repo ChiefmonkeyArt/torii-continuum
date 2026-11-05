@@ -102,6 +102,7 @@
       `GET /api/team/files-ok` lets the Teams file server on the node check
       that a session belongs to the owner or a roster member before storing or
       deleting a file. Needs Teams 0.6.1-torii.7 (Suite v0.9.37-alpha).
+      DEPLOYED 2026-11-05 with Suite v0.9.37-alpha (owner-approved).
     - [ ] 2a-3: NIP-17 gift-wrapped invite/accept; accepted members only.
     - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
       add/remove, announcement maintainers (needs TEAMS-2b services).

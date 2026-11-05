@@ -2,7 +2,7 @@
 
 ## Live state (2026-11-05)
 
-VPS: Continuum 0.2.195-alpha on `https://continuum.chiefmonkey.art/continuum/` (main domain redirects; `/api/` on both). Suite checkout v0.9.36-alpha. Teams app 0.6.1-torii.6 (membership signals, no reloads, profiles via Continuum; torii-teams ADR 0006). Continuum host Permissions-Policy `microphone=()`. Deployed 2026-11-05 with owner approval.
+VPS: Continuum 0.2.196-alpha on `https://continuum.chiefmonkey.art/continuum/` (main domain redirects; `/api/` on both). Suite checkout v0.9.37-alpha. Teams app 0.6.1-torii.7 (images and files on the node's own server at `https://teams.chiefmonkey.art/files/`, node-only CSP; torii-teams ADR 0007). Deployed 2026-11-05 (owner-approved): `deploy-continuum-vps.yml` then `suite-stages-vps.yml` stage teams_app. Live checks: MANIFEST torii.7, node file `files`, CSP `connect-src 'self' blob: https://continuum.chiefmonkey.art wss://relay.chiefmonkey.art`, `PUT /files/upload` 401 without a session.
 
 ## v0.2.196-alpha: node file server gate (2026-11-05)
 
