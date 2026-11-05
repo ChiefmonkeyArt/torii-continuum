@@ -55,6 +55,8 @@ import { createGenesis, ownerHexFromNpub } from './core/genesis.mjs';
 import { composeNoticeboard } from './core/noticeboard.mjs';
 import { createAudit } from './lib/audit.mjs';
 import { createRosterStore, project as projectRoster, effectiveRole, can as rosterCan } from './lib/roster.mjs';
+import { createTeamsState } from './lib/teams-state.mjs';
+import { createTeamProfiles, DEFAULT_PROFILE_RELAYS, DEFAULT_SEARCH_RELAYS } from './lib/team-profiles.mjs';
 import { getConstitution } from './lib/constitution.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -236,6 +238,17 @@ const memstore = createMemStore({ memoryRoot: MEMORY_ROOT, log: app.log });
 const sessionStore = createSessionStore({ memoryRoot: MEMORY_ROOT, log: app.log });
 // TEAMS-2a — owner-signed project rosters (memory/team/<slug>.json).
 const rosterStore = deps.rosterStore ?? createRosterStore({ dir: join(MEMORY_ROOT, 'team'), audit });
+// Teams membership signals + server-side profiles (adr-teams-membership-signals).
+// Own directory: memory/team/*.json are rosters keyed by slug.
+const teamsState = deps.teamsState ?? createTeamsState({ dir: join(MEMORY_ROOT, 'teams') });
+const wssList = (v) => (Array.isArray(v) ? v.filter((u) => typeof u === 'string' && /^wss:\/\/[^\s]+$/.test(u)).slice(0, 8) : null);
+const teamProfiles = deps.teamProfiles ?? createTeamProfiles({
+  profileRelays: wssList(cfg.teams?.profile_relays)
+    ?? [...new Set([cfg.noticeboard?.relay, ...DEFAULT_PROFILE_RELAYS].filter((u) => typeof u === 'string' && u.startsWith('wss://')))],
+  searchRelays: wssList(cfg.teams?.search_relays) ?? DEFAULT_SEARCH_RELAYS,
+  log: app.log,
+});
+app.addHook('onClose', async () => { teamProfiles.close?.(); });
 const consent = createConsent({ memoryRoot: MEMORY_ROOT, memstore, audit, log: app.log });
 const portability = createPortability({ memoryRoot: MEMORY_ROOT, memstore, audit, log: app.log });
 
@@ -1046,13 +1059,19 @@ app.get('/api/team/me', async (req, reply) => {
   const c = teamCaller(req);
   if (!c.ok) return reply.code(401).send({ error: c.error });
   const projects = await rosterStore.memberships(c.pubkey);
-  return { pubkey: c.pubkey, owner: c.owner, projects, teams_app_url: cfg.teams?.app_url ?? null };
+  const sig = await teamsState.forCaller(c.pubkey, projects.map((p) => p.slug));
+  return {
+    pubkey: c.pubkey, owner: c.owner, ready: sig.ready,
+    projects: projects.map((p) => ({ ...p, ...sig.projects[p.slug] })),
+    teams_app_url: cfg.teams?.app_url ?? null,
+  };
 });
 
 app.get('/api/projects/:slug/roster', { preHandler: requireRole('read') }, async (req) => {
   const stored = req.team.stored;
   const out = { roster: stored?.roster ?? null, event: stored?.event ?? null, role: req.team.role };
   if (req.team.owner) out.projection = projectRoster(stored?.roster ?? null);
+  out.teams = await teamsState.forRoster(req.params.slug, (stored?.roster?.members ?? []).map((m) => m.pubkey));
   return out;
 });
 
@@ -1073,6 +1092,91 @@ app.put(
     return { ok: true, roster: result.roster, projection: projectRoster(result.roster) };
   },
 );
+
+// ─────────────────────────────────────────────────────────────
+// Teams membership signals + profiles (docs/adr-teams-membership-signals.md).
+//
+// POST /api/team/ready                    — caller marks ITSELF ready (key packages on the node coordinator)
+// POST /api/projects/:slug/teams/chat     — owner: claim | set | release the project's chat record
+// POST /api/projects/:slug/teams/members  — owner: { added, removed } after chat changes
+// GET  /api/team/profiles?p=hex,…         — any team caller: names + signed kind-0 events (≤ 50)
+// GET  /api/team/avatar/:hex              — any team caller: proxied avatar bytes
+// GET  /api/team/people?q=                — owner session: search by name, NIP-05 or npub
+// ─────────────────────────────────────────────────────────────
+const teamsSignalMax =
+  Number.isFinite(cfg.rate_limit?.teams_signals_per_min) && cfg.rate_limit.teams_signals_per_min > 0
+    ? cfg.rate_limit.teams_signals_per_min
+    : 60;
+const peopleMax =
+  Number.isFinite(cfg.rate_limit?.people_search_per_min) && cfg.rate_limit.people_search_per_min > 0
+    ? cfg.rate_limit.people_search_per_min
+    : 30;
+const HEX64_RE = /^[0-9a-f]{64}$/;
+
+async function requireTeamCaller(req, reply) {
+  const c = teamCaller(req);
+  if (!c.ok) return reply.code(401).send({ error: c.error });
+  req.teamCaller = c;
+}
+
+app.post('/api/team/ready', { preHandler: requireTeamCaller, config: rateLimitConfig(teamsSignalMax, '/api/team/ready') }, async (req, reply) => {
+  const c = req.teamCaller;
+  if (!c.owner && (await rosterStore.memberships(c.pubkey)).length === 0) {
+    return reply.code(403).send({ error: 'not on any project' });
+  }
+  const r = await teamsState.setReady(c.pubkey);
+  if (!r.ok) return reply.code(400).send({ error: r.code });
+  return { ok: true };
+});
+
+app.post('/api/projects/:slug/teams/chat', {
+  preHandler: requireRole('manage'), config: rateLimitConfig(teamsSignalMax, '/api/projects/:slug/teams/chat'),
+}, async (req, reply) => {
+  const op = req.body?.op;
+  if (!['claim', 'set', 'release'].includes(op)) return reply.code(400).send({ error: 'op must be claim, set or release' });
+  if (!req.team.stored) return reply.code(404).send({ error: 'project has no roster' });
+  const r = await teamsState.chatOp(req.params.slug, op, req.body?.group_id);
+  if (!r.ok) return reply.code(r.code === 'exists' || r.code === 'claimed' ? 409 : 400).send({ error: r.code, chat: r.chat ?? null });
+  return r;
+});
+
+app.post('/api/projects/:slug/teams/members', {
+  preHandler: requireRole('manage'), config: rateLimitConfig(teamsSignalMax, '/api/projects/:slug/teams/members'),
+}, async (req, reply) => {
+  const members = new Set((req.team.stored?.roster?.members ?? []).map((m) => m.pubkey));
+  const r = await teamsState.markMembers(req.params.slug, {
+    added: req.body?.added ?? [], removed: req.body?.removed ?? [],
+  }, (pk) => members.has(pk));
+  if (!r.ok) return reply.code(400).send({ error: r.code });
+  return { ok: true };
+});
+
+app.get('/api/team/profiles', { preHandler: requireTeamCaller, config: rateLimitConfig(teamsSignalMax, '/api/team/profiles') }, async (req, reply) => {
+  const list = String(req.query?.p || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (!list.length || list.length > 50 || !list.every((p) => HEX64_RE.test(p))) {
+    return reply.code(400).send({ error: 'p must be 1-50 comma-separated hex pubkeys' });
+  }
+  return { profiles: await teamProfiles.getProfiles(list) };
+});
+
+app.get('/api/team/avatar/:hex', { preHandler: requireTeamCaller, config: rateLimitConfig(teamsSignalMax * 4, '/api/team/avatar') }, async (req, reply) => {
+  const hex = String(req.params.hex || '').toLowerCase();
+  if (!HEX64_RE.test(hex)) return reply.code(400).send({ error: 'bad pubkey' });
+  const a = await teamProfiles.avatar(hex);
+  if (!a) return reply.code(404).send({ error: 'no avatar' });
+  return reply
+    .header('content-type', a.type)
+    .header('x-content-type-options', 'nosniff')
+    .header('content-security-policy', "default-src 'none'; sandbox")
+    .header('cache-control', 'private, max-age=3600')
+    .send(a.body);
+});
+
+app.get('/api/team/people', { preHandler: requireAdmin, config: rateLimitConfig(peopleMax, '/api/team/people') }, async (req, reply) => {
+  const q = String(req.query?.q || '').trim();
+  if (q.length < 2 || q.length > 128) return reply.code(400).send({ error: 'q must be 2-128 characters' });
+  return { results: await teamProfiles.search(q, ownerHexFromNpub(req.session.npub)) };
+});
 
 // ─────────────────────────────────────────────────────────────
 // Genesis routes (GENESIS-1) — admin-gated.
