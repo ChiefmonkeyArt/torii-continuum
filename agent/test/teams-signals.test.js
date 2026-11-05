@@ -253,7 +253,7 @@ async function setup() {
     const r = await app.inject({ method: 'POST', url: '/api/team/auth/verify', payload: { event: signed(auth, who) } });
     return { authorization: `Bearer ${r.json().token}` };
   };
-  return { app, OH, H, done: async () => { await app.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return { app, OH, H, rosterStore, done: async () => { await app.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test('route: ready, chat claim/set, added flow through roster and /api/team/me', async () => {
@@ -314,5 +314,28 @@ test('route: profiles and avatar for team callers; people search is owner-sessio
     assert.equal(ppl.statusCode, 200);
     assert.equal(ppl.json().results[0].pubkey, BOB.pk);
     assert.equal((await app.inject({ method: 'GET', url: '/api/team/people?q=a', headers: OH })).statusCode, 400);
+  } finally { await done(); }
+});
+
+test('route: files-ok lets the owner and rostered people store files, nobody else', async () => {
+  const { app, OH, H, rosterStore, done } = await setup();
+  try {
+    const ok = (h) => app.inject({ method: 'GET', url: '/api/team/files-ok', headers: h });
+    assert.equal((await ok({})).statusCode, 401);
+    assert.equal((await ok({ authorization: 'Bearer nope' })).statusCode, 401);
+    const bob = await ok(await H(BOB));
+    assert.equal(bob.statusCode, 200);
+    assert.deepEqual(bob.json(), { ok: true, pubkey: BOB.pk, owner: false });
+    assert.equal(bob.headers['cache-control'], 'no-store');
+    assert.equal((await ok(OH)).json().owner, true, 'owner session');
+    assert.equal((await ok(await H(OWNER))).statusCode, 200, 'owner m1 token');
+    // Removed from the roster: the token still verifies, but files are refused.
+    const vic = await H(VIC);
+    assert.equal((await ok(vic)).statusCode, 200);
+    const rev = finalizeEvent({ kind: ROSTER_KIND, created_at: NOW + 1, tags: [['d', 'alpha'], ['p', BOB.pk, 'maintainer']], content: '' }, OWNER.sk);
+    assert.equal((await rosterStore.put('alpha', rev, OWNER.pk)).ok, true);
+    const gone = await ok(vic);
+    assert.equal(gone.statusCode, 403);
+    assert.equal(gone.json().error, 'not on any project');
   } finally { await done(); }
 });

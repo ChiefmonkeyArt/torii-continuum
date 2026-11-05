@@ -187,6 +187,15 @@ showing initials when there is no avatar.
 - **Version markers:** Continuum `0.2.195-alpha`, torii-teams `0.6.1-torii.6`,
   Suite `v0.9.36-alpha`.
 
+## Addendum: node file server (v0.2.196-alpha)
+
+Torii-teams ADR 0007 moves Teams images and files from public Blossom servers
+to a file server on the node (`https://<teams host>/files/`). Uploads carry the
+member's Teams session; the file server checks it with
+`GET /api/team/files-ok`, which answers 200 for the owner or anyone on a
+roster and 403 otherwise. Like the other signals it grants nothing beyond
+itself: reading files needs the chat's keys, which only the MLS group holds.
+
 ## Alternatives rejected
 
 - **Faster coordinator polling.** Every request is a signer prompt.
