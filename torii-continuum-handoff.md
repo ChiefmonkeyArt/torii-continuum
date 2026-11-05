@@ -4,6 +4,10 @@
 
 VPS: Continuum 0.2.195-alpha on `https://continuum.chiefmonkey.art/continuum/` (main domain redirects; `/api/` on both). Suite checkout v0.9.36-alpha. Teams app 0.6.1-torii.6 (membership signals, no reloads, profiles via Continuum; torii-teams ADR 0006). Continuum host Permissions-Policy `microphone=()`. Deployed 2026-11-05 with owner approval.
 
+## v0.2.196-alpha: node file server gate (2026-11-05)
+
+Torii-teams ADR 0007. New route `GET /api/team/files-ok` (`agent/index.mjs`, before `/api/projects/:slug/teams/chat`): Teams Bearer session via `requireTeamCaller`; 403 `not on any project` unless owner or on a roster; `cache-control: no-store`; rate limit `teamsSignalMax*10`. Its only caller is the Suite's `torii-teams-files` service over loopback (caches answers 60 s). Test in `agent/test/teams-signals.test.js`. Ships with Teams 0.6.1-torii.7 and Suite v0.9.37-alpha.
+
 ## v0.2.195-alpha: membership signals, people search, auto chat (2026-11-05)
 
 ADR `docs/adr-teams-membership-signals.md` (torii-teams ADR 0006). Agent: `agent/lib/teams-state.mjs` (ready/added/chat record in `memory/teams/teams-state.json`, claim TTL 600 s), `agent/lib/team-profiles.mjs` (kind-0 from `teams.profile_relays`, NIP-50 search on `teams.search_relays`, LRU caches), `agent/lib/safe-fetch.mjs` (connect-time DNS guard, 3 redirects, size cap, image sniff). Routes: POST `/api/team/ready`, POST `/api/projects/:slug/teams/chat` (claim/set/release, owner), POST `/api/projects/:slug/teams/members` (owner), GET `/api/team/profiles`, GET `/api/team/avatar/:hex` (rostered people only), GET `/api/team/people` (admin). `/api/team/me` adds `ready` and per-project `chat`/`added`; GET roster adds `teams`. UI: `src/lib/people.js`, `src/views/people-picker.js`, `src/views/team-chat-setup.js` (offered after project create), 60 s quiet roster reload with a postMessage to the Teams frame; iframe `allow` is now only `clipboard-write`. Needs Teams 0.6.1-torii.6 and Suite v0.9.36-alpha.

@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.196-alpha: team files stay on your node (2026-11-05)
+
+Images and files sent in Teams are now stored on your own server instead of public file hosts. Continuum gains one small check, `GET /api/team/files-ok`, which the node's file server asks before accepting an upload or delete: only the owner or someone on a project roster may store files. Decision record: torii-teams ADR 0007 (`docs/torii/adr-0007-node-files.md`), summarised in `docs/adr-teams-membership-signals.md`.
+
 ## Deploy: v0.2.195-alpha + Teams 0.6.1-torii.6 (2026-11-05, docs only)
 
 Owner approved ("Deploy now"). `deploy-continuum-vps.yml` tag=v0.2.195-alpha suite_tag=v0.9.36-alpha, then `suite-stages-vps.yml` stages continuum_host,teams_app. Live: agent health 0.2.195-alpha, Teams MANIFEST 0.6.1-torii.6 (590d204), Continuum `microphone=()`, the new team routes answer 401 without a session.

@@ -1129,6 +1129,18 @@ app.post('/api/team/ready', { preHandler: requireTeamCaller, config: rateLimitCo
   return { ok: true };
 });
 
+// Torii Teams file server gate (torii-teams ADR 0007). The node's file server
+// asks this over loopback before an upload or delete: the owner, or anyone on
+// at least one roster, may store files. Cached there for 60 s.
+app.get('/api/team/files-ok', { preHandler: requireTeamCaller, config: rateLimitConfig(teamsSignalMax * 10, '/api/team/files-ok') }, async (req, reply) => {
+  const c = req.teamCaller;
+  if (!c.owner && (await rosterStore.memberships(c.pubkey)).length === 0) {
+    return reply.code(403).send({ error: 'not on any project' });
+  }
+  reply.header('cache-control', 'no-store');
+  return { ok: true, pubkey: c.pubkey, owner: c.owner };
+});
+
 app.post('/api/projects/:slug/teams/chat', {
   preHandler: requireRole('manage'), config: rateLimitConfig(teamsSignalMax, '/api/projects/:slug/teams/chat'),
 }, async (req, reply) => {
