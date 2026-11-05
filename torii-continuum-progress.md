@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## Deploy: Teams app 0.6.1-torii.5 (2026-11-05, docs only)
+
+The owner reported endless signer-extension popups on `#/team`. The framed Teams app (torii.4) ran a roster check on window focus. Each check signs a coordinator request and decrypts the reply, and closing a popup refocused the page, so each popup opened the next. Continuum itself only signs on explicit clicks. torii.5 (torii-teams PR #11) removes the focus trigger and paces coordinator checks. Deployed from Suite v0.9.35-alpha with owner approval. A live check with a fake signer extension: 10 focus events and 60 s idle caused 0 prompts.
+
 ## Deploy: Teams app 0.6.1-torii.4 (2026-11-04, docs only)
 
 `suite-stages-vps.yml` ran teams_app from Suite v0.9.34-alpha (owner approved "Deploy torii.4 when it's tagged"). Live MANIFEST shows 0.6.1-torii.4 (7382de5); manifest name "Teams", Permissions-Policy `microphone=()`, and the service worker installs. The app now shows its own simple Teams screens. The Continuum project roster is the chat membership: the owner starts each project chat once, then their open Teams page adds or removes people as the roster changes (torii-teams ADR 0005). No Continuum code change; the Team view still frames `<app_url>/chat?embed=1`. TEAMS-2c(a) UI work moved to this Teams UI session; the Teams services session handed it over.
