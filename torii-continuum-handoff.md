@@ -1,8 +1,8 @@
 # Continuum — Session Handover
 
-## Live state (2026-11-04)
+## Live state (2026-11-05)
 
-VPS: Continuum 0.2.194-alpha on `https://continuum.chiefmonkey.art/continuum/` (main domain redirects; `/api/` on both). Suite checkout v0.9.35-alpha. Teams services and the app (0.6.1-torii.5, no signer popup loop; 0.6.1-torii.4: own white-labelled Teams UI, roster = membership, torii-teams ADR 0005) are installed; the FIPS trial is gone. Owner sessions are per-origin, so everyone signs in once on the new host.
+VPS: Continuum 0.2.195-alpha on `https://continuum.chiefmonkey.art/continuum/` (main domain redirects; `/api/` on both). Suite checkout v0.9.36-alpha. Teams app 0.6.1-torii.6 (membership signals, no reloads, profiles via Continuum; torii-teams ADR 0006). Continuum host Permissions-Policy `microphone=()`. Deployed 2026-11-05 with owner approval.
 
 ## v0.2.195-alpha: membership signals, people search, auto chat (2026-11-05)
 

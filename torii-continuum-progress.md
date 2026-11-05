@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## Deploy: v0.2.195-alpha + Teams 0.6.1-torii.6 (2026-11-05, docs only)
+
+Owner approved ("Deploy now"). `deploy-continuum-vps.yml` tag=v0.2.195-alpha suite_tag=v0.9.36-alpha, then `suite-stages-vps.yml` stages continuum_host,teams_app. Live: agent health 0.2.195-alpha, Teams MANIFEST 0.6.1-torii.6 (590d204), Continuum `microphone=()`, the new team routes answer 401 without a session.
+
 ## v0.2.195-alpha: team chats start and fill by themselves (2026-11-05)
 
 Creating a project now offers its team chat straight away and asks who to invite. Finding teammates works by profile name, NIP-05 or npub, and every person shows their picture and display name, not just a key. Nobody needs to reload: when a teammate opens Teams, Continuum notes they are ready, the owner's Teams adds them within about a minute, and their chat opens by itself. Profiles and pictures come through your own Continuum, so browsers never contact public profile services. Decision record: `docs/adr-teams-membership-signals.md`.
