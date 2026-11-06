@@ -110,7 +110,12 @@
       (Suite v0.9.38-alpha). Live on the VPS 2026-11-06.
     - [ ] One sign-in follow-ups: coordinator handshake still signs once per
       page load (needs Cordn session support); per-pubkey "sign out everywhere".
-    - [ ] 2a-3: NIP-17 gift-wrapped invite/accept; accepted members only.
+    - [x] 2a-3: invite links (v0.2.198-alpha, torii-teams ADR 0009, replaces the
+      NIP-17 invite plan): open links with owner approval ("Let in" signs the
+      roster once), named links, hashes only, one refusal body. Needs Teams
+      0.6.1-torii.9 (Suite v0.9.39-alpha).
+    - [ ] Invite follow-ups: QR code for links; invite step in the new-project
+      chat setup; let in without the owner's Teams tab open.
     - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
       add/remove, announcement maintainers (needs TEAMS-2b services).
   - [ ] TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path,

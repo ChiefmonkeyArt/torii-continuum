@@ -7,6 +7,11 @@
  * verifies the signature, the owner and the created_at order, then stores it.
  * Rows always show avatar and display name, never a bare npub.
  *
+ * Invite links (Teams repo ADR 0009): the owner copies an open link (anyone
+ * holding it can ask to join) or a named link for someone already listed.
+ * Waiting requests show here; "Let in" adds the person to the roster, signs it
+ * (the owner's one signature) and then approves the request.
+ *
  * Every dependency is injectable (api, signer, projects, now) so the flow is
  * testable without a browser extension or a live agent.
  */
@@ -41,7 +46,8 @@ export function teamsStatus(teams, hex) {
 
 /**
  * @param {object} deps
- * @param {{projectRoster:Function, putProjectRoster:Function, peopleSearch?:Function, teamProfiles?:Function, teamAvatarBlob?:Function}} deps.api
+ * @param {{projectRoster:Function, putProjectRoster:Function, peopleSearch?:Function, teamProfiles?:Function, teamAvatarBlob?:Function,
+ *   createInvite?:Function, listInvites?:Function, revokeInvite?:Function, decideInvite?:Function, pendingInvites?:Function}} deps.api
  * @param {() => Array<{content:{slug:string, name?:string}}>} deps.projects
  * @param {() => any} [deps.signer]   returns a NIP-07 object (window.nostr)
  * @param {() => number} [deps.now]   unix seconds
@@ -70,10 +76,14 @@ export function renderProjectRosters(deps) {
   let rows = [];
   let busy = false;
   let picking = false;
+  let invites = [];
+  let shown = null; // { url, expires_at, who } — the link is shown once, then only its expiry
+  const canInvite = !deps.demo && typeof api.createInvite === 'function' && typeof api.listInvites === 'function';
 
   const select = h('select', { 'aria-label': 'Project' },
     list.map((p) => h('option', { value: p.content.slug, text: p.content.name || p.content.slug })));
   select.value = slug;
+  const optionNames = new Map(list.map((p) => [p.content.slug, p.content.name || p.content.slug]));
   const body = h('div', { class: 'team-roster-body' });
   const status = h('div', { class: 'muted team-roster-status', role: 'status', style: 'min-height: 18px; font-size: 12.5px; margin-top: 8px;' });
   const setStatus = (text, tone = '') => {
@@ -88,8 +98,10 @@ export function renderProjectRosters(deps) {
   card.appendChild(h('div', { class: 'muted', style: 'font-size: 12.5px; margin-bottom: 10px; max-width: 640px;', text: `Up to ${MAX_HUMANS} people including you. You sign the roster with your Nostr signer; it decides who can sign in, chat and use the project repository.` }));
   card.appendChild(body);
   card.appendChild(status);
+  const invitesBox = h('div', { class: 'team-invites', style: 'margin-top: 14px; max-width: 640px;' });
+  if (canInvite) card.appendChild(invitesBox);
 
-  select.addEventListener('change', () => { slug = select.value; picking = false; load(); });
+  select.addEventListener('change', () => { slug = select.value; picking = false; shown = null; load(); });
 
   const hexOf = (npub) => (parseNpub(npub).ok ? parseNpub(npub).hex : null);
 
@@ -108,6 +120,109 @@ export function renderProjectRosters(deps) {
     await loadProfiles(rows.map((x) => hexOf(x.npub)).filter(Boolean));
     if (!quiet) setStatus(stored?.roster ? `Signed roster, ${stored.roster.members.length} on the team.` : 'No roster yet. Only you have access.');
     draw();
+    await loadInvites();
+  }
+
+  // ── invite links ──────────────────────────────────────────────────────
+  async function loadInvites() {
+    if (!canInvite) return;
+    const forSlug = slug;
+    const r = await api.listInvites(forSlug);
+    if (forSlug !== slug) return;
+    invites = r.ok && Array.isArray(r.data?.invites) ? r.data.invites : [];
+    await loadProfiles(invites.flatMap((i) => i.requests.map((q) => q.pubkey)));
+    drawInvites();
+    updateBadges();
+  }
+
+  async function updateBadges() {
+    if (typeof api.pendingInvites !== 'function') return;
+    const r = await api.pendingInvites();
+    const counts = r.ok ? r.data?.pending || {} : {};
+    for (const o of select.options) {
+      const n = Number(counts[o.value]) || 0;
+      o.textContent = optionNames.get(o.value) + (n ? ` (${n} waiting)` : '');
+    }
+  }
+
+  const expiry = (sec) => new Date(sec * 1000).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+  const inviteError = (r) => ({
+    no_teams_app: 'Install Torii Teams on this node to use invite links.',
+    full: `This project already has ${MAX_HUMANS} people.`,
+    too_many: 'Too many live links. Stop some first.',
+    not_on_roster: 'Sign and save the roster first.',
+  }[r.data?.code || r.code] || r.reason || 'Could not make a link.');
+
+  async function makeLink(body, who) {
+    if (busy) return;
+    busy = true;
+    try {
+      const r = await api.createInvite(slug, body);
+      if (!r.ok) { setStatus(inviteError(r), 'error'); return; }
+      shown = { url: r.data.url, expires_at: r.data.expires_at, who };
+      let copied = false;
+      try { await navigator.clipboard.writeText(r.data.url); copied = true; } catch { /* shown below to copy by hand */ }
+      setStatus(copied ? 'Link copied. Send it privately.' : 'Copy the link below and send it privately.');
+      await loadInvites();
+    } finally { busy = false; }
+  }
+
+  function drawInvites() {
+    clear(invitesBox);
+    invitesBox.appendChild(h('strong', { text: 'Invite links' }));
+    invitesBox.appendChild(h('div', { class: 'muted', style: 'font-size: 12.5px; margin: 4px 0 8px;', text: 'Anyone with an open link can ask to join. Nobody gets in until you let them in.' }));
+    if (shown) {
+      const field = h('input', { type: 'text', readonly: 'readonly', value: shown.url, 'aria-label': 'Invite link', style: 'width: 100%; font-family: var(--font-mono, monospace); font-size: 12px;' });
+      field.addEventListener('focus', () => field.select());
+      invitesBox.appendChild(h('div', { class: 'team-invite-shown', style: 'margin-bottom: 8px;' }, [
+        field,
+        h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;', text: `${shown.who ? `For ${shown.who}. ` : ''}Works until ${expiry(shown.expires_at)}. Shown once.` }),
+      ]));
+    }
+    const waiting = invites.flatMap((inv) => inv.requests.map((q) => ({ inv, pubkey: q.pubkey })));
+    for (const w of waiting) {
+      invitesBox.appendChild(h('div', { class: 'team-invite-request', style: 'display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0;' }, [
+        h('span', { style: 'flex: 2 1 240px; min-width: 0; display: flex;' }, [personEl(w.pubkey)]),
+        h('span', { class: 'pill warn', text: 'Wants to join' }),
+        h('button', { class: 'primary', onClick: () => letIn(w.inv, w.pubkey) }, ['Let in']),
+        h('button', { class: 'ghost', onClick: () => decline(w.inv, w.pubkey) }, ['Decline']),
+      ]));
+    }
+    const open = invites.filter((i) => i.kind === 'open');
+    for (const inv of open) {
+      invitesBox.appendChild(h('div', { class: 'team-invite-live muted', style: 'display: flex; gap: 8px; align-items: center; font-size: 12.5px; padding: 2px 0;' }, [
+        h('span', { style: 'flex: 1 1 auto;', text: `Open link, ${inv.uses_left === 1 ? 'one person' : `${inv.uses_left} people`}, until ${expiry(inv.expires_at)}` }),
+        h('button', { class: 'ghost', onClick: () => stop(inv) }, ['Stop']),
+      ]));
+    }
+    invitesBox.appendChild(h('div', { style: 'margin-top: 8px;' }, [
+      h('button', { class: 'ghost', onClick: () => makeLink({ kind: 'open' }) }, ['Copy invite link']),
+    ]));
+  }
+
+  async function stop(inv) {
+    const r = await api.revokeInvite(slug, inv.id);
+    setStatus(r.ok ? 'Link stopped.' : (r.reason || 'Could not stop the link.'), r.ok ? '' : 'error');
+    await loadInvites();
+  }
+
+  async function decline(inv, pubkey) {
+    const r = await api.decideInvite(slug, inv.id, pubkey, false);
+    setStatus(r.ok ? 'Declined.' : (r.reason || 'Could not decline.'), r.ok ? '' : 'error');
+    await loadInvites();
+  }
+
+  async function letIn(inv, pubkey) {
+    if (busy) return;
+    const listed = stored?.roster?.members?.some((m) => m.pubkey === pubkey);
+    if (!listed) {
+      if (!rows.some((x) => hexOf(x.npub) === pubkey)) rows.push({ npub: toNpub(pubkey), role: inv.role || 'contributor' });
+      if (!(await save())) return;
+    }
+    const r = await api.decideInvite(slug, inv.id, pubkey, true);
+    setStatus(r.ok ? `Let in. ${displayName(pubkey)} joins on their next check.` : (r.reason || 'Could not let them in.'), r.ok ? '' : 'error');
+    await loadInvites();
   }
 
   function draw() {
@@ -169,16 +284,20 @@ export function renderProjectRosters(deps) {
     });
     const st = hex && row.role !== 'agent' && stored?.roster?.members?.some((m) => m.pubkey === hex) ? teamsStatus(stored?.teams, hex) : null;
     const remove = h('button', { class: 'ghost', title: 'Remove from roster', onClick: () => { rows.splice(i, 1); draw(); } }, ['Remove']);
+    const listed = hex && row.role !== 'agent' && stored?.roster?.members?.some((m) => m.pubkey === hex);
+    const named = canInvite && listed
+      ? h('button', { class: 'ghost', title: 'A sign-in link only this person can use', onClick: () => makeLink({ kind: 'named', pubkey: hex }, displayName(hex)) }, ['Copy link'])
+      : null;
     return h('div', { class: 'team-roster-row', style: 'display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0;' }, [
       h('span', { style: 'flex: 2 1 240px; min-width: 0; display: flex;' }, [hex ? personEl(hex) : h('span', { class: 'muted', text: 'Unknown key' })]),
       st ? h('span', { class: `pill team-status ${st.tone}`, text: st.label }) : null,
-      role, of, remove,
+      role, of, named, remove,
     ]);
   }
 
   async function save() {
-    if (deps.demo) { deps.onDemo?.(); return; }
-    if (busy) return;
+    if (deps.demo) { deps.onDemo?.(); return false; }
+    if (busy) return false;
     busy = true;
     try {
       const r = await signAndPutRoster({
@@ -189,10 +308,10 @@ export function renderProjectRosters(deps) {
         if (r.status === 409) {
           await load();
           setStatus('A newer roster was saved elsewhere. Reloaded it; check and sign again.', 'error');
-          return;
+          return false;
         }
         setStatus(r.reason, 'error');
-        return;
+        return false;
       }
       stored = { ...stored, roster: r.data.roster, event: r.event };
       rows = rosterRows(stored.roster);
@@ -201,6 +320,7 @@ export function renderProjectRosters(deps) {
       // Tell an embedded Teams frame to refresh now rather than on its next poll.
       if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(ROSTER_CHANGED_EVENT, { detail: { slug } }));
       load({ quiet: true });
+      return true;
     } finally {
       busy = false;
     }

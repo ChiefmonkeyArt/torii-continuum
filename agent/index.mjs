@@ -54,8 +54,9 @@ import { createUpdater } from './core/updater.mjs';
 import { createGenesis, ownerHexFromNpub } from './core/genesis.mjs';
 import { composeNoticeboard } from './core/noticeboard.mjs';
 import { createAudit } from './lib/audit.mjs';
-import { createRosterStore, project as projectRoster, effectiveRole, can as rosterCan } from './lib/roster.mjs';
+import { createRosterStore, project as projectRoster, effectiveRole, can as rosterCan, MAX_HUMANS } from './lib/roster.mjs';
 import { createTeamsState } from './lib/teams-state.mjs';
+import { createTeamInvites, INVITE_ID_RE } from './lib/team-invites.mjs';
 import { createTeamProfiles, DEFAULT_PROFILE_RELAYS, DEFAULT_SEARCH_RELAYS } from './lib/team-profiles.mjs';
 import { getConstitution } from './lib/constitution.mjs';
 
@@ -241,6 +242,8 @@ const rosterStore = deps.rosterStore ?? createRosterStore({ dir: join(MEMORY_ROO
 // Teams membership signals + server-side profiles (adr-teams-membership-signals).
 // Own directory: memory/team/*.json are rosters keyed by slug.
 const teamsState = deps.teamsState ?? createTeamsState({ dir: join(MEMORY_ROOT, 'teams') });
+// Invite links (torii-teams ADR 0009): memory/teams/invites.json, hashes only.
+const teamInvites = deps.teamInvites ?? createTeamInvites({ dir: join(MEMORY_ROOT, 'teams') });
 const wssList = (v) => (Array.isArray(v) ? v.filter((u) => typeof u === 'string' && /^wss:\/\/[^\s]+$/.test(u)).slice(0, 8) : null);
 const teamProfiles = deps.teamProfiles ?? createTeamProfiles({
   profileRelays: wssList(cfg.teams?.profile_relays)
@@ -1065,6 +1068,7 @@ app.post('/api/team/auth/verify', { config: rateLimitConfig(authVerifyMax, '/api
 app.post('/api/team/auth/refresh', { config: rateLimitConfig(authVerifyMax, '/api/team/auth/refresh') }, async (req, reply) => {
   const header = req.headers?.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (token.startsWith('j1.')) return refreshPending(token, reply);
   const result = await auth.refreshMemberSession(token, {
     isMember: async (pk) => (await rosterStore.memberships(pk)).length > 0,
   });
@@ -1152,8 +1156,16 @@ async function requireTeamCaller(req, reply) {
   req.teamCaller = c;
 }
 
-app.post('/api/team/ready', { preHandler: requireTeamCaller, config: rateLimitConfig(teamsSignalMax, '/api/team/ready') }, async (req, reply) => {
+app.post('/api/team/ready', { preHandler: requireTeamOrPendingCaller, config: rateLimitConfig(teamsSignalMax, '/api/team/ready') }, async (req, reply) => {
   const c = req.teamCaller;
+  if (c.pending) {
+    // Someone waiting on an open invite may publish key packages first, so the
+    // owner's Teams can add them the moment they are approved (ADR 0009).
+    const st = await teamInvites.requestState(c.inviteId, c.pubkey);
+    if (st.state !== 'pending') return reply.code(403).send({ error: 'not on any project' });
+    const r = await teamsState.setReady(c.pubkey);
+    return r.ok ? { ok: true } : reply.code(400).send({ error: r.code });
+  }
   if (!c.owner && (await rosterStore.memberships(c.pubkey)).length === 0) {
     return reply.code(403).send({ error: 'not on any project' });
   }
@@ -1215,6 +1227,171 @@ app.get('/api/team/avatar/:hex', { preHandler: requireTeamCaller, config: rateLi
     .header('content-security-policy', "default-src 'none'; sandbox")
     .header('cache-control', 'private, max-age=3600')
     .send(a.body);
+});
+
+// ─────────────────────────────────────────────────────────────
+// Invite links (torii-teams docs/torii/adr-0009-invite-links.md).
+//
+// POST   /api/projects/:slug/invites               — owner: create, returns the link once
+// GET    /api/projects/:slug/invites               — owner: live invites + waiting requests
+// DELETE /api/projects/:slug/invites/:id           — owner: revoke
+// POST   /api/projects/:slug/invites/:id/decide    — owner: approve (after a roster that lists them) | decline
+// GET    /api/team/invites/pending                 — owner: waiting-request counts per project
+// POST   /api/team/invite/peek                     — anyone with the link: who invited you, to what
+// POST   /api/team/invite/claim                    — anyone with the link + a signed challenge
+// GET    /api/team/invite/status                   — j1 pending token: pending | approved | refused
+//
+// Every failure a link holder can cause answers the same 404 body, so the
+// routes reveal nothing about which projects, people or invites exist. The
+// roster stays the only authority: an open invite at most creates a request.
+// ─────────────────────────────────────────────────────────────
+const INVITE_GONE = { ok: false, code: 'invite_unavailable', error: 'This invite no longer works. Ask for a new one.' };
+const inviteGone = (reply) => reply.code(404).header('cache-control', 'no-store').send(INVITE_GONE);
+const inviteHumans = (stored) => (stored?.roster?.members ?? []).filter((m) => m.role !== 'agent');
+async function onProjectRoster(slug, pubkey) {
+  const stored = await rosterStore.get(slug);
+  return inviteHumans(stored).some((m) => m.pubkey === pubkey);
+}
+async function projectHasSeat(slug) {
+  const stored = await rosterStore.get(slug);
+  return Math.max(1, inviteHumans(stored).length) < MAX_HUMANS;
+}
+const projectExists = (slug) =>
+  projectStore.get().projects.some((p) => p?.content?.slug === slug);
+const projectName = (slug) =>
+  projectStore.get().projects.find((p) => p?.content?.slug === slug)?.content?.name || slug;
+
+function pendingCaller(req) {
+  const m = (req.headers.authorization || '').match(/^Bearer\s+(j1\..+)$/i);
+  if (!m) return null;
+  const p = auth.verifyPendingToken(m[1]);
+  return p.ok ? { ok: true, owner: false, pending: true, pubkey: p.pubkey, inviteId: p.inviteId } : null;
+}
+
+async function requireTeamOrPendingCaller(req, reply) {
+  const p = pendingCaller(req);
+  if (p) { req.teamCaller = p; return; }
+  return requireTeamCaller(req, reply);
+}
+
+async function refreshPending(token, reply) {
+  reply.header('cache-control', 'no-store');
+  const p = auth.verifyPendingToken(token);
+  if (!p.ok) return reply.code(401).send({ ok: false, code: p.reason === 'expired' ? 'expired' : 'invalid_session', error: p.reason });
+  // Approved = on a roster now. Checked first, so an approval still counts
+  // after the invite itself has expired and been pruned.
+  if ((await rosterStore.memberships(p.pubkey)).length > 0) {
+    const s = auth.issueMemberSession(p.pubkey);
+    return { token: s.token, expires_at: s.expires_at };
+  }
+  const st = await teamInvites.requestState(p.inviteId, p.pubkey);
+  if (st.state === 'pending') return reply.code(409).send({ ok: false, code: 'pending', error: 'waiting for the owner' });
+  return reply.code(403).send({ ok: false, code: 'refused', error: 'the invite was declined or withdrawn' });
+}
+
+app.post('/api/projects/:slug/invites', { preHandler: requireAdmin, config: rateLimitConfig(rosterMax, '/api/projects/:slug/invites') }, async (req, reply) => {
+  const slug = req.params.slug;
+  if (!PROJECT_SLUG_RE.test(String(slug || ''))) return reply.code(400).send({ error: 'bad project slug' });
+  const origin = typeof cfg.teams?.app_url === 'string' ? cfg.teams.app_url.replace(/\/+$/, '') : '';
+  // https only, except loopback for local development.
+  if (!/^https:\/\/[^/\s]+$/.test(origin) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/.test(origin)) return reply.code(409).send({ error: 'Teams is not installed on this node', code: 'no_teams_app' });
+  if (!projectExists(slug) && !(await rosterStore.get(slug))) return reply.code(404).send({ error: 'no such project' });
+  const b = req.body || {};
+  if (b.kind === 'named' && !(await onProjectRoster(slug, String(b.pubkey || '')))) {
+    return reply.code(409).send({ error: 'add them to the roster first', code: 'not_on_roster' });
+  }
+  if (b.kind === 'open' && !(await projectHasSeat(slug))) return reply.code(409).send({ error: 'the project is full', code: 'full' });
+  const r = await teamInvites.create({ slug, kind: b.kind, pubkey: b.pubkey, role: b.role, ttl_sec: b.ttl_sec, uses: b.uses });
+  if (!r.ok) return reply.code(r.code === 'too_many' ? 409 : 400).send({ error: r.code, code: r.code });
+  await audit.append('team.invite.create', { slug, kind: b.kind, expires_at: r.expires_at });
+  reply.header('cache-control', 'no-store');
+  return { id: r.id, url: `${origin}/chat/join/${r.id}#${r.secret}`, expires_at: r.expires_at };
+});
+
+app.get('/api/projects/:slug/invites', { preHandler: requireAdmin }, async (req, reply) => {
+  const slug = req.params.slug;
+  if (!PROJECT_SLUG_RE.test(String(slug || ''))) return reply.code(400).send({ error: 'bad project slug' });
+  return { invites: await teamInvites.list(slug) };
+});
+
+app.delete('/api/projects/:slug/invites/:id', { preHandler: requireAdmin }, async (req, reply) => {
+  const { slug, id } = req.params;
+  if (!PROJECT_SLUG_RE.test(String(slug || '')) || !INVITE_ID_RE.test(String(id || ''))) return reply.code(400).send({ error: 'bad request' });
+  const r = await teamInvites.revoke(slug, id);
+  if (!r.ok) return reply.code(404).send({ error: 'no such invite' });
+  await audit.append('team.invite.revoke', { slug });
+  return { ok: true };
+});
+
+app.post('/api/projects/:slug/invites/:id/decide', { preHandler: requireAdmin, config: rateLimitConfig(rosterMax, '/api/projects/:slug/invites/decide') }, async (req, reply) => {
+  const { slug, id } = req.params;
+  const pubkey = String(req.body?.pubkey || '');
+  const approve = req.body?.approve === true;
+  if (!PROJECT_SLUG_RE.test(String(slug || '')) || !INVITE_ID_RE.test(String(id || '')) || !HEX64_RE.test(pubkey)) {
+    return reply.code(400).send({ error: 'bad request' });
+  }
+  // Approval follows the owner-signed roster, never replaces it.
+  if (approve && !(await onProjectRoster(slug, pubkey))) {
+    return reply.code(409).send({ error: 'sign a roster that lists them first', code: 'not_on_roster' });
+  }
+  const r = await teamInvites.decide(slug, id, pubkey, approve);
+  if (!r.ok) return reply.code(404).send({ error: r.code });
+  await audit.append(approve ? 'team.invite.approve' : 'team.invite.decline', { slug });
+  return { ok: true };
+});
+
+app.get('/api/team/invites/pending', { preHandler: requireAdmin }, async () => ({ pending: await teamInvites.pendingCounts() }));
+
+app.post('/api/team/invite/peek', { config: rateLimitConfig(authVerifyMax, '/api/team/invite/peek') }, async (req, reply) => {
+  const inv = await teamInvites.find(req.body?.id, req.body?.secret);
+  if (!inv) return inviteGone(reply);
+  const ownerHex = ownerHexFromNpub(auth.adminNpub());
+  let ownerName = '';
+  if (ownerHex) {
+    try {
+      const p = (await teamProfiles.getProfiles([ownerHex]))?.[ownerHex];
+      ownerName = p?.display_name || p?.name || '';
+    } catch { /* name is optional */ }
+  }
+  reply.header('cache-control', 'no-store');
+  // Display names only: no slug, group id, pubkeys or avatar before sign-in.
+  return { kind: inv.kind, project_name: projectName(inv.slug), owner_name: ownerName };
+});
+
+app.post('/api/team/invite/claim', { config: rateLimitConfig(authVerifyMax, '/api/team/invite/claim') }, async (req, reply) => {
+  reply.header('cache-control', 'no-store');
+  const b = req.body || {};
+  const v = await auth.verifyInviteLogin(b.event, { clientIp: req.ip });
+  if (!v.ok) return reply.code(401).send({ ok: false, code: v.code || null, error: v.reason });
+  const inv = await teamInvites.find(b.id, b.secret);
+  if (!inv) return inviteGone(reply);
+  const member = v.isOwner || (await onProjectRoster(inv.slug, v.pubkey));
+  if (inv.kind === 'named') {
+    if (v.pubkey !== inv.pubkey || !member) return inviteGone(reply);
+    if (!(await teamInvites.spend(b.id, b.secret)).ok) return inviteGone(reply);
+    const s = auth.issueMemberSession(v.pubkey);
+    return { token: s.token, expires_at: s.expires_at, slug: inv.slug };
+  }
+  if (member) {
+    // Already on the project: just sign them in; the link stays usable.
+    const s = auth.issueMemberSession(v.pubkey);
+    return { token: s.token, expires_at: s.expires_at, slug: inv.slug };
+  }
+  if (!(await projectHasSeat(inv.slug))) return inviteGone(reply);
+  const r = await teamInvites.request(b.id, b.secret, v.pubkey);
+  if (!r.ok) return inviteGone(reply);
+  await audit.append('team.invite.request', { slug: inv.slug });
+  const j = auth.issuePendingToken(v.pubkey, b.id, r.expires_at);
+  return { pending: true, token: j.token, expires_at: j.expiresAt };
+});
+
+app.get('/api/team/invite/status', { config: rateLimitConfig(teamsSignalMax, '/api/team/invite/status') }, async (req, reply) => {
+  reply.header('cache-control', 'no-store');
+  const p = pendingCaller(req);
+  if (!p) return reply.code(401).send({ error: 'pending token required' });
+  if ((await rosterStore.memberships(p.pubkey)).length > 0) return { state: 'approved' };
+  const st = await teamInvites.requestState(p.inviteId, p.pubkey);
+  return { state: st.state === 'pending' ? 'pending' : 'refused' };
 });
 
 app.get('/api/team/people', { preHandler: requireAdmin, config: rateLimitConfig(peopleMax, '/api/team/people') }, async (req, reply) => {

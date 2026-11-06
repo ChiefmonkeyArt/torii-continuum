@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.198-alpha: invite links (2026-11-06)
+
+The owner can now copy an invite link from the Team view and send it however they like. Someone opening it signs in once and waits; the owner sees "Wants to join" and presses Let in (one signature to update the roster) or Decline. Links expire, can be stopped at any time, and only a hash of each link is stored. A link for a named person signs only that person straight in. Decision record: torii-teams ADR 0009, summarised in `docs/adr-team-collaboration.md`.
+
 ## v0.2.197-alpha: one sign-in for Teams (2026-11-06)
 
 Teams now asks the signer once. A team session lasts up to 7 days and renews quietly while the roster still lists the person, so reloads and new tabs need no new signature. The owner, already signed in to Continuum, gets the Team view's chat signed in with no extra prompt. Decision record: torii-teams ADR 0008, summarised in `docs/adr-teams-membership-signals.md`.

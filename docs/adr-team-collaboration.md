@@ -123,6 +123,16 @@ Status: **Accepted** for the Suite PR; no Continuum code or VPS change.
 - **FIPS** moves to v0.5.3 in the Suite (the trial's version).
 - **Rollout.** The trial also binds :7334, so the installer refuses while it runs. Deploy to chiefmonkey.art only after the Plebeian test and trial teardown, with owner approval; the trial coordinator key can be carried over to keep its groups.
 
+## Addendum: invite links replace NIP-17 invites for 2a-3 (v0.2.198-alpha, 2026-11-06)
+
+Status: **Accepted**. Decision record: torii-teams `docs/torii/adr-0009-invite-links.md`.
+
+- **2a-3 is now invite links, not NIP-17 gift-wrapped DMs.** The owner copies an open link (anyone holding it can ask to join) or a named link for someone already on the roster, and sends it any way they like. Nothing is published to relays.
+- **The roster stays the only grant.** An open link creates a waiting request; the person gets in only after the owner adds them to the signed kind-30098 roster ("Let in" signs once) and approves the request. A named link signs in only the listed pubkey.
+- **Storage.** `memory/teams/invites.json` (0600, atomic writes, expired entries pruned) holds SHA-256 hashes of the link secrets, never the secrets. Links last 1 hour to 30 days (default 7), up to 11 uses, 50 live per project, 20 waiting requests per link.
+- **Waiting token.** A claim on an open link returns a `j1.` token that only posts readiness, polls `/api/team/invite/status` and renews; renewal swaps it for an `m2` member token once approved (409 `pending` before, 403 `refused` after a decline or revoke). No second signature.
+- **One refusal.** Every link failure (wrong secret, expired, used up, revoked, project full, wrong person) returns the same 404 body.
+
 ## Decision: access model (owner, 2026-11-04)
 
 - **Tuned for small groups.** A handful of people per project is normal; 12 people (owner included) is the hard maximum, as enforced today.
