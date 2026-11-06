@@ -180,29 +180,63 @@ export function createRosterStore({ dir, audit = null, now = () => Math.floor(Da
   let tail = Promise.resolve();
   const file = (slug) => join(dir, `${slug}.json`);
 
-  async function get(slug) {
+  async function readRaw(slug) {
     if (!SLUG_RE.test(String(slug || ''))) return null;
     try {
-      const raw = JSON.parse(await readFile(file(slug), 'utf8'));
-      return raw && raw.roster && raw.event ? raw : null;
+      return JSON.parse(await readFile(file(slug), 'utf8'));
     } catch (e) {
       if (e.code === 'ENOENT') return null;
       throw e;
     }
   }
 
+  async function writeRaw(slug, raw) {
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const tmp = join(dir, `.${slug}.${randomBytes(6).toString('hex')}.tmp`);
+    await writeFile(tmp, JSON.stringify(raw), { mode: 0o600 });
+    await rename(tmp, file(slug));
+  }
+
+  function serial(fn) {
+    const run = tail.then(fn);
+    tail = run.catch(() => {});
+    return run;
+  }
+
+  /**
+   * The stored roster with admitted members (torii-teams ADR 0010) folded
+   * into `roster.members` (`via: 'invite'`), so every reader sees one list.
+   * `event` stays the owner-signed one. A project with only admitted members
+   * and no signed roster yet gets a synthetic roster owned by `ownerHex`.
+   */
+  async function get(slug) {
+    const raw = await readRaw(slug);
+    if (!raw) return null;
+    const admitted = Array.isArray(raw.admitted) ? raw.admitted : [];
+    if (!(raw.roster && raw.event) && !(admitted.length && raw.owner)) return null;
+    const base = raw.roster && raw.event
+      ? raw.roster
+      : { slug, owner: raw.owner, created_at: 0, id: null, members: [{ pubkey: raw.owner, role: 'owner' }] };
+    const seen = new Set(base.members.map((m) => m.pubkey));
+    const extra = admitted.filter((a) => !seen.has(a.pubkey)).map((a) => ({ pubkey: a.pubkey, role: a.role, via: 'invite' }));
+    const roster = extra.length ? { ...base, members: [...base.members, ...extra] } : base;
+    return { ...raw, roster, event: raw.event ?? null };
+  }
+
   function put(slug, event, ownerHex) {
-    const run = tail.then(async () => {
-      const prev = await get(slug);
+    return serial(async () => {
+      const prev = await readRaw(slug);
       const clean = canonicalEvent(event);
       const v = validateRosterEvent(clean, {
         ownerHex, slug, now: now(), prevCreatedAt: prev?.roster?.created_at ?? 0,
       });
       if (!v.ok) return v;
-      await mkdir(dir, { recursive: true, mode: 0o700 });
-      const tmp = join(dir, `.${slug}.${randomBytes(6).toString('hex')}.tmp`);
-      await writeFile(tmp, JSON.stringify({ event: clean, roster: v.roster }), { mode: 0o600 });
-      await rename(tmp, file(slug));
+      // The new signed list absorbs admitted members it lists; anyone admitted
+      // before it was signed and left off was removed by the owner.
+      const listed = new Set(v.roster.members.map((m) => m.pubkey));
+      const admitted = (Array.isArray(prev?.admitted) ? prev.admitted : [])
+        .filter((a) => !listed.has(a.pubkey) && a.at > clean.created_at);
+      await writeRaw(slug, admitted.length ? { event: clean, roster: v.roster, admitted } : { event: clean, roster: v.roster });
       if (audit) {
         // Public pubkeys + counts only; no content, nothing secret.
         await audit.append('team.roster.set', {
@@ -211,8 +245,32 @@ export function createRosterStore({ dir, audit = null, now = () => Math.floor(Da
       }
       return { ok: true, roster: v.roster };
     });
-    tail = run.catch(() => {});
-    return run;
+  }
+
+  /**
+   * Admit one person under an owner-signed invite grant (ADR 0010). The
+   * caller has checked the grant; this enforces the seat cap and is
+   * idempotent for someone already on the project.
+   * @returns {Promise<{ok:true, already?:boolean}|{ok:false, code:'full'|'bad_request'}>}
+   */
+  function admit(slug, { pubkey, role, invite, ownerHex }) {
+    if (!SLUG_RE.test(String(slug || '')) || !HEX64.test(String(pubkey || '')) || !LISTED_ROLES.has(role) || !HEX64.test(String(ownerHex || ''))) {
+      return Promise.resolve({ ok: false, code: 'bad_request' });
+    }
+    return serial(async () => {
+      const raw = (await readRaw(slug)) || {};
+      const admitted = Array.isArray(raw.admitted) ? raw.admitted : [];
+      const signed = raw.roster?.members ?? [{ pubkey: ownerHex, role: 'owner' }];
+      if (pubkey === ownerHex || signed.some((m) => m.pubkey === pubkey) || admitted.some((a) => a.pubkey === pubkey)) {
+        return { ok: true, already: true };
+      }
+      const humans = signed.filter((m) => m.role !== 'agent').length + admitted.length;
+      if (humans >= MAX_HUMANS) return { ok: false, code: 'full' };
+      admitted.push({ pubkey, role, at: now(), invite: String(invite || '') });
+      await writeRaw(slug, { ...raw, owner: raw.owner ?? ownerHex, admitted });
+      if (audit) await audit.append('team.roster.admit', { slug, members: humans + 1 });
+      return { ok: true };
+    });
   }
 
   /**
@@ -241,5 +299,5 @@ export function createRosterStore({ dir, audit = null, now = () => Math.floor(Da
     return out;
   }
 
-  return { get, put, memberships };
+  return { get, put, admit, memberships };
 }

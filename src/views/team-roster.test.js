@@ -60,10 +60,12 @@ test('loads the roster and shows one row per non-owner member', async () => {
   const { api } = await boot({ signer: null });
   expect(api.projectRoster).toHaveBeenCalledWith('studio');
   expect(document.querySelectorAll('.team-roster-row').length).toBe(2);
-  expect(document.body.textContent).toContain('3 on the team');
+  expect(document.body.textContent).toContain('3 people on this project');
+  expect(document.body.textContent).toContain('Members');
+  expect(document.body.textContent).not.toMatch(/roster/i);
 });
 
-test('sign and save: adds a person, signs a newer kind-30098 and PUTs it', async () => {
+test('add person: one step adds, signs a newer kind-30098 and PUTs it', async () => {
   const signEvent = vi.fn(async (e) => ({ ...e, pubkey: OWNER, id: 'f'.repeat(64), sig: 'e'.repeat(128) }));
   const dispatched = [];
   const { api } = await boot({ signer: { signEvent, getPublicKey: async () => OWNER }, people: [{ pubkey: NEW, name: 'dan', display_name: 'Dan', nip05: '', avatar: false }] });
@@ -78,10 +80,7 @@ test('sign and save: adds a person, signs a newer kind-30098 and PUTs it', async
   expect(hit.textContent).toContain('Dan');
   hit.click();
   await tick();
-  expect(document.querySelectorAll('.team-roster-row').length).toBe(3);
-  button('Sign and save').click();
-  await tick();
-  expect(signEvent).toHaveBeenCalledTimes(1);
+  expect(signEvent).toHaveBeenCalledTimes(1); // picked → signed straight away
   const built = signEvent.mock.calls[0][0];
   expect(built.kind).toBe(ROSTER_KIND);
   // Must be newer than the stored roster even if the clock is behind it.
@@ -139,7 +138,7 @@ test('removing a person drops them, and their agent fails before the signer prom
   const signEvent = vi.fn();
   const { api } = await boot({ signer: { signEvent } });
   document.querySelector('.team-roster-row button').click(); // remove Bob
-  button('Sign and save').click();
+  button('Save changes').click();
   await tick();
   expect(signEvent).not.toHaveBeenCalled();
   expect(api.putProjectRoster).not.toHaveBeenCalled();
@@ -148,7 +147,7 @@ test('removing a person drops them, and their agent fails before the signer prom
 
 test('no signer: says so and never calls the agent', async () => {
   const { api } = await boot({ signer: null });
-  button('Sign and save').click();
+  button('Save changes').click();
   await tick();
   expect(document.body.textContent).toContain('No Nostr signer found');
   expect(api.putProjectRoster).not.toHaveBeenCalled();
@@ -158,97 +157,60 @@ test('a 409 from the agent reloads the newer roster', async () => {
   const put = vi.fn(async () => ({ ok: false, status: 409, reason: 'stale' }));
   const signEvent = vi.fn(async (e) => ({ ...e, pubkey: OWNER, id: 'f'.repeat(64), sig: 'e'.repeat(128) }));
   const { api } = await boot({ signer: { signEvent }, put });
-  button('Sign and save').click();
+  button('Save changes').click();
   await tick();
-  expect(api.projectRoster).toHaveBeenCalledTimes(2);
-  expect(document.body.textContent).toContain('A newer roster was saved elsewhere');
+  expect(api.projectRoster).toHaveBeenCalledTimes(3); // load, re-read before signing, reload
+  expect(document.body.textContent).toContain('The member list changed elsewhere');
 });
 
-test('demo mode never loads or signs; Sign and save goes to login', async () => {
+test('demo mode never loads or signs; Save changes goes to login', async () => {
   const signEvent = vi.fn();
   const { api, onDemo } = await boot({ signer: { signEvent }, demo: true });
   expect(api.projectRoster).not.toHaveBeenCalled();
-  button('Sign and save').click();
+  button('Save changes').click();
   expect(onDemo).toHaveBeenCalled();
   expect(signEvent).not.toHaveBeenCalled();
 });
 
-test('team chat: embedded only for an https origin, with a full-window fallback', async () => {
+test('team chat: docks the one Teams frame over its card, with a full-window fallback', async () => {
   vi.resetModules();
   dom = new JSDOM('<main></main>', { url: 'https://test.invalid/continuum/#/team' });
   for (const key of ['window', 'document']) vi.stubGlobal(key, dom.window[key]);
-  const { renderTeamChatLink, safeAppOrigin } = await import('./team-roster.js');
-  const shown = renderTeamChatLink({ teamMe: async () => ({ ok: true, data: { teams_app_url: 'https://teams.example.org' } }) });
-  const none = renderTeamChatLink({ teamMe: async () => ({ ok: true, data: { teams_app_url: null } }) });
-  const evil = renderTeamChatLink({ teamMe: async () => ({ ok: true, data: { teams_app_url: 'javascript:alert(1)' } }) });
-  const down = renderTeamChatLink({ teamMe: async () => ({ ok: false, offline: true }) });
-  const threw = renderTeamChatLink({ teamMe: async () => { throw new Error('x'); } });
+  const { renderTeamChatLink } = await import('./team-roster.js');
+  const me = async () => ({ ok: true, data: { teams_app_url: 'https://teams.example.org', owner: true, pubkey: OWNER } });
+  const slot = renderTeamChatLink({ teamMe: me, teamHandoff: vi.fn() }, { projectSlug: 'studio' });
+  document.querySelector('main').append(slot);
   await tick();
-  const f = shown.querySelector('iframe');
-  expect(f.getAttribute('src')).toBe('https://teams.example.org/chat?embed=1');
-  expect(f.getAttribute('allow')).toBe('clipboard-write');
-  expect(f.getAttribute('sandbox')).not.toContain('allow-top-navigation');
-  expect(f.getAttribute('referrerpolicy')).toBe('no-referrer');
-  const a = shown.querySelector('a');
+  const frames = document.querySelectorAll('iframe');
+  expect(frames.length).toBe(1);
+  expect(slot.querySelector('iframe')).toBeNull(); // lives on <body>, docked over the slot
+  expect(frames[0].style.position).toBe('fixed');
+  expect(frames[0].style.visibility).not.toBe('hidden');
+  expect(frames[0].getAttribute('src')).toBe('https://teams.example.org/chat/p/studio?embed=1'); // not loaded yet: src set
+  const a = slot.querySelector('a');
   expect(a.textContent).toBe('Open in full window');
-  expect(a.getAttribute('href')).toBe('https://teams.example.org/chat');
+  expect(a.getAttribute('href')).toBe('https://teams.example.org/chat/p/studio');
   expect(a.getAttribute('rel')).toBe('noopener noreferrer');
-  expect(a.getAttribute('target')).toBe('_blank');
-  for (const el of [none, evil, down, threw]) { expect(el.querySelector('a')).toBeNull(); expect(el.querySelector('iframe')).toBeNull(); }
-  expect(safeAppOrigin('http://teams.example.org')).toBeNull();
-  expect(safeAppOrigin('https://u:p@teams.example.org')).toBeNull();
+  // Leaving the page hides the frame but keeps it running.
+  slot.remove();
+  await tick();
+  expect(document.querySelectorAll('iframe').length).toBe(1);
+  expect(frames[0].style.visibility).toBe('hidden');
+  expect(frames[0].inert).toBe(true);
+  const { _resetTeamsFrame } = await import('../lib/teams-frame.js');
+  _resetTeamsFrame();
 });
 
-test('team chat: opens a project chat on request and forwards roster changes to the exact Teams origin', async () => {
+test('team chat: nothing for a node without Teams', async () => {
   vi.resetModules();
   dom = new JSDOM('<main></main>', { url: 'https://test.invalid/continuum/#/team' });
-  for (const key of ['window', 'document', 'CustomEvent']) vi.stubGlobal(key, dom.window[key]);
+  for (const key of ['window', 'document']) vi.stubGlobal(key, dom.window[key]);
   const { renderTeamChatLink } = await import('./team-roster.js');
-  const slot = renderTeamChatLink({ teamMe: async () => ({ ok: true, data: { teams_app_url: 'https://teams.example.org' } }) }, { projectSlug: 'studio' });
-  const bad = renderTeamChatLink({ teamMe: async () => ({ ok: true, data: { teams_app_url: 'https://teams.example.org' } }) }, { projectSlug: '../x' });
-  document.querySelector('main').append(slot, bad);
+  const none = renderTeamChatLink({ teamMe: async () => ({ ok: true, data: { teams_app_url: null, owner: true } }) });
+  document.querySelector('main').append(none);
   await tick();
-  const f = slot.querySelector('iframe');
-  expect(f.getAttribute('src')).toBe('https://teams.example.org/chat/p/studio?embed=1');
-  expect(slot.querySelector('a').getAttribute('href')).toBe('https://teams.example.org/chat/p/studio');
-  expect(bad.querySelector('iframe').getAttribute('src')).toBe('https://teams.example.org/chat?embed=1');
-  const post = vi.fn();
-  Object.defineProperty(f, 'contentWindow', { value: { postMessage: post } });
-  window.dispatchEvent(new CustomEvent('continuum:roster-changed', { detail: { slug: 'studio' } }));
-  expect(post).toHaveBeenCalledWith({ type: 'torii:roster-changed', slug: 'studio' }, 'https://teams.example.org');
-});
-
-test('team chat: hands the owner session only to the exact Teams frame, origin and pubkey', async () => {
-  vi.resetModules();
-  dom = new JSDOM('<main></main>', { url: 'https://test.invalid/continuum/#/team' });
-  for (const key of ['window', 'document', 'CustomEvent', 'MessageEvent']) vi.stubGlobal(key, dom.window[key]);
-  const { renderTeamChatLink } = await import('./team-roster.js');
-  const teamHandoff = vi.fn(async () => ({ ok: true, data: { token: 'm2.t', expires_at: 9, pubkey: OWNER } }));
-  const me = (owner) => async () => ({ ok: true, data: { teams_app_url: 'https://teams.example.org', pubkey: OWNER, owner } });
-  const slot = renderTeamChatLink({ teamMe: me(true), teamHandoff });
-  const member = renderTeamChatLink({ teamMe: me(false), teamHandoff });
-  document.querySelector('main').append(slot, member);
-  await tick();
-  const post = vi.fn();
-  const win = { postMessage: post };
-  Object.defineProperty(slot.querySelector('iframe'), 'contentWindow', { value: win });
-  Object.defineProperty(member.querySelector('iframe'), 'contentWindow', { value: { postMessage: vi.fn() } });
-  const ask = (data, origin, source) => window.dispatchEvent(new dom.window.MessageEvent('message', { data, origin, source }));
-  const req = { type: 'torii:session-request', pubkey: OWNER };
-  ask(req, 'https://evil.example', win);
-  ask(req, 'https://teams.example.org', window);
-  ask({ ...req, pubkey: BOB }, 'https://teams.example.org', win);
-  ask({ type: 'other', pubkey: OWNER }, 'https://teams.example.org', win);
-  await tick();
-  expect(teamHandoff).not.toHaveBeenCalled();
-  ask(req, 'https://teams.example.org', win);
-  await tick();
-  expect(teamHandoff).toHaveBeenCalledTimes(1);
-  expect(post).toHaveBeenCalledWith({ type: 'torii:session', token: 'm2.t', expires_at: 9, pubkey: OWNER }, 'https://teams.example.org');
-  // The member view's frame never triggers a handoff.
-  ask(req, 'https://teams.example.org', member.querySelector('iframe').contentWindow);
-  await tick();
-  expect(teamHandoff).toHaveBeenCalledTimes(1);
+  expect(none.querySelector('a')).toBeNull();
+  expect(document.querySelector('iframe')).toBeNull();
 });
 
 // ── invite links (Teams ADR 0009) ───────────────────────────────────────
@@ -264,14 +226,14 @@ function inviteApi({ invites = [], create } = {}) {
   };
 }
 
-test('invites: Copy invite link makes an open link, copies it and shows it once', async () => {
+test('invites: Copy group link (ask me first) fills the team, copies it and shows it once', async () => {
   const inv = inviteApi();
   const writeText = vi.fn(async () => {});
   await boot({ signer: null, inv });
   vi.stubGlobal('navigator', { clipboard: { writeText } });
-  button('Copy invite link').click();
+  button('Copy group link').click();
   await tick();
-  expect(inv.createInvite).toHaveBeenCalledWith('studio', { kind: 'open' });
+  expect(inv.createInvite).toHaveBeenCalledWith('studio', { kind: 'open', uses: 10 }); // 12 minus owner and Bob (agents do not count)
   expect(writeText).toHaveBeenCalledWith(URL1);
   expect(document.querySelector('.team-invite-shown input').value).toBe(URL1);
   expect(document.body.textContent).toContain('Link copied');
@@ -287,8 +249,8 @@ test('invites: named link per listed person; friendly refusal when Teams is miss
   const inv = inviteApi({ create });
   await boot({ signer: null, inv });
   const rows = document.querySelectorAll('.team-roster-row');
-  expect(rows[1].textContent).not.toContain('Copy link'); // agents get no link
-  [...rows[0].querySelectorAll('button')].find((b) => b.textContent === 'Copy link').click();
+  expect(rows[1].textContent).not.toContain('Copy invite link'); // agents get no link
+  [...rows[0].querySelectorAll('button')].find((b) => b.textContent === 'Copy invite link').click();
   await tick();
   expect(create).toHaveBeenCalledWith('studio', { kind: 'named', pubkey: BOB });
   expect(document.body.textContent).toContain('Install Torii Teams');
@@ -298,7 +260,10 @@ test('invites: Let in adds the person, signs the roster once, then approves', as
   const signEvent = vi.fn(async (e) => ({ ...e, pubkey: OWNER, id: 'f'.repeat(64), sig: 'e'.repeat(128) }));
   const inv = inviteApi({ invites: [{ id: 'AAAAAAAAAAAAAAAA', kind: 'open', role: 'viewer', expires_at: 1_900_604_800, uses_left: 1, requests: [{ pubkey: NEW, at: 1 }] }] });
   const { api } = await boot({ signer: { signEvent, getPublicKey: async () => OWNER }, inv });
-  expect(document.querySelector('.team-invite-request').textContent).toContain('Wants to join');
+  expect(document.querySelector('.team-invite-waiting').textContent).toContain('Someone wants to join');
+  // Waiting requests sit above the member rows.
+  const order = document.querySelector('.team-invite-waiting').compareDocumentPosition(document.querySelector('.team-roster-body'));
+  expect(order & dom.window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(document.querySelector('select[aria-label="Project"]').options[0].textContent).toBe('Studio (1 waiting)');
   [...document.querySelectorAll('.team-invite-request button')].find((b) => b.textContent === 'Let in').click();
   await tick();
@@ -321,7 +286,7 @@ test('invites: no approval when the roster signature fails; Decline and Stop nee
   reqBtn('Decline').click();
   await tick();
   expect(inv.decideInvite).toHaveBeenCalledWith('studio', 'AAAAAAAAAAAAAAAA', NEW, false);
-  expect(document.querySelector('.team-invite-live').textContent).toContain('2 people');
+  expect(document.querySelector('.team-invite-live').textContent).toContain('asks you first, 2 more people');
   [...document.querySelectorAll('.team-invite-live button')].find((b) => b.textContent === 'Stop').click();
   await tick();
   expect(inv.revokeInvite).toHaveBeenCalledWith('studio', 'AAAAAAAAAAAAAAAA');
@@ -331,4 +296,67 @@ test('invites: no approval when the roster signature fails; Decline and Stop nee
 test('invites: hidden in demo mode', async () => {
   await boot({ demo: true, inv: inviteApi() });
   expect(document.querySelector('.team-invites')).toBeNull();
+});
+
+test('invites: a straight-in group link signs one grant for exactly that link', async () => {
+  const signEvent = vi.fn(async (e) => ({ ...e, pubkey: OWNER, id: 'f'.repeat(64), sig: 'e'.repeat(128) }));
+  const inv = inviteApi();
+  await boot({ signer: { signEvent, getPublicKey: async () => OWNER }, inv });
+  vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(async () => {}) } });
+  const mode = document.querySelector('select[aria-label="When someone opens the link"]');
+  mode.value = 'auto';
+  mode.dispatchEvent(new dom.window.Event('change'));
+  expect(document.querySelector('.team-invites').textContent).toContain('even if it is forwarded');
+  button('Copy group link').click();
+  await tick();
+  expect(signEvent).toHaveBeenCalledTimes(1);
+  const g = signEvent.mock.calls[0][0];
+  expect(g.kind).toBe(27098);
+  expect(g.content).toBe('');
+  const tag = (n) => g.tags.find((t) => t[0] === n)?.[1];
+  expect(tag('project')).toBe('studio');
+  expect(tag('invite')).toMatch(/^[A-Za-z0-9_-]{16}$/);
+  expect(tag('role')).toBe('contributor');
+  expect(tag('uses')).toBe('10');
+  expect(Number(tag('expiration'))).toBe(1_900_000_000 + 7 * 86400);
+  expect(inv.createInvite).toHaveBeenCalledWith('studio', { kind: 'open', auto: true, grant: expect.objectContaining({ sig: 'e'.repeat(128) }) });
+});
+
+test('invites: no grant, no link when the signer refuses', async () => {
+  const signEvent = vi.fn(async () => { throw new Error('nope'); });
+  const inv = inviteApi();
+  await boot({ signer: { signEvent }, inv });
+  const mode = document.querySelector('select[aria-label="When someone opens the link"]');
+  mode.value = 'auto';
+  mode.dispatchEvent(new dom.window.Event('change'));
+  button('Copy group link').click();
+  await tick();
+  expect(inv.createInvite).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain('Signing cancelled');
+});
+
+test('members: people a straight-in link admitted show as joined by link and stay at the next save', async () => {
+  const LATE = hex('e');
+  const signEvent = vi.fn(async (e) => ({ ...e, pubkey: OWNER, id: 'f'.repeat(64), sig: 'e'.repeat(128) }));
+  const withNew = { ...stored, roster: { ...stored.roster, members: [...stored.roster.members, { pubkey: NEW, role: 'contributor', via: 'invite' }] } };
+  const { api } = await boot({ signer: { signEvent, getPublicKey: async () => OWNER }, data: withNew });
+  expect([...document.querySelectorAll('.team-roster-row')].some((r) => r.textContent.includes('Joined by link'))).toBe(true);
+  // Someone else joins by link after the page loaded; the save keeps both.
+  api.projectRoster.mockResolvedValue({ ok: true, data: { ...withNew, roster: { ...withNew.roster, members: [...withNew.roster.members, { pubkey: LATE, role: 'contributor', via: 'invite' }] } } });
+  button('Save changes').click();
+  await tick();
+  const tags = signEvent.mock.calls[0][0].tags;
+  expect(tags).toContainEqual(['p', NEW, 'contributor']);
+  expect(tags).toContainEqual(['p', LATE, 'contributor']);
+});
+
+test('members: removing someone who joined by link keeps them removed at save', async () => {
+  const signEvent = vi.fn(async (e) => ({ ...e, pubkey: OWNER, id: 'f'.repeat(64), sig: 'e'.repeat(128) }));
+  const withNew = { ...stored, roster: { ...stored.roster, members: [...stored.roster.members, { pubkey: NEW, role: 'contributor', via: 'invite' }] } };
+  await boot({ signer: { signEvent, getPublicKey: async () => OWNER }, data: withNew });
+  const row = [...document.querySelectorAll('.team-roster-row')].find((r) => r.textContent.includes('Joined by link'));
+  [...row.querySelectorAll('button')].find((b) => b.textContent === 'Remove').click();
+  button('Save changes').click();
+  await tick();
+  expect(signEvent.mock.calls[0][0].tags.some((t) => t[1] === NEW)).toBe(false);
 });

@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.199-alpha: joining that works (2026-11-06)
+
+After the first real-team test, joining is fixed. A personal invite lets the person straight in with one click. A group link asks the owner first by default, or can let people straight in, and it now works for as many people as the project has room for instead of one. People waiting to join show in the account menu in the bottom-left corner, which also shows the owner's own Nostr picture and name. The team chat keeps adding people while Continuum is open on any page, and it no longer shows its own profile picture or Sign out button. "Roster" is now "Members". Decision record: torii-teams ADR 0010, summarised in `docs/adr-team-collaboration.md`.
+
 ## v0.2.198-alpha: invite links (2026-11-06)
 
 The owner can now copy an invite link from the Team view and send it however they like. Someone opening it signs in once and waits; the owner sees "Wants to join" and presses Let in (one signature to update the roster) or Decline. Links expire, can be stopped at any time, and only a hash of each link is stored. A link for a named person signs only that person straight in. Decision record: torii-teams ADR 0009, summarised in `docs/adr-team-collaboration.md`.

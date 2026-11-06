@@ -6,8 +6,11 @@
 import { navigate, currentRoute } from './router.js';
 import { listProjects, subscribe } from './data/store.js';
 import { sessionLibrary, historyTitle } from './chat.js';
-import { isSessionLive, startLogin, cancelLogin, endSession } from './auth.js';
-import { isAgentConfigured, versionInfo, requestUpdate } from './data/agent.js';
+import { isSessionLive, startLogin, cancelLogin, endSession, readSessionMarker } from './auth.js';
+import { isAgentConfigured, versionInfo, requestUpdate, teamMe, teamHandoff, teamProfiles, teamAvatarBlob, pendingInvites } from './data/agent.js';
+import { initAccountChip, paintAccount, paintWaiting, startWaiting, stopWaiting } from './lib/account-chip.js';
+import { startTeamsFrame, stopTeamsFrame } from './lib/teams-frame.js';
+import { TEAM_CHAT_PROJECT_KEY } from './views/team-chat-setup.js';
 import { describeVersionState, updateTargetTag } from './data/release.js';
 import { h, openModal } from './views/util.js';
 import { demoAware } from './demo/demo-mode.js';
@@ -41,6 +44,7 @@ export function mountShell(root) {
   mainEl.setAttribute('id', 'main-content');
   root.appendChild(mainEl);
 
+  initAccountChip({ teamProfiles, teamAvatarBlob, pendingInvites, ownerNpub: () => readSessionMarker()?.npub || '', isOwner: isSessionLive });
   renderSidebar();
   window.addEventListener('hashchange', renderSidebar);
   document.addEventListener('continuum:history-changed', renderHistory);
@@ -58,6 +62,11 @@ export function mountShell(root) {
 }
 
 export function mainContent() { return mainEl; }
+
+function openWaiting(slug) {
+  try { if (slug) sessionStorage.setItem(TEAM_CHAT_PROJECT_KEY, slug); } catch { /* storage off: opens on the first project */ }
+  navigate('/team');
+}
 
 // Build-time version string baked in by Vite (`define: __APP_VERSION__`).
 // Returns e.g. "v0.2.57-alpha", or "v—" when the constant is absent (running
@@ -100,8 +109,9 @@ export function renderSidebar() {
       <a class="nav-item" href="${demoAware('#/sessions')}">All conversations</a>
     </div>
     <div class="sidebar-footer">
+      <a class="nav-item waiting-alert" data-waiting href="${demoAware('#/team')}" hidden></a>
       <details class="profile-menu">
-      <summary class="profile-trigger"><span class="profile-avatar">C</span><span>${authed ? 'Your workspace' : 'Continuum'}<small>${authed ? 'Signed in · Settings' : 'Settings & tools'}</small></span><span class="profile-chevron">⌃</span></summary>
+      <summary class="profile-trigger"><span class="profile-avatar">C</span><span><span data-account-name>${authed ? 'Your workspace' : 'Continuum'}</span><small>${authed ? 'Signed in · Settings' : 'Settings & tools'}</small></span><span class="profile-chevron">⌃</span></summary>
       <div class="profile-popover">
       <div class="nav-section">Settings & tools</div>
     ${NAV_ITEMS.filter(n => !['projects', 'sessions'].includes(n.id)).map((n) => `
@@ -185,6 +195,19 @@ export function renderSidebar() {
     });
   });
   sidebarEl.querySelector('.brand').addEventListener('click', () => navigate('/'));
+
+  // Torii Teams (ADR 0010, Teams repo): the owner's avatar in the account
+  // menu, the waiting-to-join alert and the one Teams frame that keeps adding
+  // newcomers while Continuum is open.
+  if (authed) {
+    paintAccount(sidebarEl.querySelector('.profile-trigger'));
+    paintWaiting(sidebarEl.querySelector('[data-waiting]'), { onOpen: openWaiting });
+    startWaiting();
+    startTeamsFrame({ teamMe, teamHandoff });
+  } else {
+    stopWaiting();
+    stopTeamsFrame();
+  }
 
   // VERSION-UPDATE-1: after login, if a newer release exists, reveal the latest
   // version + an Update button in the footer. Non-blocking; failures are silent

@@ -16,7 +16,7 @@ import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure
 import { nip19 } from 'nostr-tools';
 import { ROSTER_KIND, createRosterStore } from '../lib/roster.mjs';
 import { createTeamsState } from '../lib/teams-state.mjs';
-import { createTeamInvites, INVITE_ID_RE, INVITE_SECRET_RE } from '../lib/team-invites.mjs';
+import { createTeamInvites, INVITE_ID_RE, INVITE_SECRET_RE, INVITE_GRANT_KIND, verifyInviteGrant } from '../lib/team-invites.mjs';
 import { createAuth } from '../core/auth.mjs';
 import { buildApp } from '../index.mjs';
 
@@ -158,14 +158,14 @@ test('route: open invite → request → owner signs roster → approve → refr
   const clock = { t: NOW };
   const { app, rosterStore, teamsState, OH, make, claim, peek, bearer, dir, done } = await setup({}, clock);
   try {
-    const r = await make({ kind: 'open' });
+    const r = await make({ kind: 'open', uses: 1 });
     assert.equal(r.statusCode, 200);
     assert.equal(r.headers['cache-control'], 'no-store');
     const link = splitUrl(r.json().url);
     // Peek: display names only.
     const p = await peek(link);
     assert.equal(p.statusCode, 200);
-    assert.deepEqual(p.json(), { kind: 'open', project_name: 'alpha', owner_name: 'Olive' });
+    assert.deepEqual(p.json(), { kind: 'open', straight_in: false, project_name: 'alpha', owner_name: 'Olive' });
     // Claim by the newcomer: a pending token, no slug.
     const c = await claim(link, NEWT);
     assert.equal(c.statusCode, 200);
@@ -304,4 +304,111 @@ test('route: the invite secret never reaches the request log', async () => {
   assert.ok(text.includes('/api/team/invite/claim'), 'the log was written');
   assert.ok(!text.includes(link.secret), 'secret absent from logs');
   rmSync(logDir, { recursive: true, force: true });
+});
+
+// ── ADR 0010: group links fill the team; "let them straight in" ─────────────
+
+const grantEv = (o = {}, who = OWNER) => finalizeEvent({
+  kind: INVITE_GRANT_KIND,
+  created_at: o.created_at ?? Math.floor(Date.now() / 1000),
+  tags: [['project', o.project ?? 'alpha'], ['invite', o.invite ?? 'G'.repeat(16)], ['role', o.role ?? 'contributor'], ['uses', String(o.uses ?? 3)], ['expiration', String(o.expiration ?? Math.floor(Date.now() / 1000) + 86400)]],
+  content: '',
+}, who.sk);
+
+test('grant: only an exact, fresh, owner-signed grant verifies', () => {
+  const now = Math.floor(Date.now() / 1000);
+  const ctx = { ownerHex: OWNER.pk, slug: 'alpha', now };
+  const g = verifyInviteGrant(grantEv(), ctx);
+  assert.equal(g.ok, true);
+  assert.deepEqual([g.id, g.role, g.uses], ['G'.repeat(16), 'contributor', 3]);
+  assert.ok(Math.abs(g.ttl_sec - 86400) <= 1);
+  assert.equal(verifyInviteGrant(grantEv({}, EVE), ctx).ok, false, 'not the owner');
+  assert.equal(verifyInviteGrant(grantEv({ project: 'beta' }), ctx).ok, false, 'other project');
+  assert.equal(verifyInviteGrant(grantEv({ role: 'owner' }), ctx).ok, false, 'bad role');
+  assert.equal(verifyInviteGrant(grantEv({ uses: 12 }), ctx).ok, false, 'too many uses');
+  assert.equal(verifyInviteGrant(grantEv({ created_at: now - 3600 }), ctx).ok, false, 'stale');
+  assert.equal(verifyInviteGrant(grantEv({ expiration: now + 60 }), ctx).ok, false, 'too short');
+  assert.equal(verifyInviteGrant(grantEv({ invite: 'bad' }), ctx).ok, false, 'bad id');
+  const ev = grantEv();
+  assert.equal(verifyInviteGrant({ ...ev, tags: [...ev.tags.slice(0, 3), ['uses', '9'], ev.tags[4]] }, ctx).ok, false, 'tampered');
+  assert.equal(verifyInviteGrant({ ...ev, kind: ROSTER_KIND }, ctx).ok, false, 'wrong kind');
+});
+
+test('route: a group link defaults to the seats left, so the whole team can use it', async () => {
+  const { app, OH, make, claim, done } = await setup();
+  try {
+    const r = await make({ kind: 'open' });
+    const link = splitUrl(r.json().url);
+    const list = (await app.inject({ method: 'GET', url: '/api/projects/alpha/invites', headers: OH })).json().invites;
+    assert.equal(list[0].uses_left, 10, '12 minus owner and Bob');
+    assert.equal(list[0].auto, false);
+    assert.equal((await claim(link, NEWT)).json().pending, true);
+    assert.equal((await claim(link, EVE)).json().pending, true, 'a second person can ask too');
+  } finally { await done(); }
+});
+
+test('route: straight-in link admits each claimer at once until its uses run out', async () => {
+  const { app, rosterStore, OH, make, claim, bearer, peek, done } = await setup();
+  try {
+    // Unsigned or mismatched grants are refused.
+    assert.equal((await make({ kind: 'open', auto: true })).json().code, 'bad_grant');
+    assert.equal((await make({ kind: 'open', auto: true, grant: grantEv({ project: 'beta' }) })).json().code, 'bad_grant');
+    const grant = grantEv({ uses: 2, invite: 'H'.repeat(16) });
+    const r = await make({ kind: 'open', auto: true, grant });
+    assert.equal(r.statusCode, 200);
+    const link = splitUrl(r.json().url);
+    assert.equal(link.id, 'H'.repeat(16), 'the id the owner signed');
+    assert.equal((await peek(link)).json().straight_in, true);
+    assert.equal((await make({ kind: 'open', auto: true, grant })).json().code, 'bad_grant', 'one grant, one link');
+    // Claim: straight to a member token, no pending step.
+    const c = await claim(link, NEWT);
+    assert.equal(c.statusCode, 200);
+    assert.match(c.json().token, /^m2\./);
+    assert.equal(c.json().slug, 'alpha');
+    const me = (await app.inject({ method: 'GET', url: '/api/team/me', headers: bearer(c.json().token) })).json();
+    assert.deepEqual(me.projects.map((x) => [x.slug, x.role]), [['alpha', 'contributor']]);
+    // The owner's roster read lists them (so the owner's client adds them to the chat).
+    const ro = (await app.inject({ method: 'GET', url: '/api/projects/alpha/roster', headers: OH })).json();
+    assert.ok(ro.roster.members.some((m) => m.pubkey === NEWT.pk && m.via === 'invite'));
+    assert.ok(ro.projection.cordn.includes(NEWT.pk));
+    // Claiming again as the same person signs in without spending a use.
+    assert.equal((await claim(link, NEWT)).statusCode, 200);
+    assert.equal((await claim(link, EVE)).statusCode, 200);
+    assert.equal((await peek(link)).statusCode, 404, 'two uses spent');
+    assert.equal((await claim(link, person())).statusCode, 404);
+    // Never a waiting request on a straight-in link.
+    assert.deepEqual((await app.inject({ method: 'GET', url: '/api/team/invites/pending', headers: OH })).json().pending, {});
+    // The owner's next signed list absorbs them; one left off is removed.
+    const later = NOW + 5;
+    await rosterStore.put('alpha', rosterEv('alpha', [['p', BOB.pk, 'maintainer'], ['p', NEWT.pk, 'contributor']], later), OWNER.pk);
+    const after = (await rosterStore.get('alpha')).roster.members.map((m) => m.pubkey);
+    assert.ok(after.includes(NEWT.pk) && !after.includes(EVE.pk));
+    assert.equal((await rosterStore.get('alpha')).admitted, undefined, 'nothing left admitted');
+  } finally { await done(); }
+});
+
+test('roster store: admitted members respect the cap and survive an older signed list', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'admit-'));
+  const clock = { t: NOW };
+  try {
+    const s = createRosterStore({ dir, now: () => clock.t });
+    // A project with no signed roster yet.
+    assert.equal((await s.admit('solo', { pubkey: NEWT.pk, role: 'viewer', invite: 'x', ownerHex: OWNER.pk })).ok, true);
+    const g = await s.get('solo');
+    assert.deepEqual(g.roster.members.map((m) => m.role), ['owner', 'viewer']);
+    assert.equal(g.event, null);
+    assert.deepEqual((await s.memberships(NEWT.pk)).map((m) => m.slug), ['solo']);
+    assert.equal((await s.admit('solo', { pubkey: OWNER.pk, role: 'viewer', ownerHex: OWNER.pk })).already, true);
+    assert.equal((await s.admit('solo', { pubkey: 'zz', role: 'viewer', ownerHex: OWNER.pk })).code, 'bad_request');
+    // Admitted after the owner's list was signed: kept.
+    clock.t = NOW + 10;
+    await s.admit('alpha', { pubkey: EVE.pk, role: 'contributor', ownerHex: OWNER.pk });
+    await s.put('alpha', rosterEv('alpha', [['p', BOB.pk, 'viewer']], NOW + 5), OWNER.pk);
+    assert.ok((await s.get('alpha')).roster.members.some((m) => m.pubkey === EVE.pk));
+    // Cap: 12 humans including the owner.
+    const ten = Array.from({ length: 10 }, () => ['p', person().pk, 'viewer']);
+    await s.put('full', rosterEv('full', ten, NOW + 6), OWNER.pk);
+    assert.equal((await s.admit('full', { pubkey: NEWT.pk, role: 'viewer', ownerHex: OWNER.pk })).ok, true);
+    assert.equal((await s.admit('full', { pubkey: EVE.pk, role: 'viewer', ownerHex: OWNER.pk })).code, 'full');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

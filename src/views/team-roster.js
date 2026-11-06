@@ -7,21 +7,28 @@
  * verifies the signature, the owner and the created_at order, then stores it.
  * Rows always show avatar and display name, never a bare npub.
  *
- * Invite links (Teams repo ADR 0009): the owner copies an open link (anyone
- * holding it can ask to join) or a named link for someone already listed.
- * Waiting requests show here; "Let in" adds the person to the roster, signs it
- * (the owner's one signature) and then approves the request.
+ * Invite links (Teams repo ADR 0009, 0010). On screen the roster is called
+ * "Members". Three ways in:
+ *   personal link — "Add person" adds them, signs the list and copies a link
+ *                   only they can use (one step, straight in);
+ *   group link, "Ask me first" — whoever opens it waits for "Let in", which
+ *                   adds them to the list, signs it and approves;
+ *   group link, "Let them straight in" — the owner signs a grant once
+ *                   (kind 27098) and each claim admits one person.
+ * Waiting requests show at the top of the card.
  *
  * Every dependency is injectable (api, signer, projects, now) so the flow is
  * testable without a browser extension or a live agent.
  */
 import { h, clear } from './util.js';
+import { finalizeGrant } from '../lib/sign-roster.js';
 import { rosterRows, MAX_HUMANS } from '../lib/roster.js';
 import { parseNpub, toNpub } from '../lib/npub.js';
 import { readSessionMarker } from '../auth.js';
 import { signAndPutRoster } from '../lib/sign-roster.js';
 import { loadProfiles, personEl, displayName, setPeopleApi } from '../lib/people.js';
 import { renderPeoplePicker } from './people-picker.js';
+import { ROSTER_CHANGED_EVENT, startTeamsFrame, dockTeamsFrame, teamsOrigin, chatPath, safeAppOrigin, navigateTeamsFrame } from '../lib/teams-frame.js';
 
 const ROLE_OPTS = [
   ['maintainer', 'Maintainer — can merge'],
@@ -30,7 +37,7 @@ const ROLE_OPTS = [
   ['agent', 'Agent — acts for a person'],
 ];
 
-export const ROSTER_CHANGED_EVENT = 'continuum:roster-changed';
+export { ROSTER_CHANGED_EVENT };
 
 /**
  * Teams status for one person, from the roster's `teams` signals.
@@ -56,6 +63,8 @@ export function teamsStatus(teams, hex) {
  * @param {boolean} [deps.demo]
  * @param {() => void} [deps.onDemo]
  */
+const peopleCount = (n) => (n === 1 ? '1 person' : `${n} people`);
+
 export function renderProjectRosters(deps) {
   const { api, projects } = deps;
   setPeopleApi(api);
@@ -77,6 +86,8 @@ export function renderProjectRosters(deps) {
   let busy = false;
   let picking = false;
   let invites = [];
+  let removed = new Set(); // hexes the owner removed since the last save
+  let groupMode = 'ask'; // 'ask' | 'auto'
   let shown = null; // { url, expires_at, who } — the link is shown once, then only its expiry
   const canInvite = !deps.demo && typeof api.createInvite === 'function' && typeof api.listInvites === 'function';
 
@@ -85,6 +96,7 @@ export function renderProjectRosters(deps) {
   select.value = slug;
   const optionNames = new Map(list.map((p) => [p.content.slug, p.content.name || p.content.slug]));
   const body = h('div', { class: 'team-roster-body' });
+  const waitingBox = h('div', { class: 'team-invite-waiting', style: 'max-width: 640px;' });
   const status = h('div', { class: 'muted team-roster-status', role: 'status', style: 'min-height: 18px; font-size: 12.5px; margin-top: 8px;' });
   const setStatus = (text, tone = '') => {
     status.textContent = text;
@@ -92,16 +104,17 @@ export function renderProjectRosters(deps) {
   };
 
   card.appendChild(h('div', { style: 'display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;' }, [
-    h('strong', { text: 'Project roster' }),
+    h('strong', { text: 'Members' }),
     select,
   ]));
-  card.appendChild(h('div', { class: 'muted', style: 'font-size: 12.5px; margin-bottom: 10px; max-width: 640px;', text: `Up to ${MAX_HUMANS} people including you. You sign the roster with your Nostr signer; it decides who can sign in, chat and use the project repository.` }));
+  card.appendChild(h('div', { class: 'muted', style: 'font-size: 12.5px; margin-bottom: 10px; max-width: 640px;', text: `Up to ${MAX_HUMANS} people including you. Your Nostr signer signs every change; the list decides who can sign in, chat and use the project repository.` }));
+  if (canInvite) card.appendChild(waitingBox);
   card.appendChild(body);
   card.appendChild(status);
   const invitesBox = h('div', { class: 'team-invites', style: 'margin-top: 14px; max-width: 640px;' });
   if (canInvite) card.appendChild(invitesBox);
 
-  select.addEventListener('change', () => { slug = select.value; picking = false; shown = null; load(); });
+  select.addEventListener('change', () => { slug = select.value; picking = false; shown = null; removed = new Set(); navigateTeamsFrame(slug); load(); });
 
   const hexOf = (npub) => (parseNpub(npub).ok ? parseNpub(npub).hex : null);
 
@@ -112,13 +125,13 @@ export function renderProjectRosters(deps) {
       if (quiet) return;
       stored = null;
       rows = [];
-      setStatus(r.offline ? 'The agent is offline.' : `Could not load the roster: ${r.reason}`, 'error');
+      setStatus(r.offline ? 'The agent is offline.' : `Could not load the members: ${r.reason}`, 'error');
       return;
     }
     stored = r.data || null;
     if (!quiet) rows = rosterRows(stored?.roster || null);
     await loadProfiles(rows.map((x) => hexOf(x.npub)).filter(Boolean));
-    if (!quiet) setStatus(stored?.roster ? `Signed roster, ${stored.roster.members.length} on the team.` : 'No roster yet. Only you have access.');
+    if (!quiet) setStatus(stored?.roster ? `${peopleCount(stored.roster.members.length)} on this project.` : 'Only you so far. Add someone or share a group link.');
     draw();
     await loadInvites();
   }
@@ -151,7 +164,8 @@ export function renderProjectRosters(deps) {
     no_teams_app: 'Install Torii Teams on this node to use invite links.',
     full: `This project already has ${MAX_HUMANS} people.`,
     too_many: 'Too many live links. Stop some first.',
-    not_on_roster: 'Sign and save the roster first.',
+    not_on_roster: 'Save the member list first.',
+    bad_grant: 'Your signer did not sign the link. Nothing was made.',
   }[r.data?.code || r.code] || r.reason || 'Could not make a link.');
 
   async function makeLink(body, who) {
@@ -163,15 +177,33 @@ export function renderProjectRosters(deps) {
       shown = { url: r.data.url, expires_at: r.data.expires_at, who };
       let copied = false;
       try { await navigator.clipboard.writeText(r.data.url); copied = true; } catch { /* shown below to copy by hand */ }
-      setStatus(copied ? 'Link copied. Send it privately.' : 'Copy the link below and send it privately.');
+      setStatus(copied ? `Link copied. Send it to ${who || 'your team'}.` : 'Copy the link below and send it.');
       await loadInvites();
     } finally { busy = false; }
   }
 
+  function seatsLeft() {
+    const humans = (stored?.roster?.members || []).filter((m) => m.role !== 'agent').length || 1;
+    return Math.max(0, MAX_HUMANS - humans);
+  }
+
   function drawInvites() {
+    clear(waitingBox);
+    const waiting = invites.flatMap((inv) => inv.requests.map((q) => ({ inv, pubkey: q.pubkey })));
+    if (waiting.length) {
+      waitingBox.appendChild(h('div', { style: 'font-size: 13px; font-weight: 600; margin-bottom: 4px;', text: `${waiting.length === 1 ? 'Someone wants' : `${waiting.length} people want`} to join` }));
+    }
+    for (const w of waiting) {
+      waitingBox.appendChild(h('div', { class: 'team-invite-request', style: 'display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid hsl(var(--border));' }, [
+        h('span', { style: 'flex: 2 1 240px; min-width: 0; display: flex;' }, [personEl(w.pubkey)]),
+        h('button', { class: 'primary', onClick: () => letIn(w.inv, w.pubkey) }, ['Let in']),
+        h('button', { class: 'ghost', onClick: () => decline(w.inv, w.pubkey) }, ['Decline']),
+      ]));
+    }
+
     clear(invitesBox);
-    invitesBox.appendChild(h('strong', { text: 'Invite links' }));
-    invitesBox.appendChild(h('div', { class: 'muted', style: 'font-size: 12.5px; margin: 4px 0 8px;', text: 'Anyone with an open link can ask to join. Nobody gets in until you let them in.' }));
+    invitesBox.appendChild(h('strong', { text: 'Group link' }));
+    invitesBox.appendChild(h('div', { class: 'muted', style: 'font-size: 12.5px; margin: 4px 0 8px;', text: 'One link for the whole group. For one person, use Add person above.' }));
     if (shown) {
       const field = h('input', { type: 'text', readonly: 'readonly', value: shown.url, 'aria-label': 'Invite link', style: 'width: 100%; font-family: var(--font-mono, monospace); font-size: 12px;' });
       field.addEventListener('focus', () => field.select());
@@ -180,25 +212,44 @@ export function renderProjectRosters(deps) {
         h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;', text: `${shown.who ? `For ${shown.who}. ` : ''}Works until ${expiry(shown.expires_at)}. Shown once.` }),
       ]));
     }
-    const waiting = invites.flatMap((inv) => inv.requests.map((q) => ({ inv, pubkey: q.pubkey })));
-    for (const w of waiting) {
-      invitesBox.appendChild(h('div', { class: 'team-invite-request', style: 'display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0;' }, [
-        h('span', { style: 'flex: 2 1 240px; min-width: 0; display: flex;' }, [personEl(w.pubkey)]),
-        h('span', { class: 'pill warn', text: 'Wants to join' }),
-        h('button', { class: 'primary', onClick: () => letIn(w.inv, w.pubkey) }, ['Let in']),
-        h('button', { class: 'ghost', onClick: () => decline(w.inv, w.pubkey) }, ['Decline']),
-      ]));
-    }
-    const open = invites.filter((i) => i.kind === 'open');
-    for (const inv of open) {
+    for (const inv of invites.filter((i) => i.kind === 'open')) {
+      const how = inv.auto ? 'straight in' : 'asks you first';
       invitesBox.appendChild(h('div', { class: 'team-invite-live muted', style: 'display: flex; gap: 8px; align-items: center; font-size: 12.5px; padding: 2px 0;' }, [
-        h('span', { style: 'flex: 1 1 auto;', text: `Open link, ${inv.uses_left === 1 ? 'one person' : `${inv.uses_left} people`}, until ${expiry(inv.expires_at)}` }),
+        h('span', { style: 'flex: 1 1 auto;', text: `Group link, ${how}, ${inv.uses_left === 1 ? 'one more person' : `${inv.uses_left} more people`}, until ${expiry(inv.expires_at)}` }),
         h('button', { class: 'ghost', onClick: () => stop(inv) }, ['Stop']),
       ]));
     }
-    invitesBox.appendChild(h('div', { style: 'margin-top: 8px;' }, [
-      h('button', { class: 'ghost', onClick: () => makeLink({ kind: 'open' }) }, ['Copy invite link']),
+    const mode = h('select', { 'aria-label': 'When someone opens the link' }, [
+      h('option', { value: 'ask', text: 'Ask me first' }),
+      h('option', { value: 'auto', text: 'Let them straight in' }),
+    ]);
+    mode.value = groupMode;
+    const note = h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;' });
+    const fillNote = () => {
+      note.textContent = groupMode === 'auto'
+        ? 'Anyone holding the link joins, even if it is forwarded. You sign once now; stop it any time.'
+        : 'People who open it wait here until you let them in.';
+    };
+    fillNote();
+    mode.addEventListener('change', () => { groupMode = mode.value; fillNote(); });
+    const seats = seatsLeft();
+    invitesBox.appendChild(h('div', { style: 'display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px;' }, [
+      h('label', { class: 'muted', style: 'font-size: 12.5px;', text: 'When someone opens it:' }),
+      mode,
+      h('button', { class: 'ghost', disabled: seats ? null : 'disabled', onClick: () => makeGroupLink() }, ['Copy group link']),
     ]));
+    invitesBox.appendChild(note);
+  }
+
+  async function makeGroupLink() {
+    const uses = seatsLeft();
+    if (!uses) { setStatus(`This project already has ${MAX_HUMANS} people.`, 'error'); return; }
+    if (groupMode !== 'auto') return makeLink({ kind: 'open', uses });
+    if (busy) return;
+    setStatus('Waiting for your signer…');
+    const g = await finalizeGrant({ signer: getSigner(), slug, role: 'contributor', uses, ttlSec: 7 * 86400, now, ownerHex: knownOwnerHex() });
+    if (!g.ok) { setStatus(g.reason, 'error'); return; }
+    return makeLink({ kind: 'open', auto: true, grant: g.event });
   }
 
   async function stop(inv) {
@@ -221,7 +272,7 @@ export function renderProjectRosters(deps) {
       if (!(await save())) return;
     }
     const r = await api.decideInvite(slug, inv.id, pubkey, true);
-    setStatus(r.ok ? `Let in. ${displayName(pubkey)} joins on their next check.` : (r.reason || 'Could not let them in.'), r.ok ? '' : 'error');
+    setStatus(r.ok ? `Let in. ${displayName(pubkey)} is added to the chat while your Continuum is open.` : (r.reason || 'Could not let them in.'), r.ok ? '' : 'error');
     await loadInvites();
   }
 
@@ -233,10 +284,12 @@ export function renderProjectRosters(deps) {
         search: api.peopleSearch,
         exclude: () => new Set([knownOwnerHex(), ...rows.map((x) => hexOf(x.npub))].filter(Boolean)),
         onPick: async (hex) => {
+          // One step (ADR 0010): add, sign the list, copy their personal link.
           rows.push({ npub: toNpub(hex), role: 'contributor' });
+          removed.delete(hex);
           picking = false;
           draw();
-          setStatus('Added. Sign and save to give them access.');
+          if (await save() && canInvite) await makeLink({ kind: 'named', pubkey: hex }, displayName(hex));
         },
       });
       body.appendChild(h('div', { style: 'margin-top: 8px; max-width: 560px;' }, [picker]));
@@ -244,7 +297,7 @@ export function renderProjectRosters(deps) {
     }
     body.appendChild(h('div', { style: 'display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;' }, [
       h('button', { class: 'ghost', onClick: () => { if (deps.demo) { deps.onDemo?.(); return; } picking = !picking; draw(); } }, [picking ? 'Close search' : 'Add person']),
-      h('button', { class: 'primary', onClick: save }, ['Sign and save']),
+      h('button', { class: 'ghost', title: 'Sign role changes and removals', onClick: save }, ['Save changes']),
     ]));
   }
 
@@ -283,15 +336,17 @@ export function renderProjectRosters(deps) {
       of.style.display = row.role === 'agent' ? '' : 'none';
     });
     const st = hex && row.role !== 'agent' && stored?.roster?.members?.some((m) => m.pubkey === hex) ? teamsStatus(stored?.teams, hex) : null;
-    const remove = h('button', { class: 'ghost', title: 'Remove from roster', onClick: () => { rows.splice(i, 1); draw(); } }, ['Remove']);
-    const listed = hex && row.role !== 'agent' && stored?.roster?.members?.some((m) => m.pubkey === hex);
+    const remove = h('button', { class: 'ghost', title: 'Remove from this project (then Save changes)', onClick: () => { rows.splice(i, 1); if (hex) removed.add(hex); draw(); setStatus('Removed. Save changes to sign it.'); } }, ['Remove']);
+    const member = hex ? stored?.roster?.members?.find((m) => m.pubkey === hex) : null;
+    const listed = hex && row.role !== 'agent' && Boolean(member);
     const named = canInvite && listed
-      ? h('button', { class: 'ghost', title: 'A sign-in link only this person can use', onClick: () => makeLink({ kind: 'named', pubkey: hex }, displayName(hex)) }, ['Copy link'])
+      ? h('button', { class: 'ghost', title: 'A sign-in link only this person can use', onClick: () => makeLink({ kind: 'named', pubkey: hex }, displayName(hex)) }, ['Copy invite link'])
       : null;
+    const viaLink = member?.via === 'invite' ? h('span', { class: 'pill', title: 'Joined with a group link; signed into the list at your next save', text: 'Joined by link' }) : null;
     return h('div', { class: 'team-roster-row', style: 'display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0;' }, [
       h('span', { style: 'flex: 2 1 240px; min-width: 0; display: flex;' }, [hex ? personEl(hex) : h('span', { class: 'muted', text: 'Unknown key' })]),
       st ? h('span', { class: `pill team-status ${st.tone}`, text: st.label }) : null,
-      role, of, named, remove,
+      viaLink, role, of, named, remove,
     ]);
   }
 
@@ -300,14 +355,24 @@ export function renderProjectRosters(deps) {
     if (busy) return false;
     busy = true;
     try {
+      // Anyone a straight-in link admitted since this page loaded stays,
+      // unless removed here (ADR 0010: the signed list absorbs them).
+      const latest = await api.projectRoster(slug);
+      let prevAt = stored?.roster?.created_at || 0;
+      if (latest?.ok && latest.data?.roster) {
+        prevAt = Math.max(prevAt, latest.data.roster.created_at || 0);
+        for (const m of latest.data.roster.members) {
+          if (m.via === 'invite' && !removed.has(m.pubkey) && !rows.some((x) => hexOf(x.npub) === m.pubkey)) rows.push({ npub: toNpub(m.pubkey), role: m.role });
+        }
+      }
       const r = await signAndPutRoster({
         api, signer: getSigner(), slug, rows, ownerHex: knownOwnerHex(),
-        previousCreatedAt: stored?.roster?.created_at || 0, now, onStatus: setStatus,
+        previousCreatedAt: prevAt, now, onStatus: setStatus,
       });
       if (!r.ok) {
         if (r.status === 409) {
           await load();
-          setStatus('A newer roster was saved elsewhere. Reloaded it; check and sign again.', 'error');
+          setStatus('The member list changed elsewhere. Reloaded it; check and save again.', 'error');
           return false;
         }
         setStatus(r.reason, 'error');
@@ -316,7 +381,8 @@ export function renderProjectRosters(deps) {
       stored = { ...stored, roster: r.data.roster, event: r.event };
       rows = rosterRows(stored.roster);
       draw();
-      setStatus(`Saved. ${stored.roster.members.length} on the team.`);
+      removed = new Set();
+      setStatus(`Saved. ${peopleCount(stored.roster.members.length)} on this project.`);
       // Tell an embedded Teams frame to refresh now rather than on its next poll.
       if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(ROSTER_CHANGED_EVENT, { detail: { slug } }));
       load({ quiet: true });
@@ -330,7 +396,7 @@ export function renderProjectRosters(deps) {
     stored = null;
     rows = [];
     draw();
-    setStatus('Demo: sign in to manage a real roster.');
+    setStatus('Demo: sign in to manage real members.');
   } else {
     load();
     // Status pills follow the Teams signals without a page reload.
@@ -344,75 +410,31 @@ export function renderProjectRosters(deps) {
 }
 
 /**
- * Team chat (TEAMS-2a Team view link → embed, v0.2.194). Shown only when the
- * agent reports a Torii Teams app origin (config teams.app_url, written by
- * Suite's install-teams-app.sh). The app is framed at <origin>/chat?embed=1:
- * it stays on its OWN origin, so its chat keys never share storage with
- * Continuum. "Open in full window" is the fallback for signers that do not
- * inject into frames. The agent only returns a bare https origin; it is
- * re-checked here so a bad value can never become a javascript: link or src.
+ * Team chat (ADR 0002/0010, Teams repo). The owner's one Teams frame
+ * (lib/teams-frame.js, started at sign-in) is docked over this card's slot;
+ * leaving the page hides it without stopping it, so newcomers are still
+ * added to the chat. "Open in full window" is the fallback for signers that
+ * do not inject into frames.
  * @param {{teamMe:Function, teamHandoff?:Function}} api
  * @returns {HTMLElement} a placeholder that fills in (or stays empty)
  */
 export function renderTeamChatLink(api, { projectSlug = null } = {}) {
   const slot = h('div', { class: 'team-chat-link' });
-  Promise.resolve(api.teamMe()).then((r) => {
-    const url = r?.ok ? safeAppOrigin(r.data?.teams_app_url) : null;
-    if (!url) return;
-    // A just-created project opens straight on its chat (new-project flow).
-    const path = projectSlug && /^[a-z0-9][a-z0-9-]{0,47}$/.test(projectSlug) ? `/chat/p/${projectSlug}` : '/chat';
-    const frame = h('iframe', {
-      class: 'team-chat-frame',
-      src: `${url}${path}?embed=1`,
-      title: 'Team chat',
-      allow: 'clipboard-write',
-      sandbox: 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads',
-      referrerpolicy: 'no-referrer',
-      loading: 'lazy',
-      style: 'display: block; width: 100%; height: max(480px, calc(100vh - 260px)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: transparent;',
-    });
+  Promise.resolve(startTeamsFrame(api)).then((running) => {
+    const url = teamsOrigin();
+    if (!running || !url || !slot.isConnected) return;
+    const path = chatPath(projectSlug);
+    const dock = h('div', { class: 'team-chat-dock', style: 'height: max(480px, calc(100vh - 260px));' });
     slot.appendChild(h('div', { class: 'card', style: 'margin-bottom: 16px;' }, [
       h('div', { style: 'display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px;' }, [
         h('strong', { text: 'Team chat' }),
         h('a', { class: 'team-chat-open', href: `${url}${path}`, target: '_blank', rel: 'noopener noreferrer', text: 'Open in full window', style: 'font-size: 12.5px;' }),
       ]),
-      frame,
+      dock,
     ]));
-    // Roster saved here → tell the frame (exact Teams origin) to refresh now.
-    const onChange = (e) => {
-      if (!slot.isConnected) { window.removeEventListener(ROSTER_CHANGED_EVENT, onChange); return; }
-      frame.contentWindow?.postMessage({ type: 'torii:roster-changed', slug: e.detail?.slug ?? null }, url);
-    };
-    window.addEventListener(ROSTER_CHANGED_EVENT, onChange);
-    // One sign-in (ADR 0008, Teams repo): the owner is already signed in here,
-    // so a session request from THIS frame (exact source and origin, same
-    // pubkey) is answered with a scoped owner team token. Members never get
-    // one: the agent's handoff route is admin-only and teamMe says owner.
-    let busy = false;
-    const onAsk = async (e) => {
-      if (!slot.isConnected) { window.removeEventListener('message', onAsk); return; }
-      if (e.source !== frame.contentWindow || e.origin !== url || busy) return;
-      const ask = e.data;
-      if (!ask || ask.type !== 'torii:session-request' || ask.pubkey !== r.data?.pubkey || !r.data?.owner) return;
-      if (typeof api.teamHandoff !== 'function') return;
-      busy = true;
-      try {
-        const got = await api.teamHandoff();
-        const d = got?.ok ? got.data : null;
-        if (d && d.pubkey === ask.pubkey && typeof d.token === 'string') {
-          frame.contentWindow?.postMessage({ type: 'torii:session', token: d.token, expires_at: d.expires_at, pubkey: d.pubkey }, url);
-        }
-      } catch { /* the frame falls back to its own sign-in */ } finally { busy = false; }
-    };
-    window.addEventListener('message', onAsk);
+    dockTeamsFrame(dock, { projectSlug });
   }).catch(() => {});
   return slot;
 }
 
-export function safeAppOrigin(raw) {
-  if (typeof raw !== 'string') return null;
-  try {
-    const u = new URL(raw);
-    return u.protocol === 'https:' && !u.username && !u.password ? u.origin : null;
-  } catch { return null; }
-}
+export { safeAppOrigin };

@@ -67,6 +67,6 @@ test('new project: no signer or an existing roster keeps the dialog open with a 
   const { navigate } = await boot({ signer: { signEvent }, put: vi.fn(async () => ({ ok: false, status: 409 })) });
   button('Create chat').click();
   await tick();
-  expect(document.body.textContent).toContain('already has a roster');
+  expect(document.body.textContent).toContain('already has members');
   expect(navigate).not.toHaveBeenCalled();
 });

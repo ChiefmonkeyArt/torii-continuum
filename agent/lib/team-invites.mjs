@@ -6,6 +6,9 @@
  *   named — the person is already on the roster; the link signs them straight in.
  *   open  — whoever claims it becomes a join request; the owner approves by
  *           signing a roster that lists them (the roster stays the authority).
+ *   open + auto (ADR 0010) — "let them straight in": the owner signed a grant
+ *           for this link when making it; each claim admits one person until
+ *           its uses or time run out.
  *
  * Storage: memory/teams/invites.json, 0600, atomic temp+rename, one writer at
  * a time. Pubkeys, hashes and timestamps only; expired entries are pruned on
@@ -14,6 +17,7 @@
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
+import { verifyEvent } from 'nostr-tools/pure';
 
 export const INVITE_ID_RE = /^[A-Za-z0-9_-]{16}$/; // 12 bytes base64url
 export const INVITE_SECRET_RE = /^[A-Za-z0-9_-]{22}$/; // 16 bytes base64url
@@ -28,6 +32,39 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const DUMMY_HASH = Buffer.alloc(32);
 
 const sha256 = (s) => createHash('sha256').update(String(s)).digest();
+
+export const INVITE_GRANT_KIND = 27098;
+const GRANT_SKEW_SEC = 600;
+
+/**
+ * The owner's signed "let them straight in" grant for one group link
+ * (torii-teams ADR 0010). Never published. Fails closed on anything odd.
+ * @returns {{ok:true, id:string, grant_id:string, role:string, uses:number, ttl_sec:number}|{ok:false}}
+ */
+export function verifyInviteGrant(event, { ownerHex, slug, now }) {
+  const no = { ok: false };
+  if (!event || typeof event !== 'object' || event.kind !== INVITE_GRANT_KIND) return no;
+  if (!HEX64.test(String(ownerHex || '')) || event.pubkey !== ownerHex) return no;
+  if (!Number.isInteger(event.created_at) || Math.abs(event.created_at - now) > GRANT_SKEW_SEC) return no;
+  if (event.content !== '' || !Array.isArray(event.tags) || event.tags.length !== 5) return no;
+  const tag = (name) => {
+    const all = event.tags.filter((t) => Array.isArray(t) && t[0] === name);
+    return all.length === 1 && all[0].length === 2 && typeof all[0][1] === 'string' ? all[0][1] : null;
+  };
+  const project = tag('project');
+  const id = tag('invite');
+  const role = tag('role');
+  const uses = Number(tag('uses'));
+  const exp = Number(tag('expiration'));
+  if (project !== slug || !INVITE_ID_RE.test(id || '') || !INVITE_ROLES.includes(role)) return no;
+  if (!Number.isInteger(uses) || uses < 1 || uses > 11 || String(uses) !== tag('uses')) return no;
+  const ttl = exp - now;
+  if (!Number.isInteger(exp) || ttl < TTL_MIN_SEC - GRANT_SKEW_SEC || ttl > TTL_MAX_SEC + GRANT_SKEW_SEC) return no;
+  let sigOk = false;
+  try { sigOk = verifyEvent({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, kind: event.kind, tags: event.tags, content: event.content, sig: event.sig }); } catch { sigOk = false; }
+  if (!sigOk) return no;
+  return { ok: true, id, grant_id: event.id, role, uses, ttl_sec: Math.min(TTL_MAX_SEC, Math.max(TTL_MIN_SEC, ttl)) };
+}
 
 export function createTeamInvites({ dir, now = () => Math.floor(Date.now() / 1000) } = {}) {
   if (!dir) throw new Error('team-invites: dir required');
@@ -77,13 +114,14 @@ export function createTeamInvites({ dir, now = () => Math.floor(Date.now() / 100
   }
 
   const publicView = (inv) => ({
-    id: inv.id, kind: inv.kind, pubkey: inv.pubkey ?? null, role: inv.role,
+    id: inv.id, kind: inv.kind, auto: Boolean(inv.auto), pubkey: inv.pubkey ?? null, role: inv.role,
     created_at: inv.created_at, expires_at: inv.expires_at, uses_left: inv.uses_left,
     revoked: Boolean(inv.revoked), requests: inv.requests.map((r) => ({ pubkey: r.pubkey, at: r.at })),
   });
 
   /**
-   * @param {{slug:string, kind:'open'|'named', pubkey?:string, role?:string, ttl_sec?:number, uses?:number}} o
+   * @param {{slug:string, kind:'open'|'named', pubkey?:string, role?:string, ttl_sec?:number, uses?:number,
+   *   auto?:boolean, grant_id?:string, id?:string}} o  `id` lets an auto link use the id its grant was signed for
    * @returns {Promise<{ok:true, id:string, secret:string, expires_at:number}|{ok:false, code:string}>}
    */
   function create(o) {
@@ -97,17 +135,26 @@ export function createTeamInvites({ dir, now = () => Math.floor(Date.now() / 100
     if (!Number.isInteger(ttl) || ttl < TTL_MIN_SEC || ttl > TTL_MAX_SEC) return Promise.resolve({ ok: false, code: 'bad_ttl' });
     if (!Number.isInteger(uses) || uses < 1 || uses > 11) return Promise.resolve({ ok: false, code: 'bad_uses' });
     if (kind === 'named' && !HEX64.test(String(o.pubkey || ''))) return Promise.resolve({ ok: false, code: 'bad_pubkey' });
+    const auto = kind === 'open' && o?.auto === true;
+    if (auto && (!HEX64.test(String(o.grant_id || '')) || !INVITE_ID_RE.test(String(o.id || '')))) {
+      return Promise.resolve({ ok: false, code: 'bad_grant' });
+    }
     return serial((s) => {
       const live = Object.values(s.invites).filter((i) => i.slug === slug && usable(i)).length;
       if (live >= MAX_LIVE_PER_PROJECT) return { write: false, result: { ok: false, code: 'too_many' } };
-      let id;
-      do id = randomBytes(12).toString('base64url'); while (s.invites[id]);
+      // One grant, one link: a signed grant can never back a second link.
+      if (auto && (s.invites[o.id] || Object.values(s.invites).some((i) => i.grant_id === o.grant_id))) {
+        return { write: false, result: { ok: false, code: 'bad_grant' } };
+      }
+      let id = auto ? o.id : null;
+      while (!id || s.invites[id]) id = randomBytes(12).toString('base64url');
       const secret = randomBytes(16).toString('base64url');
       const t = now();
       s.invites[id] = {
         id, slug, kind, role, pubkey: kind === 'named' ? o.pubkey : undefined,
         secret_sha256: sha256(secret).toString('hex'),
         created_at: t, expires_at: t + ttl, uses_left: uses, requests: [], revoked: false,
+        ...(auto ? { auto: true, grant_id: o.grant_id } : {}),
       };
       return { result: { ok: true, id, secret, expires_at: t + ttl } };
     });
@@ -148,12 +195,22 @@ export function createTeamInvites({ dir, now = () => Math.floor(Date.now() / 100
     });
   }
 
+  /** Spend one use of a straight-in link (ADR 0010) after its person was admitted. */
+  function useAuto(id, secret) {
+    return serial((s) => {
+      const inv = match(s, id, secret);
+      if (!inv || inv.kind !== 'open' || !inv.auto) return { write: false, result: { ok: false } };
+      inv.uses_left -= 1;
+      return { result: { ok: true } };
+    });
+  }
+
   /** Record a join request on an open invite (idempotent per pubkey). */
   function request(id, secret, pubkey) {
     if (!HEX64.test(String(pubkey || ''))) return Promise.resolve({ ok: false });
     return serial((s) => {
       const inv = match(s, id, secret);
-      if (!inv || inv.kind !== 'open') return { write: false, result: { ok: false } };
+      if (!inv || inv.kind !== 'open' || inv.auto) return { write: false, result: { ok: false } };
       if (!inv.requests.some((r) => r.pubkey === pubkey)) {
         if (inv.requests.length >= MAX_REQUESTS_PER_INVITE) return { write: false, result: { ok: false } };
         inv.requests.push({ pubkey, at: now() });
@@ -201,5 +258,5 @@ export function createTeamInvites({ dir, now = () => Math.floor(Date.now() / 100
     return out;
   }
 
-  return { create, list, revoke, find, spend, request, requestState, decide, pendingCounts };
+  return { create, list, revoke, find, spend, useAuto, request, requestState, decide, pendingCounts };
 }
