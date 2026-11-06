@@ -107,7 +107,9 @@
       `m2` member tokens (7-day cap, roster re-checked on renewal),
       `POST /api/team/auth/refresh`, owner handoff to the Teams frame via
       admin-only `POST /api/team/auth/handoff`. Needs Teams 0.6.1-torii.8
-      (Suite v0.9.38-alpha).
+      (Suite v0.9.38-alpha). Live on the VPS 2026-11-06.
+    - [ ] One sign-in follow-ups: coordinator handshake still signs once per
+      page load (needs Cordn session support); per-pubkey "sign out everywhere".
     - [ ] 2a-3: NIP-17 gift-wrapped invite/accept; accepted members only.
     - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
       add/remove, announcement maintainers (needs TEAMS-2b services).
