@@ -611,7 +611,7 @@ export function addMember({ npub, label } = {}) {
   if (!r.ok) throw new Error(r.reason);
   const hex = r.hex;
   if (state.members.some((m) => m.content.npub === hex)) {
-    throw new Error('That operator is already on the roster.');
+    throw new Error('That operator is already on the list.');
   }
   const ev = makeEvent({
     kind: KIND.TEAM_MEMBER,

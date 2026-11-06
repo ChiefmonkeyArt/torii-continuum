@@ -114,8 +114,14 @@
       NIP-17 invite plan): open links with owner approval ("Let in" signs the
       roster once), named links, hashes only, one refusal body. Needs Teams
       0.6.1-torii.9 (Suite v0.9.39-alpha).
+    - [x] Joining that works (v0.2.199-alpha, torii-teams ADR 0010): personal
+      links straight in, group links ask first or straight in (owner-signed
+      grant), places default to seats left, one Teams frame while Continuum
+      is open, waiting alert and owner avatar in the account menu. Needs
+      Teams 0.6.1-torii.10 (Suite v0.9.40-alpha).
     - [ ] Invite follow-ups: QR code for links; invite step in the new-project
-      chat setup; let in without the owner's Teams tab open.
+      chat setup; adding people with no Continuum open at all (node-held
+      group key, separate ADR).
     - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
       add/remove, announcement maintainers (needs TEAMS-2b services).
   - [ ] TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path,

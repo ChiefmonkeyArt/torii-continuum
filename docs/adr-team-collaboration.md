@@ -123,6 +123,18 @@ Status: **Accepted** for the Suite PR; no Continuum code or VPS change.
 - **FIPS** moves to v0.5.3 in the Suite (the trial's version).
 - **Rollout.** The trial also binds :7334, so the installer refuses while it runs. Deploy to chiefmonkey.art only after the Plebeian test and trial teardown, with owner approval; the trial coordinator key can be carried over to keep its groups.
 
+## Addendum: joining that works (v0.2.199-alpha, 2026-11-06)
+
+Status: **Accepted**. Decision record: torii-teams `docs/torii/adr-0010-joining-that-works.md`, after the first real-team test of invite links.
+
+- **Three ways in.** A personal link (Add person) is straight in: one step adds the person to the member list and copies their link. A group link either asks first (the default: the person waits until the owner presses Let in) or lets people straight in.
+- **Straight-in group links are owner-signed.** The owner signs one kind-27098 grant per link (`project`, `invite`, `role`, `uses` 1-11, `expiration`; empty content). The agent checks the signature, the owner pubkey, the slug and the time bounds before it makes the link, and each use admits one person.
+- **Admitted list.** People admitted through a grant are kept beside the signed roster (`admitted` in the roster file, `via: "invite"`) and count toward the 12-person cap. The owner's next member-list save folds them in; removing one is the same save as removing anyone.
+- **Places.** Group links now default to the seats left on the project (at most 11), not one use.
+- **One Teams frame.** Continuum starts one hidden Teams frame after the owner signs in, so the owner's client keeps adding people on every page. The Team page docks it over the chat slot; `torii:navigate` shows a project. Messages are checked by exact origin and source both ways.
+- **Account menu.** Shows the owner's Nostr avatar and name (through the node) instead of the letter C, and a "n people waiting to join" alert that opens the Team page. Teams hides its own account footer when embedded.
+- **Words.** "Roster" is "Members" on screen; code, routes and kind 30098 keep the word roster.
+
 ## Addendum: invite links replace NIP-17 invites for 2a-3 (v0.2.198-alpha, 2026-11-06)
 
 Status: **Accepted**. Decision record: torii-teams `docs/torii/adr-0009-invite-links.md`.

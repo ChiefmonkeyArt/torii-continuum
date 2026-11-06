@@ -69,7 +69,7 @@ export function openTeamChatSetup({ project, api, navigate, signer, now, ownerNp
         api, signer: getSigner(), slug: project.slug, ownerHex, now: clock, onStatus: setStatus,
         rows: picked.map((hex) => ({ npub: toNpub(hex), role: 'contributor' })),
       });
-      if (!r.ok) { setStatus(r.reason === 'stale' ? 'This project already has a roster. Manage it on the Team page.' : r.reason, true); return; }
+      if (!r.ok) { setStatus(r.reason === 'stale' ? 'This project already has members. Manage them on the Team page.' : r.reason, true); return; }
       try { sessionStorage.setItem(TEAM_CHAT_PROJECT_KEY, project.slug); } catch { /* private mode: Team page opens on the first project */ }
       modal.close();
       navigate('/team');
@@ -86,7 +86,7 @@ export function openTeamChatSetup({ project, api, navigate, signer, now, ownerNp
       h('button', { class: 'primary', type: 'button', onClick: create }, ['Create chat']),
     ]),
   ]);
-  const modal = openModal({ title: `Team chat for ${project.name || project.slug}`, subtitle: 'Each project gets one private chat for the people on its roster.', body });
+  const modal = openModal({ title: `Team chat for ${project.name || project.slug}`, subtitle: 'Each project gets one private chat for its members.', body });
   setTimeout(() => picker.focus(), 0);
   return modal;
 }

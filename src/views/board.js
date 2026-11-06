@@ -596,7 +596,7 @@ function buildAssigneeSelect(current) {
     select.appendChild(h('option', { value: label, text: label }));
   }
   if (current && !options.has(current)) {
-    select.appendChild(h('option', { value: current, text: `${current} (not on roster)` }));
+    select.appendChild(h('option', { value: current, text: `${current} (not on the list)` }));
   }
   select.value = current || '';
   return select;

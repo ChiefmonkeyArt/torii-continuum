@@ -1,7 +1,8 @@
 /**
  * Team view.
  *
- * TOP: the signed per-project roster (TEAMS-2a-2, team-roster.js). This one
+ * TOP: the signed per-project member list, "Members" on screen (TEAMS-2a-2,
+ * team-roster.js; called the roster in code and events). This one
  * carries authorization weight: the agent verifies the owner's signature and
  * uses it for member sign-in and role-scoped access.
  *
@@ -53,13 +54,27 @@ export function renderTeam(mount, opts = {}) {
 
   const chatProject = demo ? null : takeChatProject();
   if (!demo) mount.appendChild(renderTeamChatLink({ teamMe, teamHandoff }, { projectSlug: chatProject }));
-  mount.appendChild(renderProjectRosters({
-    api: { projectRoster, putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob, createInvite, listInvites, revokeInvite, decideInvite, pendingInvites },
-    initialSlug: chatProject,
-    projects: () => S.listProjects(),
-    demo,
-    onDemo: goToLogin,
-  }));
+  // The member card reads the project list when drawn. Projects load from the
+  // node after first paint, so redraw it whenever the set of projects changes
+  // (ADR 0010: no more "Create a project first" for an owner with projects).
+  const rosterHolder = h('div', { class: 'team-roster-holder' });
+  const slugKey = () => (S.listProjects() || []).map((p) => p?.content?.slug).filter(Boolean).join(',');
+  let drawnKey = null;
+  const drawRosters = () => {
+    const key = slugKey();
+    if (key === drawnKey) return;
+    drawnKey = key;
+    clear(rosterHolder);
+    rosterHolder.appendChild(renderProjectRosters({
+      api: { projectRoster, putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob, createInvite, listInvites, revokeInvite, decideInvite, pendingInvites },
+      initialSlug: chatProject,
+      projects: () => S.listProjects(),
+      demo,
+      onDemo: goToLogin,
+    }));
+  };
+  drawRosters();
+  mount.appendChild(rosterHolder);
 
   mount.appendChild(h('h2', { class: 'section-title', style: 'margin: 24px 0 6px; font-size: 15px;', text: 'Card assignees' }));
   const note = h('div', { class: 'muted', style: 'font-size: 12.5px; margin: 0 0 12px; max-width: 640px;', text: 'Names you can assign to Kanban cards. Kept on this device only; it does not grant access.' });
@@ -75,6 +90,7 @@ export function renderTeam(mount, opts = {}) {
   // in demo mode (fixtures never change) yet keeps the real store live-updating.
   storeUnsub = S.subscribe(() => {
     renderRoster(listWrap, S, demo);
+    drawRosters();
   });
   window.addEventListener('hashchange', () => {
     if (storeUnsub) { storeUnsub(); storeUnsub = null; }
@@ -119,7 +135,7 @@ function renderRoster(wrap, S, demo) {
   const members = S.listMembers();
 
   if (members.length === 0) {
-    wrap.appendChild(h('div', { class: 'muted', style: 'padding: 28px 20px; text-align: center; font-size: 13px;', text: 'No operators yet. Add an npub above to build your roster.' }));
+    wrap.appendChild(h('div', { class: 'muted', style: 'padding: 28px 20px; text-align: center; font-size: 13px;', text: 'No operators yet. Add an npub above to build your list.' }));
     return;
   }
 
@@ -132,7 +148,7 @@ function renderRoster(wrap, S, demo) {
 
 function renderMemberRow(m, demo) {
   const c = m.content;
-  const removeBtn = h('button', { class: 'ghost', title: 'Remove from roster', onClick: () => (demo ? goToLogin() : store.removeMember(c.npub)) }, ['Remove']);
+  const removeBtn = h('button', { class: 'ghost', title: 'Remove from this list', onClick: () => (demo ? goToLogin() : store.removeMember(c.npub)) }, ['Remove']);
 
   const meta = h('div', { style: 'display: flex; flex-direction: column; gap: 3px; min-width: 0;' }, [
     h('span', { class: 'mono', style: 'font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;', title: c.npub, text: shortNpub(c.npub) }),

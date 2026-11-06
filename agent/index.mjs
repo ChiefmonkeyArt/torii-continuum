@@ -56,7 +56,7 @@ import { composeNoticeboard } from './core/noticeboard.mjs';
 import { createAudit } from './lib/audit.mjs';
 import { createRosterStore, project as projectRoster, effectiveRole, can as rosterCan, MAX_HUMANS } from './lib/roster.mjs';
 import { createTeamsState } from './lib/teams-state.mjs';
-import { createTeamInvites, INVITE_ID_RE } from './lib/team-invites.mjs';
+import { createTeamInvites, INVITE_ID_RE, verifyInviteGrant } from './lib/team-invites.mjs';
 import { createTeamProfiles, DEFAULT_PROFILE_RELAYS, DEFAULT_SEARCH_RELAYS } from './lib/team-profiles.mjs';
 import { getConstitution } from './lib/constitution.mjs';
 
@@ -1252,9 +1252,12 @@ async function onProjectRoster(slug, pubkey) {
   const stored = await rosterStore.get(slug);
   return inviteHumans(stored).some((m) => m.pubkey === pubkey);
 }
-async function projectHasSeat(slug) {
+async function seatsLeft(slug) {
   const stored = await rosterStore.get(slug);
-  return Math.max(1, inviteHumans(stored).length) < MAX_HUMANS;
+  return Math.max(0, MAX_HUMANS - Math.max(1, inviteHumans(stored).length));
+}
+async function projectHasSeat(slug) {
+  return (await seatsLeft(slug)) > 0;
 }
 const projectExists = (slug) =>
   projectStore.get().projects.some((p) => p?.content?.slug === slug);
@@ -1300,10 +1303,18 @@ app.post('/api/projects/:slug/invites', { preHandler: requireAdmin, config: rate
   if (b.kind === 'named' && !(await onProjectRoster(slug, String(b.pubkey || '')))) {
     return reply.code(409).send({ error: 'add them to the roster first', code: 'not_on_roster' });
   }
-  if (b.kind === 'open' && !(await projectHasSeat(slug))) return reply.code(409).send({ error: 'the project is full', code: 'full' });
-  const r = await teamInvites.create({ slug, kind: b.kind, pubkey: b.pubkey, role: b.role, ttl_sec: b.ttl_sec, uses: b.uses });
+  const seats = b.kind === 'open' ? await seatsLeft(slug) : 1;
+  if (b.kind === 'open' && seats < 1) return reply.code(409).send({ error: 'the project is full', code: 'full' });
+  let o = { slug, kind: b.kind, pubkey: b.pubkey, role: b.role, ttl_sec: b.ttl_sec, uses: b.kind === 'open' ? (b.uses === undefined ? seats : Number.isInteger(b.uses) && b.uses > seats ? seats : b.uses) : undefined };
+  if (b.kind === 'open' && b.auto === true) {
+    // "Let them straight in" (ADR 0010): the owner's signed grant sets every term.
+    const g = verifyInviteGrant(b.grant, { ownerHex: ownerHexFromNpub(req.session.npub), slug, now: Math.floor(Date.now() / 1000) });
+    if (!g.ok) return reply.code(400).send({ error: 'the signed grant does not match this link', code: 'bad_grant' });
+    o = { slug, kind: 'open', role: g.role, ttl_sec: g.ttl_sec, uses: g.uses, auto: true, grant_id: g.grant_id, id: g.id };
+  }
+  const r = await teamInvites.create(o);
   if (!r.ok) return reply.code(r.code === 'too_many' ? 409 : 400).send({ error: r.code, code: r.code });
-  await audit.append('team.invite.create', { slug, kind: b.kind, expires_at: r.expires_at });
+  await audit.append('team.invite.create', { slug, kind: b.kind, auto: Boolean(o.auto), expires_at: r.expires_at });
   reply.header('cache-control', 'no-store');
   return { id: r.id, url: `${origin}/chat/join/${r.id}#${r.secret}`, expires_at: r.expires_at };
 });
@@ -1355,7 +1366,7 @@ app.post('/api/team/invite/peek', { config: rateLimitConfig(authVerifyMax, '/api
   }
   reply.header('cache-control', 'no-store');
   // Display names only: no slug, group id, pubkeys or avatar before sign-in.
-  return { kind: inv.kind, project_name: projectName(inv.slug), owner_name: ownerName };
+  return { kind: inv.kind, straight_in: inv.kind === 'named' || Boolean(inv.auto), project_name: projectName(inv.slug), owner_name: ownerName };
 });
 
 app.post('/api/team/invite/claim', { config: rateLimitConfig(authVerifyMax, '/api/team/invite/claim') }, async (req, reply) => {
@@ -1378,6 +1389,15 @@ app.post('/api/team/invite/claim', { config: rateLimitConfig(authVerifyMax, '/ap
     return { token: s.token, expires_at: s.expires_at, slug: inv.slug };
   }
   if (!(await projectHasSeat(inv.slug))) return inviteGone(reply);
+  if (inv.auto) {
+    // Straight in (ADR 0010): one use of the owner's grant admits one person.
+    if (!(await teamInvites.useAuto(b.id, b.secret)).ok) return inviteGone(reply);
+    const a = await rosterStore.admit(inv.slug, { pubkey: v.pubkey, role: inv.role, invite: inv.id, ownerHex: ownerHexFromNpub(auth.adminNpub()) });
+    if (!a.ok) return inviteGone(reply);
+    await audit.append('team.invite.admit', { slug: inv.slug });
+    const s = auth.issueMemberSession(v.pubkey);
+    return { token: s.token, expires_at: s.expires_at, slug: inv.slug };
+  }
   const r = await teamInvites.request(b.id, b.secret, v.pubkey);
   if (!r.ok) return inviteGone(reply);
   await audit.append('team.invite.request', { slug: inv.slug });
