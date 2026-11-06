@@ -20,7 +20,7 @@ const stored = {
 
 const profiles = { [BOB]: { name: 'bob', display_name: 'Bob Builder', nip05: 'bob@example.com', avatar: true } };
 
-async function boot({ data = stored, signer, put, demo = false, people } = {}) {
+async function boot({ data = stored, signer, put, demo = false, people, inv } = {}) {
   vi.resetModules();
   dom = new JSDOM('<main></main>', { url: 'https://test.invalid/continuum/#/team' });
   for (const key of ['window', 'document', 'localStorage', 'CustomEvent', 'MutationObserver']) vi.stubGlobal(key, dom.window[key]);
@@ -30,6 +30,7 @@ async function boot({ data = stored, signer, put, demo = false, people } = {}) {
     teamAvatarBlob: vi.fn(async () => null),
     projectRoster: vi.fn(async () => ({ ok: true, data })),
     putProjectRoster: put || vi.fn(async (_slug, event) => ({ ok: true, data: { roster: { ...stored.roster, created_at: event.created_at } } })),
+    ...(inv || {}),
   };
   const onDemo = vi.fn();
   const { renderProjectRosters } = await import('./team-roster.js');
@@ -248,4 +249,86 @@ test('team chat: hands the owner session only to the exact Teams frame, origin a
   ask(req, 'https://teams.example.org', member.querySelector('iframe').contentWindow);
   await tick();
   expect(teamHandoff).toHaveBeenCalledTimes(1);
+});
+
+// ── invite links (Teams ADR 0009) ───────────────────────────────────────
+
+const URL1 = 'https://teams.example.test/chat/join/AAAAAAAAAAAAAAAA#SSSSSSSSSSSSSSSSSSSSSS';
+function inviteApi({ invites = [], create } = {}) {
+  return {
+    createInvite: create || vi.fn(async () => ({ ok: true, data: { id: 'AAAAAAAAAAAAAAAA', url: URL1, expires_at: 1_900_604_800 } })),
+    listInvites: vi.fn(async () => ({ ok: true, data: { invites } })),
+    revokeInvite: vi.fn(async () => ({ ok: true, data: { ok: true } })),
+    decideInvite: vi.fn(async () => ({ ok: true, data: { ok: true } })),
+    pendingInvites: vi.fn(async () => ({ ok: true, data: { pending: { studio: invites.reduce((n, i) => n + i.requests.length, 0) } } })),
+  };
+}
+
+test('invites: Copy invite link makes an open link, copies it and shows it once', async () => {
+  const inv = inviteApi();
+  const writeText = vi.fn(async () => {});
+  await boot({ signer: null, inv });
+  vi.stubGlobal('navigator', { clipboard: { writeText } });
+  button('Copy invite link').click();
+  await tick();
+  expect(inv.createInvite).toHaveBeenCalledWith('studio', { kind: 'open' });
+  expect(writeText).toHaveBeenCalledWith(URL1);
+  expect(document.querySelector('.team-invite-shown input').value).toBe(URL1);
+  expect(document.body.textContent).toContain('Link copied');
+  expect(document.body.textContent).toContain('Shown once');
+  // Switching project forgets the shown link.
+  document.querySelector('select[aria-label="Project"]').dispatchEvent(new dom.window.Event('change'));
+  await tick();
+  expect(document.querySelector('.team-invite-shown')).toBeNull();
+});
+
+test('invites: named link per listed person; friendly refusal when Teams is missing', async () => {
+  const create = vi.fn(async () => ({ ok: false, status: 409, reason: 'x', data: { code: 'no_teams_app' } }));
+  const inv = inviteApi({ create });
+  await boot({ signer: null, inv });
+  const rows = document.querySelectorAll('.team-roster-row');
+  expect(rows[1].textContent).not.toContain('Copy link'); // agents get no link
+  [...rows[0].querySelectorAll('button')].find((b) => b.textContent === 'Copy link').click();
+  await tick();
+  expect(create).toHaveBeenCalledWith('studio', { kind: 'named', pubkey: BOB });
+  expect(document.body.textContent).toContain('Install Torii Teams');
+});
+
+test('invites: Let in adds the person, signs the roster once, then approves', async () => {
+  const signEvent = vi.fn(async (e) => ({ ...e, pubkey: OWNER, id: 'f'.repeat(64), sig: 'e'.repeat(128) }));
+  const inv = inviteApi({ invites: [{ id: 'AAAAAAAAAAAAAAAA', kind: 'open', role: 'viewer', expires_at: 1_900_604_800, uses_left: 1, requests: [{ pubkey: NEW, at: 1 }] }] });
+  const { api } = await boot({ signer: { signEvent, getPublicKey: async () => OWNER }, inv });
+  expect(document.querySelector('.team-invite-request').textContent).toContain('Wants to join');
+  expect(document.querySelector('select[aria-label="Project"]').options[0].textContent).toBe('Studio (1 waiting)');
+  [...document.querySelectorAll('.team-invite-request button')].find((b) => b.textContent === 'Let in').click();
+  await tick();
+  expect(signEvent).toHaveBeenCalledTimes(1);
+  expect(signEvent.mock.calls[0][0].tags).toContainEqual(['p', NEW, 'viewer']);
+  expect(api.putProjectRoster).toHaveBeenCalledTimes(1);
+  expect(inv.decideInvite).toHaveBeenCalledWith('studio', 'AAAAAAAAAAAAAAAA', NEW, true);
+  expect(api.putProjectRoster.mock.invocationCallOrder[0]).toBeLessThan(inv.decideInvite.mock.invocationCallOrder[0]);
+});
+
+test('invites: no approval when the roster signature fails; Decline and Stop need no signer', async () => {
+  const signEvent = vi.fn(async () => { throw new Error('user rejected'); });
+  const inv = inviteApi({ invites: [{ id: 'AAAAAAAAAAAAAAAA', kind: 'open', role: 'contributor', expires_at: 1_900_604_800, uses_left: 2, requests: [{ pubkey: NEW, at: 1 }] }] });
+  await boot({ signer: { signEvent, getPublicKey: async () => OWNER }, inv });
+  const reqBtn = (name) => [...document.querySelectorAll('.team-invite-request button')].find((b) => b.textContent === name);
+  reqBtn('Let in').click();
+  await tick();
+  expect(inv.decideInvite).not.toHaveBeenCalled();
+  signEvent.mockClear();
+  reqBtn('Decline').click();
+  await tick();
+  expect(inv.decideInvite).toHaveBeenCalledWith('studio', 'AAAAAAAAAAAAAAAA', NEW, false);
+  expect(document.querySelector('.team-invite-live').textContent).toContain('2 people');
+  [...document.querySelectorAll('.team-invite-live button')].find((b) => b.textContent === 'Stop').click();
+  await tick();
+  expect(inv.revokeInvite).toHaveBeenCalledWith('studio', 'AAAAAAAAAAAAAAAA');
+  expect(signEvent).not.toHaveBeenCalled();
+});
+
+test('invites: hidden in demo mode', async () => {
+  await boot({ demo: true, inv: inviteApi() });
+  expect(document.querySelector('.team-invites')).toBeNull();
 });

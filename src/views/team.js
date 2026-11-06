@@ -18,7 +18,7 @@ import { setChatContext } from '../chat.js';
 import { isDemo, demoSource, demoBanner, goToLogin } from '../demo/demo-mode.js';
 import { renderProjectRosters, renderTeamChatLink } from './team-roster.js';
 import { TEAM_CHAT_PROJECT_KEY } from './team-chat-setup.js';
-import { projectRoster, putProjectRoster, teamMe, teamHandoff, peopleSearch, teamProfiles, teamAvatarBlob } from '../data/agent.js';
+import { projectRoster, putProjectRoster, teamMe, teamHandoff, peopleSearch, teamProfiles, teamAvatarBlob, createInvite, listInvites, revokeInvite, decideInvite, pendingInvites } from '../data/agent.js';
 
 function takeChatProject() {
   try {
@@ -54,7 +54,7 @@ export function renderTeam(mount, opts = {}) {
   const chatProject = demo ? null : takeChatProject();
   if (!demo) mount.appendChild(renderTeamChatLink({ teamMe, teamHandoff }, { projectSlug: chatProject }));
   mount.appendChild(renderProjectRosters({
-    api: { projectRoster, putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob },
+    api: { projectRoster, putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob, createInvite, listInvites, revokeInvite, decideInvite, pendingInvites },
     initialSlug: chatProject,
     projects: () => S.listProjects(),
     demo,

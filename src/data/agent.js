@@ -558,6 +558,34 @@ export async function putProjectRoster(slug, event) {
   return req('PUT', `/api/projects/${encodeURIComponent(slug)}/roster`, { event });
 }
 
+// Invite links (Teams repo docs/torii/adr-0009-invite-links.md). Owner-only.
+// The agent returns the link secret once, on create; it stores only a hash.
+
+/** POST /api/projects/:slug/invites — { kind:'open'|'named', pubkey?, role?, ttl_sec?, uses? } → { id, url, expires_at, … }. */
+export async function createInvite(slug, body) {
+  return req('POST', `/api/projects/${encodeURIComponent(slug)}/invites`, body);
+}
+
+/** GET /api/projects/:slug/invites — { invites:[{ id, kind, role, expires_at, uses_left, requests:[{pubkey, at}] }] }. */
+export async function listInvites(slug) {
+  return req('GET', `/api/projects/${encodeURIComponent(slug)}/invites`);
+}
+
+/** DELETE /api/projects/:slug/invites/:id — stop a link now. */
+export async function revokeInvite(slug, id) {
+  return req('DELETE', `/api/projects/${encodeURIComponent(slug)}/invites/${encodeURIComponent(id)}`);
+}
+
+/** POST /api/projects/:slug/invites/:id/decide — approve (after the signed roster lists them) or decline. */
+export async function decideInvite(slug, id, pubkey, approve) {
+  return req('POST', `/api/projects/${encodeURIComponent(slug)}/invites/${encodeURIComponent(id)}/decide`, { pubkey, approve: approve === true });
+}
+
+/** GET /api/team/invites/pending — { pending: { slug: count } }. */
+export async function pendingInvites() {
+  return req('GET', '/api/team/invites/pending');
+}
+
 // Teams people + profiles (docs/adr-teams-membership-signals.md). The agent
 // reads profile relays and avatar hosts; the browser never contacts them.
 

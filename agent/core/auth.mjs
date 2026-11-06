@@ -646,6 +646,68 @@ export function createAuth(cfg, deps = {}) {
     return { ok: true, token: next.token, expires_at: next.expiresAt, pubkey: adminHex };
   }
 
+  // ── Invite claims (torii-teams ADR 0009) ─────────────────────
+  // A claim proves "this pubkey signed a fresh challenge" without requiring a
+  // roster entry: the caller decides what the invite allows. The challenge is
+  // burned on a valid signature, exactly like verifyMemberLogin.
+  async function verifyInviteLogin(event, { clientIp } = {}) {
+    const checked = checkSignedChallenge(event, 'auth.invite.fail', clientIp);
+    if (!checked.ok) {
+      log.warn({ evt: 'auth.invite.fail', ip_prefix: prefix(clientIp || '', 12), reason: checked.code });
+      return checked;
+    }
+    challenges.delete(checked.challenge);
+    if (!HEX64_RE.test(event.pubkey)) return { ok: false, code: 'malformed_event', reason: 'bad pubkey' };
+    return { ok: true, pubkey: event.pubkey, isOwner: Boolean(adminHex) && event.pubkey === adminHex };
+  }
+
+  /** A fresh member session for a pubkey the caller has already checked (invite claim / approval). */
+  function issueMemberSession(pubkey) {
+    const issued = issueMemberToken(pubkey);
+    log.info({ evt: 'auth.member.invite', pubkey_prefix: prefix(pubkey) });
+    return { ok: true, token: issued.token, expires_at: issued.expiresAt, pubkey };
+  }
+
+  // Pending token `j1.iat.exp.pubkey.inviteId.sig` for someone waiting on the
+  // owner's approval. Its own HMAC label, so it can never pass as an m1/m2
+  // member token or an owner session; routes accept it only where ADR 0009
+  // says (invite status, ready, refresh).
+  const pendingKey = createHmac('sha256', cfg.session_secret).update('continuum-invite-pending-v1').digest();
+  const INVITE_ID_RE = /^[A-Za-z0-9_-]{16}$/;
+
+  function issuePendingToken(pubkey, inviteId, expiresAt) {
+    const iat = now();
+    const exp = Math.min(Number(expiresAt) || 0, iat + 30 * 86400);
+    const payload = `j1.${iat}.${exp}.${pubkey}.${inviteId}`;
+    const sig = createHmac('sha256', pendingKey).update(payload).digest('hex');
+    return { token: `${payload}.${sig}`, expiresAt: exp };
+  }
+
+  /** @returns {{ok:true, pubkey:string, inviteId:string, exp:number}|{ok:false, reason:string}} */
+  function verifyPendingToken(token) {
+    if (!token || typeof token !== 'string') return { ok: false, reason: 'no token' };
+    const parts = token.split('.');
+    if (parts.length !== 6 || parts[0] !== 'j1') return { ok: false, reason: 'malformed' };
+    const [, iatStr, expStr, pk, inviteId, sig] = parts;
+    const num = /^\d{1,12}$/;
+    if (!num.test(iatStr) || !num.test(expStr) || !HEX64_RE.test(pk) || !INVITE_ID_RE.test(inviteId)) {
+      return { ok: false, reason: 'malformed' };
+    }
+    const iat = Number(iatStr);
+    const exp = Number(expStr);
+    if (exp < now()) return { ok: false, reason: 'expired' };
+    if (iat > now() + 60 || exp - iat > 30 * 86400) return { ok: false, reason: 'bad timestamps' };
+    const expected = createHmac('sha256', pendingKey).update(`j1.${iatStr}.${expStr}.${pk}.${inviteId}`).digest('hex');
+    let match = false;
+    try {
+      match = timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'));
+    } catch {
+      return { ok: false, reason: 'bad signature' };
+    }
+    if (!match) return { ok: false, reason: 'bad signature' };
+    return { ok: true, pubkey: pk, inviteId, exp };
+  }
+
   /** @returns {{ok:true, pubkey:string, exp:number, oiat:number}|{ok:false, reason:string}} */
   function verifyMemberToken(token) {
     if (!token || typeof token !== 'string') return { ok: false, reason: 'no token' };
@@ -687,6 +749,10 @@ export function createAuth(cfg, deps = {}) {
     verifyMemberToken,
     refreshMemberSession,
     handoffOwnerToken,
+    verifyInviteLogin,
+    issueMemberSession,
+    issuePendingToken,
+    verifyPendingToken,
     verifySessionToken,
     refreshSession,
     isClaimed: () => adminHex !== null,
