@@ -231,7 +231,7 @@ export function renderProjectRosters(deps) {
  * Continuum. "Open in full window" is the fallback for signers that do not
  * inject into frames. The agent only returns a bare https origin; it is
  * re-checked here so a bad value can never become a javascript: link or src.
- * @param {{teamMe:Function}} api
+ * @param {{teamMe:Function, teamHandoff?:Function}} api
  * @returns {HTMLElement} a placeholder that fills in (or stays empty)
  */
 export function renderTeamChatLink(api, { projectSlug = null } = {}) {
@@ -264,6 +264,27 @@ export function renderTeamChatLink(api, { projectSlug = null } = {}) {
       frame.contentWindow?.postMessage({ type: 'torii:roster-changed', slug: e.detail?.slug ?? null }, url);
     };
     window.addEventListener(ROSTER_CHANGED_EVENT, onChange);
+    // One sign-in (ADR 0008, Teams repo): the owner is already signed in here,
+    // so a session request from THIS frame (exact source and origin, same
+    // pubkey) is answered with a scoped owner team token. Members never get
+    // one: the agent's handoff route is admin-only and teamMe says owner.
+    let busy = false;
+    const onAsk = async (e) => {
+      if (!slot.isConnected) { window.removeEventListener('message', onAsk); return; }
+      if (e.source !== frame.contentWindow || e.origin !== url || busy) return;
+      const ask = e.data;
+      if (!ask || ask.type !== 'torii:session-request' || ask.pubkey !== r.data?.pubkey || !r.data?.owner) return;
+      if (typeof api.teamHandoff !== 'function') return;
+      busy = true;
+      try {
+        const got = await api.teamHandoff();
+        const d = got?.ok ? got.data : null;
+        if (d && d.pubkey === ask.pubkey && typeof d.token === 'string') {
+          frame.contentWindow?.postMessage({ type: 'torii:session', token: d.token, expires_at: d.expires_at, pubkey: d.pubkey }, url);
+        }
+      } catch { /* the frame falls back to its own sign-in */ } finally { busy = false; }
+    };
+    window.addEventListener('message', onAsk);
   }).catch(() => {});
   return slot;
 }

@@ -548,6 +548,11 @@ export async function teamMe() {
   return req('GET', '/api/team/me');
 }
 
+/** POST /api/team/auth/handoff — admin-only; the owner's scoped team token for the embedded Teams frame (ADR 0008). */
+export async function teamHandoff() {
+  return req('POST', '/api/team/auth/handoff');
+}
+
 /** PUT /api/projects/:slug/roster — replace with a newer owner-signed event. */
 export async function putProjectRoster(slug, event) {
   return req('PUT', `/api/projects/${encodeURIComponent(slug)}/roster`, { event });

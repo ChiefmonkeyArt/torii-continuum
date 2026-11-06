@@ -553,7 +553,12 @@ export function createAuth(cfg, deps = {}) {
   //   - carries no role. Routes re-check the CURRENT roster on every request,
   //     so removing a member takes effect immediately; the token only proves
   //     "this pubkey signed a fresh challenge".
-  //   - no refresh and no cookie: it never reaches nginx auth_request.
+  //   - no cookie: it never reaches nginx auth_request.
+  //   - v0.2.197 (torii-teams ADR 0008): new tokens are
+  //     `m2.oiat.iat.exp.pubkey.sig`, where oiat is the original sign-in. They
+  //     renew without the signer (refreshMemberSession) but never past
+  //     oiat + session_max_lifetime_sec, the owner session's own rule. m1
+  //     tokens still verify until they expire; none are issued.
   const memberKey = createHmac('sha256', cfg.session_secret).update('continuum-member-session-v1').digest();
 
   /**
@@ -582,28 +587,88 @@ export function createAuth(cfg, deps = {}) {
       log.warn({ evt: 'auth.member.fail', ip_prefix: prefix(clientIp || '', 12), pubkey_prefix: prefix(event.pubkey || ''), reason: 'not_member' });
       return { ok: false, code: 'not_member', reason: 'not on any project roster' };
     }
-    const iat = now();
-    const exp = iat + cfg.session_ttl_sec;
-    const payload = `m1.${iat}.${exp}.${event.pubkey}`;
-    const sig = createHmac('sha256', memberKey).update(payload).digest('hex');
+    const issued = issueMemberToken(event.pubkey);
     log.info({ evt: 'auth.member.success', ip_prefix: prefix(clientIp || '', 12), pubkey_prefix: prefix(event.pubkey) });
-    return { ok: true, token: `${payload}.${sig}`, expires_at: exp, pubkey: event.pubkey };
+    return { ok: true, token: issued.token, expires_at: issued.expiresAt, pubkey: event.pubkey };
   }
 
-  /** @returns {{ok:true, pubkey:string, exp:number}|{ok:false, reason:string}} */
+  /** Mint `m2.oiat.iat.exp.pubkey.sig`; exp never passes the absolute cap. */
+  // Absolute member-session lifetime: the owner's setting, never below the TTL.
+  const memberMaxLife = () => Math.max(Number(cfg.session_max_lifetime_sec) || 0, cfg.session_ttl_sec);
+
+  function issueMemberToken(pubkey, originIat = null) {
+    const iat = now();
+    const oiat = Number.isFinite(originIat) ? originIat : iat;
+    const exp = Math.min(iat + cfg.session_ttl_sec, oiat + memberMaxLife());
+    const payload = `m2.${oiat}.${iat}.${exp}.${pubkey}`;
+    const sig = createHmac('sha256', memberKey).update(payload).digest('hex');
+    return { token: `${payload}.${sig}`, expiresAt: exp, originIat: oiat };
+  }
+
+  /**
+   * Slide a member session forward without a new signature (ADR 0008).
+   * Same codes as refreshSession, plus `not_member` once the caller is off
+   * every roster (and is not the owner).
+   * @param {string} token
+   * @param {{isMember:(hex:string)=>Promise<boolean>}} opts
+   */
+  async function refreshMemberSession(token, { isMember } = {}) {
+    const seen = verifyMemberToken(token);
+    if (!seen.ok) {
+      const code = seen.reason === 'expired' ? 'expired' : 'invalid_session';
+      log.warn({ evt: 'auth.member.refresh.reject', code });
+      return { ok: false, code, reason: seen.reason };
+    }
+    if (now() >= seen.oiat + memberMaxLife()) {
+      log.info({ evt: 'auth.member.refresh.reject', code: 'max_lifetime_reached' });
+      return { ok: false, code: 'max_lifetime_reached', reason: 'session reached its maximum lifetime; sign in again' };
+    }
+    const isOwner = Boolean(adminHex) && seen.pubkey === adminHex;
+    if (!isOwner && !(typeof isMember === 'function' && (await isMember(seen.pubkey)))) {
+      log.info({ evt: 'auth.member.refresh.reject', code: 'not_member', pubkey_prefix: prefix(seen.pubkey) });
+      return { ok: false, code: 'not_member', reason: 'not on any project roster' };
+    }
+    const next = issueMemberToken(seen.pubkey, seen.oiat);
+    return { ok: true, token: next.token, expires_at: next.expiresAt };
+  }
+
+  /**
+   * The owner's scoped team token, minted from a live admin session so the
+   * Teams frame inside Continuum needs no second challenge (ADR 0008). It
+   * inherits the admin session's original sign-in, so it never outlives it.
+   * @param {string} adminToken
+   */
+  function handoffOwnerToken(adminToken) {
+    const seen = verifySessionToken(adminToken);
+    if (!seen.ok || !adminHex) return { ok: false, reason: seen.reason || 'unclaimed' };
+    const next = issueMemberToken(adminHex, seen.oiat);
+    log.info({ evt: 'auth.member.handoff', pubkey_prefix: prefix(adminHex) });
+    return { ok: true, token: next.token, expires_at: next.expiresAt, pubkey: adminHex };
+  }
+
+  /** @returns {{ok:true, pubkey:string, exp:number, oiat:number}|{ok:false, reason:string}} */
   function verifyMemberToken(token) {
     if (!token || typeof token !== 'string') return { ok: false, reason: 'no token' };
     const parts = token.split('.');
-    if (parts.length !== 5 || parts[0] !== 'm1') return { ok: false, reason: 'malformed' };
-    const [, iatStr, expStr, pk, sig] = parts;
-    if (!/^\d{1,12}$/.test(iatStr) || !/^\d{1,12}$/.test(expStr) || !HEX64_RE.test(pk)) {
+    let oiatStr, iatStr, expStr, pk, sig;
+    if (parts.length === 5 && parts[0] === 'm1') [, iatStr, expStr, pk, sig] = parts;
+    else if (parts.length === 6 && parts[0] === 'm2') [, oiatStr, iatStr, expStr, pk, sig] = parts;
+    else return { ok: false, reason: 'malformed' };
+    const num = /^\d{1,12}$/;
+    if (!num.test(iatStr) || !num.test(expStr) || (oiatStr !== undefined && !num.test(oiatStr)) || !HEX64_RE.test(pk)) {
       return { ok: false, reason: 'malformed' };
     }
     const iat = Number(iatStr);
     const exp = Number(expStr);
+    const oiat = oiatStr === undefined ? iat : Number(oiatStr);
     if (exp < now()) return { ok: false, reason: 'expired' };
     if (iat > now() + 60 || exp - iat > cfg.session_ttl_sec) return { ok: false, reason: 'bad timestamps' };
-    const expected = createHmac('sha256', memberKey).update(`m1.${iatStr}.${expStr}.${pk}`).digest('hex');
+    // A renewal may not claim to predate, or outlive, the sign-in it descends from.
+    if (oiat > iat || exp > oiat + memberMaxLife()) {
+      return { ok: false, reason: 'bad timestamps' };
+    }
+    const payload = oiatStr === undefined ? `m1.${iatStr}.${expStr}.${pk}` : `m2.${oiatStr}.${iatStr}.${expStr}.${pk}`;
+    const expected = createHmac('sha256', memberKey).update(payload).digest('hex');
     let match = false;
     try {
       match = timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'));
@@ -611,7 +676,7 @@ export function createAuth(cfg, deps = {}) {
       return { ok: false, reason: 'bad signature' };
     }
     if (!match) return { ok: false, reason: 'bad signature' };
-    return { ok: true, pubkey: pk, exp };
+    return { ok: true, pubkey: pk, exp, oiat };
   }
 
   return {
@@ -620,6 +685,8 @@ export function createAuth(cfg, deps = {}) {
     verifyActionSignature,
     verifyMemberLogin,
     verifyMemberToken,
+    refreshMemberSession,
+    handoffOwnerToken,
     verifySessionToken,
     refreshSession,
     isClaimed: () => adminHex !== null,

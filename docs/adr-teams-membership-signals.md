@@ -196,6 +196,20 @@ member's Teams session; the file server checks it with
 roster and 403 otherwise. Like the other signals it grants nothing beyond
 itself: reading files needs the chat's keys, which only the MLS group holds.
 
+## Addendum: one sign-in (v0.2.197-alpha)
+
+Torii-teams ADR 0008 makes Teams ask the signer once. Member tokens become
+`m2.<oiat>.<iat>.<exp>.<pubkey>.<sig>`: `oiat` is the original sign-in and
+`exp = min(iat + session_ttl_sec, oiat + session_max_lifetime_sec)`.
+`POST /api/team/auth/refresh` renews a live token without the signer, re-checks
+the roster every time (403 `not_member` once removed) and refuses past the
+absolute cap (`max_lifetime_reached`). Old `m1` tokens stay valid until they
+expire and renew into `m2`. `POST /api/team/auth/handoff` (admin session only)
+gives the owner's scoped team token to the Team view, which posts it to the
+Teams frame only for a `torii:session-request` from that frame's window, the
+exact Teams origin and the owner's pubkey. The token never opens admin routes.
+No new server state.
+
 ## Alternatives rejected
 
 - **Faster coordinator polling.** Every request is a signer prompt.

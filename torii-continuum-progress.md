@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.197-alpha: one sign-in for Teams (2026-11-06)
+
+Teams now asks the signer once. A team session lasts up to 7 days and renews quietly while the roster still lists the person, so reloads and new tabs need no new signature. The owner, already signed in to Continuum, gets the Team view's chat signed in with no extra prompt. Decision record: torii-teams ADR 0008, summarised in `docs/adr-teams-membership-signals.md`.
+
 ## v0.2.196-alpha: team files stay on your node (2026-11-05)
 
 Images and files sent in Teams are now stored on your own server instead of public file hosts. Continuum gains one small check, `GET /api/team/files-ok`, which the node's file server asks before accepting an upload or delete: only the owner or someone on a project roster may store files. Decision record: torii-teams ADR 0007 (`docs/torii/adr-0007-node-files.md`), summarised in `docs/adr-teams-membership-signals.md`.
