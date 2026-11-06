@@ -216,3 +216,36 @@ test('team chat: opens a project chat on request and forwards roster changes to 
   window.dispatchEvent(new CustomEvent('continuum:roster-changed', { detail: { slug: 'studio' } }));
   expect(post).toHaveBeenCalledWith({ type: 'torii:roster-changed', slug: 'studio' }, 'https://teams.example.org');
 });
+
+test('team chat: hands the owner session only to the exact Teams frame, origin and pubkey', async () => {
+  vi.resetModules();
+  dom = new JSDOM('<main></main>', { url: 'https://test.invalid/continuum/#/team' });
+  for (const key of ['window', 'document', 'CustomEvent', 'MessageEvent']) vi.stubGlobal(key, dom.window[key]);
+  const { renderTeamChatLink } = await import('./team-roster.js');
+  const teamHandoff = vi.fn(async () => ({ ok: true, data: { token: 'm2.t', expires_at: 9, pubkey: OWNER } }));
+  const me = (owner) => async () => ({ ok: true, data: { teams_app_url: 'https://teams.example.org', pubkey: OWNER, owner } });
+  const slot = renderTeamChatLink({ teamMe: me(true), teamHandoff });
+  const member = renderTeamChatLink({ teamMe: me(false), teamHandoff });
+  document.querySelector('main').append(slot, member);
+  await tick();
+  const post = vi.fn();
+  const win = { postMessage: post };
+  Object.defineProperty(slot.querySelector('iframe'), 'contentWindow', { value: win });
+  Object.defineProperty(member.querySelector('iframe'), 'contentWindow', { value: { postMessage: vi.fn() } });
+  const ask = (data, origin, source) => window.dispatchEvent(new dom.window.MessageEvent('message', { data, origin, source }));
+  const req = { type: 'torii:session-request', pubkey: OWNER };
+  ask(req, 'https://evil.example', win);
+  ask(req, 'https://teams.example.org', window);
+  ask({ ...req, pubkey: BOB }, 'https://teams.example.org', win);
+  ask({ type: 'other', pubkey: OWNER }, 'https://teams.example.org', win);
+  await tick();
+  expect(teamHandoff).not.toHaveBeenCalled();
+  ask(req, 'https://teams.example.org', win);
+  await tick();
+  expect(teamHandoff).toHaveBeenCalledTimes(1);
+  expect(post).toHaveBeenCalledWith({ type: 'torii:session', token: 'm2.t', expires_at: 9, pubkey: OWNER }, 'https://teams.example.org');
+  // The member view's frame never triggers a handoff.
+  ask(req, 'https://teams.example.org', member.querySelector('iframe').contentWindow);
+  await tick();
+  expect(teamHandoff).toHaveBeenCalledTimes(1);
+});

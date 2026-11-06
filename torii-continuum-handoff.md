@@ -4,6 +4,10 @@
 
 VPS: Continuum 0.2.196-alpha on `https://continuum.chiefmonkey.art/continuum/` (main domain redirects; `/api/` on both). Suite checkout v0.9.37-alpha. Teams app 0.6.1-torii.7 (images and files on the node's own server at `https://teams.chiefmonkey.art/files/`, node-only CSP; torii-teams ADR 0007). Deployed 2026-11-05 (owner-approved): `deploy-continuum-vps.yml` then `suite-stages-vps.yml` stage teams_app. Live checks: MANIFEST torii.7, node file `files`, CSP `connect-src 'self' blob: https://continuum.chiefmonkey.art wss://relay.chiefmonkey.art`, `PUT /files/upload` 401 without a session.
 
+## v0.2.197-alpha: one sign-in (2026-11-06)
+
+Torii-teams ADR 0008. `agent/core/auth.mjs`: `issueMemberToken(pubkey, oiat)` mints `m2.<oiat>.<iat>.<exp>.<pubkey>.<sig>` (exp capped at `oiat + max(session_max_lifetime_sec, ttl)`); `verifyMemberToken` accepts m1 and m2 and returns `oiat`; `refreshMemberSession` (codes expired, invalid_session, max_lifetime_reached, not_member; owner skips the roster check); `handoffOwnerToken(adminToken)` inherits the admin session's oiat. Routes in `agent/index.mjs`: POST `/api/team/auth/refresh` (rate `authVerifyMax`, no-store, 403 not_member else 401) and POST `/api/team/auth/handoff` (`requireAdmin`). UI: `src/views/team-roster.js` answers `torii:session-request` from the Teams frame only (source, exact origin, owner pubkey from `/api/team/me`) via `teamHandoff()` in `src/data/agent.js`. Tests: `agent/test/team-member.test.js`, `src/views/team-roster.test.js`. Ships with Teams 0.6.1-torii.8 and Suite v0.9.38-alpha.
+
 ## v0.2.196-alpha: node file server gate (2026-11-05)
 
 Torii-teams ADR 0007. New route `GET /api/team/files-ok` (`agent/index.mjs`, before `/api/projects/:slug/teams/chat`): Teams Bearer session via `requireTeamCaller`; 403 `not on any project` unless owner or on a roster; `cache-control: no-store`; rate limit `teamsSignalMax*10`. Its only caller is the Suite's `torii-teams-files` service over loopback (caches answers 60 s). Test in `agent/test/teams-signals.test.js`. Ships with Teams 0.6.1-torii.7 and Suite v0.9.37-alpha.

@@ -989,6 +989,8 @@ app.post(
 // Team roster routes (TEAMS-2a) + member sessions (TEAMS-2a-2).
 //
 // POST /api/team/auth/verify     — roster member signs a challenge → member token
+// POST /api/team/auth/refresh    — renew a member token, no signer (ADR 0008)
+// POST /api/team/auth/handoff    — admin: the owner's scoped token for the Teams frame
 // GET  /api/team/me              — projects the caller is on, role + caps
 // GET  /api/projects/:slug/roster — owner or any member with 'read';
 //                                   projections only for 'manage' (owner)
@@ -1053,6 +1055,37 @@ app.post('/api/team/auth/verify', { config: rateLimitConfig(authVerifyMax, '/api
   }
   // No cookie: a member token must never satisfy nginx auth_request.
   return { token: result.token, expires_at: result.expires_at };
+});
+
+// POST /api/team/auth/refresh — slide a member session forward without the
+// signer (torii-teams ADR 0008). Bearer only, like /api/auth/refresh: the token
+// is the whole claim, refusals keep their codes (only max_lifetime_reached
+// means "sign again"), and it spends the auth rate budget. Re-checks the
+// CURRENT rosters, so someone removed from every project cannot renew.
+app.post('/api/team/auth/refresh', { config: rateLimitConfig(authVerifyMax, '/api/team/auth/refresh') }, async (req, reply) => {
+  const header = req.headers?.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  const result = await auth.refreshMemberSession(token, {
+    isMember: async (pk) => (await rosterStore.memberships(pk)).length > 0,
+  });
+  reply.header('cache-control', 'no-store');
+  if (!result.ok) {
+    const status = result.code === 'not_member' ? 403 : 401;
+    return reply.code(status).send({ ok: false, code: result.code, error: result.reason });
+  }
+  return { token: result.token, expires_at: result.expires_at };
+});
+
+// POST /api/team/auth/handoff — admin only. The owner's scoped team token for
+// the Teams frame embedded in Continuum's Team view, so the owner signs no
+// second challenge (ADR 0008). The admin session never leaves this origin;
+// the frame gets the same member-scoped token /api/team/auth/verify gives.
+app.post('/api/team/auth/handoff', { preHandler: requireAdmin, config: rateLimitConfig(authVerifyMax, '/api/team/auth/handoff') }, async (req, reply) => {
+  const m = (req.headers.authorization || '').match(/^Bearer\s+(.+)$/i);
+  const result = auth.handoffOwnerToken(m ? m[1] : '');
+  reply.header('cache-control', 'no-store');
+  if (!result.ok) return reply.code(401).send({ ok: false, error: result.reason });
+  return { token: result.token, expires_at: result.expires_at, pubkey: result.pubkey };
 });
 
 app.get('/api/team/me', async (req, reply) => {

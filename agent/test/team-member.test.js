@@ -61,7 +61,7 @@ function mkAuth(clock) {
 
 // ── unit ──────────────────────────────────────────────────────────────────
 
-test('member login: members get an m1 token; owner, strangers and replays are refused', async () => {
+test('member login: members get an m2 token; owner, strangers and replays are refused', async () => {
   const clock = { t: NOW };
   const auth = mkAuth(clock);
   const isMember = async (pk) => pk === BOB.pk;
@@ -69,16 +69,16 @@ test('member login: members get an m1 token; owner, strangers and replays are re
   const ev = signed(auth, BOB);
   const ok = await auth.verifyMemberLogin(ev, { isMember });
   assert.equal(ok.ok, true);
-  assert.match(ok.token, /^m1\.\d+\.\d+\.[0-9a-f]{64}\.[0-9a-f]{64}$/);
+  assert.match(ok.token, /^m2\.\d+\.\d+\.\d+\.[0-9a-f]{64}\.[0-9a-f]{64}$/);
   assert.equal(ok.expires_at, NOW + TTL);
   // Replay of the same signed challenge: consumed.
   assert.equal((await auth.verifyMemberLogin(ev, { isMember })).code, 'challenge_expired');
 
-  // The owner gets a scoped m1 token even when isMember says no (no rosters yet).
+  // The owner gets a scoped member token even when isMember says no (no rosters yet).
   const own = await auth.verifyMemberLogin(signed(auth, OWNER), { isMember: async () => false });
   assert.equal(own.ok, true);
   assert.equal(auth.verifyMemberToken(own.token).pubkey, OWNER.pk);
-  assert.equal(auth.verifySessionToken(own.token).ok, false, 'owner m1 is not an admin session');
+  assert.equal(auth.verifySessionToken(own.token).ok, false, 'owner member token is not an admin session');
   assert.equal((await auth.verifyMemberLogin(signed(auth, EVE), { isMember })).code, 'not_member');
   // A refused stranger still burns the challenge (no free retries on one sig).
   const eveEv = signed(auth, EVE);
@@ -146,10 +146,10 @@ test('store.memberships lists projects with effective role and skips junk files'
 
 // ── routes ────────────────────────────────────────────────────────────────
 
-async function setup(over = {}) {
+async function setup(over = {}, clock = { t: NOW }) {
   const dir = mkdtempSync(join(tmpdir(), 'team-routes-'));
   const c = { ...cfg(), ...over };
-  const auth = createAuth(c, { now: () => NOW, log: silent });
+  const auth = createAuth(c, { now: () => clock.t, log: silent });
   const rosterStore = createRosterStore({ dir, now: () => NOW });
   const { app } = await buildApp(c, { auth, rosterStore });
   const owner = await auth.verifyChallenge(signed(auth, OWNER), '198.51.100.4');
@@ -161,16 +161,16 @@ async function setup(over = {}) {
   return { app, auth, rosterStore, OH, login, H, done: async () => { await app.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
-test('route: member and owner sign-in return m1 tokens without a cookie; strangers get 403', async () => {
+test('route: member and owner sign-in return m2 tokens without a cookie; strangers get 403', async () => {
   const { login, done } = await setup();
   try {
     const ok = await login(BOB);
     assert.equal(ok.statusCode, 200);
-    assert.match(ok.json().token, /^m1\./);
+    assert.match(ok.json().token, /^m2\./);
     assert.equal(ok.headers['set-cookie'], undefined, 'member tokens must never reach nginx auth_request');
     const own = await login(OWNER);
     assert.equal(own.statusCode, 200);
-    assert.match(own.json().token, /^m1\./);
+    assert.match(own.json().token, /^m2\./);
     assert.equal(own.headers['set-cookie'], undefined);
     const eve = await login(EVE);
     assert.equal(eve.statusCode, 403);
@@ -303,5 +303,120 @@ test('route: the owner m1 token is scoped: owner role on rosters, never admin', 
       assert.notEqual((await app.inject({ method: 'GET', url, headers: H })).statusCode, 200, url);
     }
     assert.equal((await app.inject({ method: 'POST', url: '/api/auth/refresh', headers: H })).statusCode, 401);
+  } finally { await done(); }
+});
+
+// ── ADR 0008: lasting member sessions and the owner handoff ────────────────
+
+const legacyM1 = (pk, iat, exp) => {
+  const key = createHmac('sha256', 'd'.repeat(64)).update('continuum-member-session-v1').digest();
+  const payload = `m1.${iat}.${exp}.${pk}`;
+  return `${payload}.${createHmac('sha256', key).update(payload).digest('hex')}`;
+};
+
+test('m2 renewal keeps the original sign-in and stops at the absolute cap', async () => {
+  const clock = { t: NOW };
+  const auth = mkAuth(clock); // TTL 3600, max lifetime 86400
+  const isMember = async (pk) => pk === BOB.pk;
+  let { token } = await auth.verifyMemberLogin(signed(auth, BOB), { isMember });
+  assert.equal(auth.verifyMemberToken(token).oiat, NOW);
+  for (let i = 1; i <= 23; i++) {
+    clock.t = NOW + i * 3600 - 60;
+    const r = await auth.refreshMemberSession(token, { isMember });
+    assert.equal(r.ok, true, `renewal ${i}`);
+    assert.equal(auth.verifyMemberToken(r.token).oiat, NOW);
+    assert.ok(r.expires_at <= NOW + 86400);
+    token = r.token;
+  }
+  clock.t = NOW + 86340 - 30; // last token still live, cap within one TTL
+  const last = await auth.refreshMemberSession(token, { isMember });
+  assert.equal(last.expires_at, NOW + 86400, 'clamped to the cap, not the TTL');
+  clock.t = NOW + 86400;
+  assert.equal((await auth.refreshMemberSession(last.token, { isMember })).code, 'max_lifetime_reached');
+  // A forged oiat is caught by the MAC; an exp past the cap by the shape check.
+  assert.equal(auth.verifyMemberToken(token.replace(`m2.${NOW}.`, `m2.${NOW + 50}.`)).ok, false);
+  clock.t = NOW;
+  assert.equal(auth.verifyMemberToken(`m2.${NOW - 86400}.${NOW}.${NOW + 60}.${BOB.pk}.${'0'.repeat(64)}`).reason, 'bad timestamps');
+});
+
+test('renewal is refused off every roster, expired or malformed; owner always renews', async () => {
+  const clock = { t: NOW };
+  const auth = mkAuth(clock);
+  const bob = await auth.verifyMemberLogin(signed(auth, BOB), { isMember: async () => true });
+  assert.equal((await auth.refreshMemberSession(bob.token, { isMember: async () => false })).code, 'not_member');
+  const own = await auth.verifyMemberLogin(signed(auth, OWNER), { isMember: async () => false });
+  assert.equal((await auth.refreshMemberSession(own.token, { isMember: async () => false })).ok, true);
+  assert.equal((await auth.refreshMemberSession('nope', { isMember: async () => true })).code, 'invalid_session');
+  clock.t = NOW + TTL + 1;
+  assert.equal((await auth.refreshMemberSession(bob.token, { isMember: async () => true })).code, 'expired');
+});
+
+test('legacy m1 tokens verify until expiry and renew into m2', async () => {
+  const clock = { t: NOW };
+  const auth = mkAuth(clock);
+  const m1 = legacyM1(BOB.pk, NOW, NOW + TTL);
+  const v = auth.verifyMemberToken(m1);
+  assert.equal(v.ok, true);
+  assert.equal(v.oiat, NOW);
+  const r = await auth.refreshMemberSession(m1, { isMember: async () => true });
+  assert.match(r.token, /^m2\./);
+  assert.equal(auth.verifyMemberToken(r.token).oiat, NOW);
+});
+
+test('handoff: an admin session yields the owner member token, capped by the admin login', async () => {
+  const clock = { t: NOW };
+  const auth = mkAuth(clock);
+  const admin = await auth.verifyChallenge(signed(auth, OWNER), '198.51.100.4');
+  clock.t = NOW + 600;
+  const h = auth.handoffOwnerToken(admin.token);
+  assert.equal(h.ok, true);
+  assert.equal(h.pubkey, OWNER.pk);
+  const v = auth.verifyMemberToken(h.token);
+  assert.equal(v.pubkey, OWNER.pk);
+  assert.equal(v.oiat, NOW, 'inherits the admin sign-in time');
+  assert.equal(auth.verifySessionToken(h.token).ok, false, 'never an admin session');
+  const member = await auth.verifyMemberLogin(signed(auth, BOB), { isMember: async () => true });
+  assert.equal(auth.handoffOwnerToken(member.token).ok, false, 'a member token cannot hand off');
+});
+
+test('route: /api/team/auth/refresh renews, refuses removed members, keeps codes', async () => {
+  const clock = { t: NOW };
+  const { app, rosterStore, login, done } = await setup({}, clock);
+  try {
+    const vic = (await login(VIC)).json().token;
+    const bob = (await login(BOB)).json().token;
+    const refresh = (t) => app.inject({ method: 'POST', url: '/api/team/auth/refresh', headers: t ? { authorization: `Bearer ${t}` } : {} });
+    clock.t = NOW + 1800;
+    const r = await refresh(bob);
+    assert.equal(r.statusCode, 200);
+    assert.match(r.json().token, /^m2\./);
+    assert.equal(r.json().expires_at, NOW + 1800 + TTL);
+    assert.equal(r.headers['cache-control'], 'no-store');
+    assert.equal(r.headers['set-cookie'], undefined);
+    assert.equal((await refresh('')).statusCode, 401);
+    assert.equal((await refresh('m2.x')).json().code, 'invalid_session');
+    // VIC dropped from alpha (their only roster): renewal is refused.
+    await rosterStore.put('alpha', rosterEv('alpha', [['p', BOB.pk, 'maintainer']], NOW + 10), OWNER.pk);
+    const gone = await refresh(vic);
+    assert.equal(gone.statusCode, 403);
+    assert.equal(gone.json().code, 'not_member');
+  } finally { await done(); }
+});
+
+test('route: /api/team/auth/handoff is admin-only and returns a scoped owner token', async () => {
+  const { app, OH, H, done } = await setup();
+  try {
+    const url = '/api/team/auth/handoff';
+    assert.equal((await app.inject({ method: 'POST', url })).statusCode, 401);
+    assert.equal((await app.inject({ method: 'POST', url, headers: await H(BOB) })).statusCode, 401);
+    const r = await app.inject({ method: 'POST', url, headers: OH });
+    assert.equal(r.statusCode, 200);
+    assert.equal(r.json().pubkey, OWNER.pk);
+    assert.equal(r.headers['cache-control'], 'no-store');
+    const me = await app.inject({ method: 'GET', url: '/api/team/me', headers: { authorization: `Bearer ${r.json().token}` } });
+    assert.equal(me.statusCode, 200);
+    assert.equal(me.json().pubkey, OWNER.pk);
+    // The handed-off token never opens admin routes.
+    assert.equal((await app.inject({ method: 'POST', url, headers: { authorization: `Bearer ${r.json().token}` } })).statusCode, 401);
   } finally { await done(); }
 });
