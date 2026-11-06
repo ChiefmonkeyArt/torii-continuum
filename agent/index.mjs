@@ -1293,7 +1293,8 @@ app.post('/api/projects/:slug/invites', { preHandler: requireAdmin, config: rate
   const slug = req.params.slug;
   if (!PROJECT_SLUG_RE.test(String(slug || ''))) return reply.code(400).send({ error: 'bad project slug' });
   const origin = typeof cfg.teams?.app_url === 'string' ? cfg.teams.app_url.replace(/\/+$/, '') : '';
-  if (!/^https:\/\/[^/\s]+$/.test(origin)) return reply.code(409).send({ error: 'Teams is not installed on this node', code: 'no_teams_app' });
+  // https only, except loopback for local development.
+  if (!/^https:\/\/[^/\s]+$/.test(origin) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/.test(origin)) return reply.code(409).send({ error: 'Teams is not installed on this node', code: 'no_teams_app' });
   if (!projectExists(slug) && !(await rosterStore.get(slug))) return reply.code(404).send({ error: 'no such project' });
   const b = req.body || {};
   if (b.kind === 'named' && !(await onProjectRoster(slug, String(b.pubkey || '')))) {
@@ -1348,7 +1349,7 @@ app.post('/api/team/invite/peek', { config: rateLimitConfig(authVerifyMax, '/api
   let ownerName = '';
   if (ownerHex) {
     try {
-      const [p] = await teamProfiles.getProfiles([ownerHex]);
+      const p = (await teamProfiles.getProfiles([ownerHex]))?.[ownerHex];
       ownerName = p?.display_name || p?.name || '';
     } catch { /* name is optional */ }
   }

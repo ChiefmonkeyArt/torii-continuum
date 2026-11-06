@@ -139,7 +139,7 @@ async function setup(over = {}, clock = { t: NOW }) {
   const rosterStore = createRosterStore({ dir: join(dir, 'team'), now: () => clock.t });
   const teamsState = createTeamsState({ dir: join(dir, 'teams'), now: () => clock.t });
   const teamInvites = createTeamInvites({ dir: join(dir, 'teams'), now: () => clock.t });
-  const teamProfiles = { getProfiles: async (l) => l.map((pk) => ({ pubkey: pk, display_name: pk === OWNER.pk ? 'Olive' : '', name: '' })), avatar: async () => null, search: async () => [], close() {} };
+  const teamProfiles = { getProfiles: async (l) => Object.fromEntries(l.map((pk) => [pk, { pubkey: pk, display_name: pk === OWNER.pk ? 'Olive' : '', name: '' }])), avatar: async () => null, search: async () => [], close() {} };
   const { app } = await buildApp(c, { auth, rosterStore, teamsState, teamInvites, teamProfiles });
   const owner = await auth.verifyChallenge(signed(auth, OWNER), '198.51.100.4');
   const OH = { authorization: `Bearer ${owner.token}` };
@@ -278,6 +278,13 @@ test('route: no Teams app configured → invites cannot be created', async () =>
   try {
     assert.equal((await make({ kind: 'open' })).json().code, 'no_teams_app');
   } finally { await done(); }
+  for (const [url, ok] of [['http://teams.example.test', false], ['http://127.0.0.1:8801', true], ['https://teams.example.test/', true]]) {
+    const s = await setup({ teams: { app_url: url } });
+    try {
+      const r = await s.make({ kind: 'open' });
+      assert.equal(r.statusCode === 200, ok, url);
+    } finally { await s.done(); }
+  }
 });
 
 test('route: the invite secret never reaches the request log', async () => {
