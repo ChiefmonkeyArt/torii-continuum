@@ -57,6 +57,7 @@ import { createAudit } from './lib/audit.mjs';
 import { createRosterStore, project as projectRoster, effectiveRole, can as rosterCan, MAX_HUMANS } from './lib/roster.mjs';
 import { createTeamsState } from './lib/teams-state.mjs';
 import { createTeamInvites, INVITE_ID_RE, verifyInviteGrant } from './lib/team-invites.mjs';
+import { createTeamGroupInfo } from './lib/team-groupinfo.mjs';
 import { createTeamProfiles, DEFAULT_PROFILE_RELAYS, DEFAULT_SEARCH_RELAYS } from './lib/team-profiles.mjs';
 import { getConstitution } from './lib/constitution.mjs';
 
@@ -244,6 +245,8 @@ const rosterStore = deps.rosterStore ?? createRosterStore({ dir: join(MEMORY_ROO
 const teamsState = deps.teamsState ?? createTeamsState({ dir: join(MEMORY_ROOT, 'teams') });
 // Invite links (torii-teams ADR 0009): memory/teams/invites.json, hashes only.
 const teamInvites = deps.teamInvites ?? createTeamInvites({ dir: join(MEMORY_ROOT, 'teams') });
+// Join cards (torii-teams ADR 0011): memory/teams/groupinfo/<slug>.json, no secrets.
+const teamGroupInfo = deps.teamGroupInfo ?? createTeamGroupInfo({ dir: join(MEMORY_ROOT, 'teams', 'groupinfo') });
 const wssList = (v) => (Array.isArray(v) ? v.filter((u) => typeof u === 'string' && /^wss:\/\/[^\s]+$/.test(u)).slice(0, 8) : null);
 const teamProfiles = deps.teamProfiles ?? createTeamProfiles({
   profileRelays: wssList(cfg.teams?.profile_relays)
@@ -1197,6 +1200,38 @@ app.post('/api/projects/:slug/teams/chat', {
   return r;
 });
 
+// Join cards (torii-teams ADR 0011). Any member uploads the chat's GroupInfo
+// after an epoch change; someone on the signed list, or admitted by a grant,
+// fetches it with the owner-signed proof that lets them in. Nobody else
+// gets either.
+//   PUT /api/projects/:slug/teams/groupinfo {group_id, epoch, group_info, transcript_hash}
+//   GET /api/projects/:slug/teams/groupinfo -> {group_id, epoch, group_info, history, proof}
+app.put('/api/projects/:slug/teams/groupinfo', {
+  preHandler: requireRole('read'), config: rateLimitConfig(teamsSignalMax, '/api/projects/:slug/teams/groupinfo'),
+  bodyLimit: 128 * 1024,
+}, async (req, reply) => {
+  const chat = (await teamsState.forRoster(req.params.slug, [])).chat;
+  if (!chat?.group_id || chat.group_id !== req.body?.group_id) return reply.code(409).send({ error: 'not this project\'s chat', code: 'wrong_group' });
+  const r = await teamGroupInfo.put(req.params.slug, req.body || {});
+  if (!r.ok) return reply.code(400).send({ error: r.code, code: r.code });
+  return r;
+});
+
+app.get('/api/projects/:slug/teams/groupinfo', {
+  preHandler: requireRole('read'), config: rateLimitConfig(teamsSignalMax, '/api/projects/:slug/teams/groupinfo'),
+}, async (req, reply) => {
+  reply.header('cache-control', 'no-store');
+  const chat = (await teamsState.forRoster(req.params.slug, [])).chat;
+  const card = await teamGroupInfo.get(req.params.slug);
+  if (!chat?.group_id || !card || card.group_id !== chat.group_id) return reply.code(404).send({ error: 'no join card yet', code: 'none' });
+  const stored = req.team.stored;
+  const pk = req.team.pubkey;
+  let proof = null;
+  if (stored?.event?.tags?.some((t) => t[0] === 'p' && t[1] === pk)) proof = stored.event;
+  else proof = (stored?.admitted ?? []).find((a) => a.pubkey === pk && a.grant)?.grant ?? null;
+  return { group_id: card.group_id, epoch: card.epoch, group_info: card.group_info, history: card.history, proof };
+});
+
 app.post('/api/projects/:slug/teams/members', {
   preHandler: requireRole('manage'), config: rateLimitConfig(teamsSignalMax, '/api/projects/:slug/teams/members'),
 }, async (req, reply) => {
@@ -1310,7 +1345,10 @@ app.post('/api/projects/:slug/invites', { preHandler: requireAdmin, config: rate
     // "Let them straight in" (ADR 0010): the owner's signed grant sets every term.
     const g = verifyInviteGrant(b.grant, { ownerHex: ownerHexFromNpub(req.session.npub), slug, now: Math.floor(Date.now() / 1000) });
     if (!g.ok) return reply.code(400).send({ error: 'the signed grant does not match this link', code: 'bad_grant' });
-    o = { slug, kind: 'open', role: g.role, ttl_sec: g.ttl_sec, uses: g.uses, auto: true, grant_id: g.grant_id, id: g.id };
+    const ge = b.grant;
+    // Kept so someone it admits can prove it to the chat (ADR 0011).
+    const grant = { id: ge.id, pubkey: ge.pubkey, created_at: ge.created_at, kind: ge.kind, tags: ge.tags, content: ge.content, sig: ge.sig };
+    o = { slug, kind: 'open', role: g.role, ttl_sec: g.ttl_sec, uses: g.uses, auto: true, grant_id: g.grant_id, id: g.id, grant };
   }
   const r = await teamInvites.create(o);
   if (!r.ok) return reply.code(r.code === 'too_many' ? 409 : 400).send({ error: r.code, code: r.code });
@@ -1392,7 +1430,7 @@ app.post('/api/team/invite/claim', { config: rateLimitConfig(authVerifyMax, '/ap
   if (inv.auto) {
     // Straight in (ADR 0010): one use of the owner's grant admits one person.
     if (!(await teamInvites.useAuto(b.id, b.secret)).ok) return inviteGone(reply);
-    const a = await rosterStore.admit(inv.slug, { pubkey: v.pubkey, role: inv.role, invite: inv.id, ownerHex: ownerHexFromNpub(auth.adminNpub()) });
+    const a = await rosterStore.admit(inv.slug, { pubkey: v.pubkey, role: inv.role, invite: inv.id, grant: inv.grant, ownerHex: ownerHexFromNpub(auth.adminNpub()) });
     if (!a.ok) return inviteGone(reply);
     await audit.append('team.invite.admit', { slug: inv.slug });
     const s = auth.issueMemberSession(v.pubkey);

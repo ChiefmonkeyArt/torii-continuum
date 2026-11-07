@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.200-alpha: join while the owner is away (2026-11-07)
+
+People you let in can now join the team chat whenever they like, even when nobody else is online. Continuum keeps a "join card" for each project chat that only people on the member list can fetch; it holds no key and can't read the chat. Decision record: torii-teams ADR 0011, summarised in `docs/adr-team-collaboration.md`.
+
 ## v0.2.199-alpha: joining that works (2026-11-06)
 
 After the first real-team test, joining is fixed. A personal invite lets the person straight in with one click. A group link asks the owner first by default, or can let people straight in, and it now works for as many people as the project has room for instead of one. People waiting to join show in the account menu in the bottom-left corner, which also shows the owner's own Nostr picture and name. The team chat keeps adding people while Continuum is open on any page, and it no longer shows its own profile picture or Sign out button. "Roster" is now "Members". Decision record: torii-teams ADR 0010, summarised in `docs/adr-team-collaboration.md`.
