@@ -123,6 +123,14 @@ Status: **Accepted** for the Suite PR; no Continuum code or VPS change.
 - **FIPS** moves to v0.5.3 in the Suite (the trial's version).
 - **Rollout.** The trial also binds :7334, so the installer refuses while it runs. Deploy to chiefmonkey.art only after the Plebeian test and trial teardown, with owner approval; the trial coordinator key can be carried over to keep its groups.
 
+## Addendum: join while the owner is away (v0.2.200-alpha, 2026-11-07)
+
+Status: **Accepted**. Decision record: torii-teams `docs/torii/adr-0011-join-while-owner-away.md`.
+
+- **Join card, not a key.** Members' Teams clients upload the chat's MLS GroupInfo after each epoch change: `PUT /api/projects/:slug/teams/groupinfo` `{group_id, epoch, group_info, transcript_hash}` (member session; only the project's recorded chat, else `409 wrong_group`; 128 KB body, 64 KB card). The node keeps the highest epoch and the first transcript hash per epoch (`history`, last 32; a different hash for a known epoch is refused). Stored at `memory/teams/groupinfo/<slug>.json`, 0600. GroupInfo holds no secret; the node never holds a chat key.
+- **Who gets it.** `GET` the same path returns `{group_id, epoch, group_info, history, proof}` to people on the signed member list (proof = the signed roster event) or admitted by a straight-in grant (proof = the grant, now kept with the admitted entry). Everyone else is refused; `404 none` before the first upload; `no-store`.
+- **The rest is in Teams.** The newcomer's client makes an MLS external commit with that proof and a kind-27099 binding; every member's client checks it the same way. The owner's client, after removing someone, raises a member-list floor in the group settings so an older list can't let them back in.
+
 ## Addendum: joining that works (v0.2.199-alpha, 2026-11-06)
 
 Status: **Accepted**. Decision record: torii-teams `docs/torii/adr-0010-joining-that-works.md`, after the first real-team test of invite links.

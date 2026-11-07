@@ -121,7 +121,7 @@ export function createTeamInvites({ dir, now = () => Math.floor(Date.now() / 100
 
   /**
    * @param {{slug:string, kind:'open'|'named', pubkey?:string, role?:string, ttl_sec?:number, uses?:number,
-   *   auto?:boolean, grant_id?:string, id?:string}} o  `id` lets an auto link use the id its grant was signed for
+   *   auto?:boolean, grant_id?:string, id?:string, grant?:object}} o  `grant` is the signed event (ADR 0011 proof)  `id` lets an auto link use the id its grant was signed for
    * @returns {Promise<{ok:true, id:string, secret:string, expires_at:number}|{ok:false, code:string}>}
    */
   function create(o) {
@@ -154,7 +154,7 @@ export function createTeamInvites({ dir, now = () => Math.floor(Date.now() / 100
         id, slug, kind, role, pubkey: kind === 'named' ? o.pubkey : undefined,
         secret_sha256: sha256(secret).toString('hex'),
         created_at: t, expires_at: t + ttl, uses_left: uses, requests: [], revoked: false,
-        ...(auto ? { auto: true, grant_id: o.grant_id } : {}),
+        ...(auto ? { auto: true, grant_id: o.grant_id, ...(o.grant?.id === o.grant_id ? { grant: o.grant } : {}) } : {}),
       };
       return { result: { ok: true, id, secret, expires_at: t + ttl } };
     });

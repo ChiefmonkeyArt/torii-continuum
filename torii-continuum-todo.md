@@ -119,9 +119,12 @@
       grant), places default to seats left, one Teams frame while Continuum
       is open, waiting alert and owner avatar in the account menu. Needs
       Teams 0.6.1-torii.10 (Suite v0.9.40-alpha).
+    - [x] Join while the owner is away (v0.2.200-alpha, torii-teams ADR 0011):
+      node keeps the chat's GroupInfo join card; newcomers self-join with
+      the owner-signed proof. Needs Teams 0.6.1-torii.12 (Suite v0.9.42-alpha).
     - [ ] Invite follow-ups: QR code for links; invite step in the new-project
-      chat setup; adding people with no Continuum open at all (node-held
-      group key, separate ADR).
+      chat setup; any member's client removing people who are off the newest
+      signed list (separate ADR).
     - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
       add/remove, announcement maintainers (needs TEAMS-2b services).
   - [ ] TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path,

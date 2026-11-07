@@ -253,7 +253,7 @@ export function createRosterStore({ dir, audit = null, now = () => Math.floor(Da
    * idempotent for someone already on the project.
    * @returns {Promise<{ok:true, already?:boolean}|{ok:false, code:'full'|'bad_request'}>}
    */
-  function admit(slug, { pubkey, role, invite, ownerHex }) {
+  function admit(slug, { pubkey, role, invite, grant, ownerHex }) {
     if (!SLUG_RE.test(String(slug || '')) || !HEX64.test(String(pubkey || '')) || !LISTED_ROLES.has(role) || !HEX64.test(String(ownerHex || ''))) {
       return Promise.resolve({ ok: false, code: 'bad_request' });
     }
@@ -266,7 +266,10 @@ export function createRosterStore({ dir, audit = null, now = () => Math.floor(Da
       }
       const humans = signed.filter((m) => m.role !== 'agent').length + admitted.length;
       if (humans >= MAX_HUMANS) return { ok: false, code: 'full' };
-      admitted.push({ pubkey, role, at: now(), invite: String(invite || '') });
+      const entry = { pubkey, role, at: now(), invite: String(invite || '') };
+      // The owner's signed grant: their proof when joining the chat (torii-teams ADR 0011).
+      if (grant && typeof grant === 'object' && grant.pubkey === ownerHex && HEX64.test(String(grant.id || ''))) entry.grant = grant;
+      admitted.push(entry);
       await writeRaw(slug, { ...raw, owner: raw.owner ?? ownerHex, admitted });
       if (audit) await audit.append('team.roster.admit', { slug, members: humans + 1 });
       return { ok: true };
