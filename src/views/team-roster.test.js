@@ -238,6 +238,9 @@ test('invites: Copy group link (ask me first) fills the team, copies it and show
   expect(document.querySelector('.team-invite-shown input').value).toBe(URL1);
   expect(document.body.textContent).toContain('Link copied');
   expect(document.body.textContent).toContain('Shown once');
+  // A QR to scan with a phone (ADR 0012 §1), drawn on demand.
+  button('Show QR').click();
+  expect(document.querySelector('.team-invite-shown .invite-qr')).not.toBeNull();
   // Switching project forgets the shown link.
   document.querySelector('select[aria-label="Project"]').dispatchEvent(new dom.window.Event('change'));
   await tick();

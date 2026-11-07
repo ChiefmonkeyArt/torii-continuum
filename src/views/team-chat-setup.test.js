@@ -10,13 +10,14 @@ const tick = async () => { for (let i = 0; i < 8; i++) await new Promise((r) => 
 const button = (name) => [...document.querySelectorAll('button')].find((el) => el.textContent === name);
 afterEach(() => { dom?.window.close(); vi.unstubAllGlobals(); vi.resetModules(); });
 
-async function boot({ signer, put } = {}) {
+async function boot({ signer, put, extra = {} } = {}) {
   vi.resetModules();
   dom = new JSDOM('<main></main>', { url: 'https://test.invalid/continuum/#/projects' });
   for (const key of ['window', 'document', 'localStorage', 'sessionStorage', 'CustomEvent']) vi.stubGlobal(key, dom.window[key]);
   const api = {
     putProjectRoster: put || vi.fn(async (_s, event) => ({ ok: true, data: { roster: { members: [], created_at: event.created_at } } })),
     peopleSearch: vi.fn(async () => ({ ok: true, data: { results: [{ pubkey: BOB, name: 'bob', display_name: 'Bob', nip05: '', avatar: false }] } })),
+    ...extra,
   };
   const navigate = vi.fn();
   const { openTeamChatSetup, TEAM_CHAT_PROJECT_KEY } = await import('./team-chat-setup.js');
@@ -69,4 +70,51 @@ test('new project: no signer or an existing roster keeps the dialog open with a 
   await tick();
   expect(document.body.textContent).toContain('already has members');
   expect(navigate).not.toHaveBeenCalled();
+});
+
+test('new project with invite links: Create chat shows each picked person their own link and QR, then Open chat', async () => {
+  const signEvent = vi.fn(async (e) => ({ ...e, pubkey: OWNER, id: 'f'.repeat(64), sig: 'e'.repeat(128) }));
+  const createInvite = vi.fn(async (_slug, body) => ({ ok: true, data: { url: `https://t.invalid/i/${body.kind}#s`, expires_at: 1_900_100_000 } }));
+  const { navigate, api } = await boot({ signer: { signEvent }, extra: { createInvite } });
+  const input = document.querySelector('.people-picker input');
+  input.value = 'bob';
+  input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+  await tick();
+  document.querySelector('.people-result').click();
+  button('Create chat').click();
+  await tick();
+  expect(api.putProjectRoster).toHaveBeenCalled();
+  expect(createInvite).toHaveBeenCalledWith('studio', { kind: 'named', pubkey: BOB });
+  expect(navigate).not.toHaveBeenCalled();
+  const field = document.querySelector('input[aria-label="Personal invite link"]');
+  expect(field.value).toBe('https://t.invalid/i/named#s');
+  expect(document.body.textContent).toContain('Only they can use it');
+  button('Show QR').click();
+  expect(document.querySelector('.invite-qr')).not.toBeNull();
+  expect(button('Hide QR')).toBeTruthy();
+
+  button('Make a group link').click();
+  await tick();
+  expect(createInvite).toHaveBeenLastCalledWith('studio', { kind: 'open', uses: 10 });
+  expect(document.querySelector('input[aria-label="Group invite link"]').value).toBe('https://t.invalid/i/open#s');
+
+  button('Open chat').click();
+  expect(navigate).toHaveBeenCalledWith('/team');
+  expect(document.querySelector('.modal')).toBeNull();
+});
+
+test('new project with invite links: a refused link shows why and Open chat still works', async () => {
+  const signEvent = vi.fn(async (e) => ({ ...e, pubkey: OWNER, id: 'f'.repeat(64), sig: 'e'.repeat(128) }));
+  const createInvite = vi.fn(async () => ({ ok: false, code: 'no_teams_app' }));
+  const { navigate } = await boot({ signer: { signEvent }, extra: { createInvite } });
+  const input = document.querySelector('.people-picker input');
+  input.value = 'bob';
+  input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+  await tick();
+  document.querySelector('.people-result').click();
+  button('Create chat').click();
+  await tick();
+  expect(document.body.textContent).toContain('Install Torii Teams');
+  button('Open chat').click();
+  expect(navigate).toHaveBeenCalledWith('/team');
 });

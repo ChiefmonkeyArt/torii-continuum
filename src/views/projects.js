@@ -5,7 +5,7 @@ import { navigate } from '../router.js';
 import { setChatContext } from '../chat.js';
 import { renderSidebar } from '../shell.js';
 import { isDemo, demoSource, demoBanner, demoPath, goToLogin } from '../demo/demo-mode.js';
-import { teamMe, putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob } from '../data/agent.js';
+import { teamMe, putProjectRoster, peopleSearch, createInvite, teamProfiles, teamAvatarBlob } from '../data/agent.js';
 import { openTeamChatSetup } from './team-chat-setup.js';
 
 export function renderProjects(mount, opts = {}) {
@@ -194,7 +194,7 @@ async function offerTeamChat(project) {
   if (!r?.ok || !r.data?.owner || !r.data?.teams_app_url) return;
   openTeamChatSetup({
     project: { slug: project.slug, name: project.name },
-    api: { putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob },
+    api: { putProjectRoster, peopleSearch, createInvite, teamProfiles, teamAvatarBlob },
     navigate,
   });
 }

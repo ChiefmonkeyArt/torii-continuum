@@ -28,6 +28,7 @@ import { readSessionMarker } from '../auth.js';
 import { signAndPutRoster } from '../lib/sign-roster.js';
 import { loadProfiles, personEl, displayName, setPeopleApi } from '../lib/people.js';
 import { renderPeoplePicker } from './people-picker.js';
+import { inviteShare } from './invite-share.js';
 import { ROSTER_CHANGED_EVENT, startTeamsFrame, dockTeamsFrame, teamsOrigin, chatPath, safeAppOrigin, navigateTeamsFrame } from '../lib/teams-frame.js';
 
 const ROLE_OPTS = [
@@ -205,11 +206,9 @@ export function renderProjectRosters(deps) {
     invitesBox.appendChild(h('strong', { text: 'Group link' }));
     invitesBox.appendChild(h('div', { class: 'muted', style: 'font-size: 12.5px; margin: 4px 0 8px;', text: 'One link for the whole group. For one person, use Add person above.' }));
     if (shown) {
-      const field = h('input', { type: 'text', readonly: 'readonly', value: shown.url, 'aria-label': 'Invite link', style: 'width: 100%; font-family: var(--font-mono, monospace); font-size: 12px;' });
-      field.addEventListener('focus', () => field.select());
       invitesBox.appendChild(h('div', { class: 'team-invite-shown', style: 'margin-bottom: 8px;' }, [
-        field,
-        h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;', text: `${shown.who ? `For ${shown.who}. ` : ''}Works until ${expiry(shown.expires_at)}. Shown once.` }),
+        inviteShare({ url: shown.url, onCopied: (ok) => setStatus(ok ? 'Link copied.' : 'Copy the link by hand.', ok ? '' : 'error') }),
+        h('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;', text: `${shown.who ? `For ${shown.who}. ` : ''}Works until ${expiry(shown.expires_at)}. Shown once; send it or scan the QR.` }),
       ]));
     }
     for (const inv of invites.filter((i) => i.kind === 'open')) {
@@ -272,7 +271,7 @@ export function renderProjectRosters(deps) {
       if (!(await save())) return;
     }
     const r = await api.decideInvite(slug, inv.id, pubkey, true);
-    setStatus(r.ok ? `Let in. ${displayName(pubkey)} is added to the chat while your Continuum is open.` : (r.reason || 'Could not let them in.'), r.ok ? '' : 'error');
+    setStatus(r.ok ? `Let in. ${displayName(pubkey)} can open the chat now.` : (r.reason || 'Could not let them in.'), r.ok ? '' : 'error');
     await loadInvites();
   }
 

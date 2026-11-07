@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.201-alpha: invite QR codes and the invite step (2026-11-07)
+
+Invite links now come with a QR code to scan from a phone. When you start a project's team chat, the next screen gives each person you picked their own invite link, with an option to make a group link. Teams also now removes people you took off a project even while you're away, as long as any teammate has it open. Decision record: torii-teams ADR 0012, summarised in `docs/adr-team-collaboration.md`.
+
 ## v0.2.200-alpha: join while the owner is away (2026-11-07)
 
 People you let in can now join the team chat whenever they like, even when nobody else is online. Continuum keeps a "join card" for each project chat that only people on the member list can fetch; it holds no key and can't read the chat. Decision record: torii-teams ADR 0011, summarised in `docs/adr-team-collaboration.md`.

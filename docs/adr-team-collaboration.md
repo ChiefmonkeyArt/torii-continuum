@@ -123,6 +123,14 @@ Status: **Accepted** for the Suite PR; no Continuum code or VPS change.
 - **FIPS** moves to v0.5.3 in the Suite (the trial's version).
 - **Rollout.** The trial also binds :7334, so the installer refuses while it runs. Deploy to chiefmonkey.art only after the Plebeian test and trial teardown, with owner approval; the trial coordinator key can be carried over to keep its groups.
 
+## Addendum: invite QR codes and the invite step (v0.2.201-alpha, 2026-11-07)
+
+Status: **Accepted**. Decision record: torii-teams `docs/torii/adr-0012-remove-while-owner-away.md` §1.
+
+- **QR code.** A shown invite link has Copy link and Show QR (`src/views/invite-share.js`), drawn by the bundled `src/lib/qr.js`; no outside request. The link is still shown once.
+- **Invite step.** After "Create chat" in the new-project chat setup, each person picked gets their own personal link (Copy and QR), plus "Make a group link" (ask first, places = room left) and "Open chat". Uses the existing `POST /api/projects/:slug/invites`; no agent change.
+- **Removal while away** is all in Teams (torii-teams 0.6.1-torii.13): members' clients use the signed roster event the member roster route already returns.
+
 ## Addendum: join while the owner is away (v0.2.200-alpha, 2026-11-07)
 
 Status: **Accepted**. Decision record: torii-teams `docs/torii/adr-0011-join-while-owner-away.md`.
