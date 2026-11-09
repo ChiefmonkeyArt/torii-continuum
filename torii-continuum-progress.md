@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.202-alpha: removal finishes before you leave (2026-11-09)
+
+When you remove someone and save, the Team page now waits a few seconds for your own Teams to take them out of the encrypted chat and says "is out of the chat" when it's done. If you close the tab first, the browser asks once; if it can't finish, it says they can't sign in any more and Teams finishes the job the next time you or a teammate opens it. Decision record: torii-teams ADR 0015, summarised in `docs/adr-team-collaboration.md`.
+
 ## v0.2.201-alpha: invite QR codes and the invite step (2026-11-07)
 
 Invite links now come with a QR code to scan from a phone. When you start a project's team chat, the next screen gives each person you picked their own invite link, with an option to make a group link. Teams also now removes people you took off a project even while you're away, as long as any teammate has it open. Decision record: torii-teams ADR 0012, summarised in `docs/adr-team-collaboration.md`.

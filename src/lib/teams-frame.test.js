@@ -164,3 +164,35 @@ test('dock without a frame reports false; stop removes the frame and listeners',
   await tick();
   expect(a.teamHandoff).not.toHaveBeenCalled();
 });
+
+// ADR 0015: the frame answers a roster-changed with counts only.
+test('waitForRosterSynced: null without a frame', async () => {
+  const { waitForRosterSynced, teamsFrameRunning } = await boot();
+  expect(teamsFrameRunning()).toBe(false);
+  expect(await waitForRosterSynced('studio')).toBeNull();
+});
+
+test('waitForRosterSynced: takes the answer from the frame, exact origin and source only', async () => {
+  const { startTeamsFrame, waitForRosterSynced, teamsFrameRunning } = await boot();
+  await startTeamsFrame(api(), { doc: dom.window.document, win: dom.window });
+  expect(teamsFrameRunning()).toBe(true);
+  const f = frameOf();
+  spyPost(f);
+  const got = waitForRosterSynced('studio');
+  const other = waitForRosterSynced('other');
+  ask(f, { type: 'torii:roster-synced', slug: 'studio', left: 0, error: false }, 'https://evil.invalid');
+  ask(f, { type: 'torii:roster-synced', slug: 'studio', left: 0, error: false }, ORIGIN, {});
+  ask(f, { type: 'torii:roster-synced', slug: 'studio', left: -1, error: false });
+  ask(f, { type: 'torii:roster-synced', slug: 'studio', left: 0, error: 'no' });
+  ask(f, { type: 'torii:roster-synced', slug: 'Bad/slug', left: 0, error: false });
+  ask(f, { type: 'torii:roster-synced', slug: 'studio', left: 1, error: false });
+  expect(await got).toEqual({ left: 1, error: false });
+  mod.stopTeamsFrame();
+  expect(await other).toBeNull(); // sign-out ends any wait
+});
+
+test('waitForRosterSynced: times out to null', async () => {
+  const { startTeamsFrame, waitForRosterSynced } = await boot();
+  await startTeamsFrame(api(), { doc: dom.window.document, win: dom.window });
+  expect(await waitForRosterSynced('studio', { timeoutMs: 5 })).toBeNull();
+});
