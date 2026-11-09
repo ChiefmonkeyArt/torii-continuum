@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## ops: `auctions` stage for Suite v0.9.48-alpha (2026-11-09)
+
+`suite-stages-vps.yml` and `ops/lib/run-suite-stages.sh` now allow `auctions` (Suite `install-auctions.sh`, flag `INSTALL_AUCTIONS`): Plebeian Auctions, team-only, at `auctions.<domain>`, no launcher card (Suite ADR 0002). No app change, no version bump.
+
 ## v0.2.202-alpha: removal finishes before you leave (2026-11-09)
 
 When you remove someone and save, the Team page now waits a few seconds for your own Teams to take them out of the encrypted chat and says "is out of the chat" when it's done. If you close the tab first, the browser asks once; if it can't finish, it says they can't sign in any more and Teams finishes the job the next time you or a teammate opens it. Decision record: torii-teams ADR 0015, summarised in `docs/adr-team-collaboration.md`.
