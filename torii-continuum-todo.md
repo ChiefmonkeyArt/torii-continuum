@@ -90,7 +90,7 @@
       `<domain>/continuum/*` 301s there). Moves the owner session off the origin
       Quest shares.
       Suite v0.9.31-alpha code is in Suite PR #67; deploy runs through
-      `suite-stages-vps.yml` (ops-only workflow, stages fips/teams/continuum_host/teams_app).
+      `suite-stages-vps.yml` (ops-only workflow, stages fips/teams/continuum_host/teams_app/auctions).
       DEPLOYED 2026-11-04 with v0.2.194-alpha + Suite v0.9.32-alpha (owner-approved).
     - [x] Membership signals, people search, automatic project chat
       (v0.2.195-alpha, `docs/adr-teams-membership-signals.md`): ready/added

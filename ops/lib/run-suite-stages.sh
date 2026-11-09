@@ -24,8 +24,9 @@ declare -A INSTALLER=(
   [teams]=install-teams.sh
   [continuum_host]=install-continuum-host.sh
   [teams_app]=install-teams-app.sh
+  [auctions]=install-auctions.sh
 )
-declare -A FLAG=([teams]=INSTALL_TEAMS [continuum_host]=INSTALL_CONTINUUM_HOST [teams_app]=INSTALL_TEAMS_APP)
+declare -A FLAG=([teams]=INSTALL_TEAMS [continuum_host]=INSTALL_CONTINUUM_HOST [teams_app]=INSTALL_TEAMS_APP [auctions]=INSTALL_AUCTIONS)
 IFS=, read -r -a list <<< "$stages"
 for s in "${list[@]}"; do [[ -n "${INSTALLER[$s]:-}" ]] || die "unknown stage: $s"; done
 
