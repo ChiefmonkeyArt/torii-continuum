@@ -29,7 +29,7 @@ import { signAndPutRoster } from '../lib/sign-roster.js';
 import { loadProfiles, personEl, displayName, setPeopleApi } from '../lib/people.js';
 import { renderPeoplePicker } from './people-picker.js';
 import { inviteShare } from './invite-share.js';
-import { ROSTER_CHANGED_EVENT, startTeamsFrame, dockTeamsFrame, teamsOrigin, chatPath, safeAppOrigin, navigateTeamsFrame } from '../lib/teams-frame.js';
+import { ROSTER_CHANGED_EVENT, startTeamsFrame, teamsFrameRunning, waitForRosterSynced, dockTeamsFrame, teamsOrigin, chatPath, safeAppOrigin, navigateTeamsFrame } from '../lib/teams-frame.js';
 
 const ROLE_OPTS = [
   ['maintainer', 'Maintainer — can merge'],
@@ -349,6 +349,29 @@ export function renderProjectRosters(deps) {
     ]);
   }
 
+  /**
+   * ADR 0015: say when the owner's own Teams has taken removed people out of
+   * the chat; ask before leaving while it runs (at most SYNC_WAIT_MS).
+   */
+  function confirmRemoval(forSlug, gone) {
+    const who = gone.length === 1 ? displayName(gone[0]) : `${gone.length} people`;
+    const answer = waitForRosterSynced(forSlug);
+    return {
+      start() {
+        setStatus(`Saved. Taking ${who} out of the chat\u2026`);
+        const guard = (e) => { e.preventDefault(); e.returnValue = ''; };
+        const win = typeof window !== 'undefined' ? window : null;
+        win?.addEventListener('beforeunload', guard);
+        answer.then((a) => {
+          win?.removeEventListener('beforeunload', guard);
+          if (slug !== forSlug) return;
+          if (a && !a.error && a.left === 0) setStatus(`Saved. ${who} ${gone.length === 1 ? 'is' : 'are'} out of the chat.`);
+          else setStatus(`Saved. ${who} can\u2019t sign in any more. Teams finishes taking them out of the chat the next time you or a teammate opens it.`);
+        });
+      },
+    };
+  }
+
   async function save() {
     if (deps.demo) { deps.onDemo?.(); return false; }
     if (busy) return false;
@@ -377,13 +400,19 @@ export function renderProjectRosters(deps) {
         setStatus(r.reason, 'error');
         return false;
       }
+      const before = new Set((stored?.roster?.members || []).map((m) => m.pubkey));
       stored = { ...stored, roster: r.data.roster, event: r.event };
+      const after = new Set(stored.roster.members.map((m) => m.pubkey));
+      const gone = [...removed].filter((x) => before.has(x) && !after.has(x));
       rows = rosterRows(stored.roster);
       draw();
       removed = new Set();
       setStatus(`Saved. ${peopleCount(stored.roster.members.length)} on this project.`);
+      // ADR 0015: with removals and a running frame, wait for its answer.
+      const wait = gone.length && teamsFrameRunning() ? confirmRemoval(slug, gone) : null;
       // Tell an embedded Teams frame to refresh now rather than on its next poll.
       if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(ROSTER_CHANGED_EVENT, { detail: { slug } }));
+      wait?.start();
       load({ quiet: true });
       return true;
     } finally {

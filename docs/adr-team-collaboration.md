@@ -123,6 +123,14 @@ Status: **Accepted** for the Suite PR; no Continuum code or VPS change.
 - **FIPS** moves to v0.5.3 in the Suite (the trial's version).
 - **Rollout.** The trial also binds :7334, so the installer refuses while it runs. Deploy to chiefmonkey.art only after the Plebeian test and trial teardown, with owner approval; the trial coordinator key can be carried over to keep its groups.
 
+## Addendum: removal finishes before you leave (v0.2.202-alpha, 2026-11-09)
+
+Status: **Accepted**. Decision record: torii-teams `docs/torii/adr-0015-remove-confirmed.md`.
+
+- **Answer from Teams.** After `torii:roster-changed`, the one Teams frame posts `torii:roster-synced` `{slug, left, error}` (counts only, no keys); `src/lib/teams-frame.js` accepts it only from the frame at its exact origin (`waitForRosterSynced`, 20 s).
+- **Wording.** A save that removed someone shows "Taking <name> out of the chat…", then "<name> is out of the chat." or, on `left > 0`, `error` or no answer, that they can't sign in and Teams finishes the chat step the next time anyone opens it. The browser's leave prompt shows only while waiting.
+- **No frame, no change.** Adds keep their wording. No agent change. Ships with Teams 0.6.1-torii.16 and Suite v0.9.46-alpha.
+
 ## Addendum: invite QR codes and the invite step (v0.2.201-alpha, 2026-11-07)
 
 Status: **Accepted**. Decision record: torii-teams `docs/torii/adr-0012-remove-while-owner-away.md` §1.

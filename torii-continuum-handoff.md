@@ -4,6 +4,10 @@
 
 VPS: Continuum 0.2.196-alpha on `https://continuum.chiefmonkey.art/continuum/` (main domain redirects; `/api/` on both). Suite checkout v0.9.37-alpha. Teams app 0.6.1-torii.7 (images and files on the node's own server at `https://teams.chiefmonkey.art/files/`, node-only CSP; torii-teams ADR 0007). Deployed 2026-11-05 (owner-approved): `deploy-continuum-vps.yml` then `suite-stages-vps.yml` stage teams_app. Live checks: MANIFEST torii.7, node file `files`, CSP `connect-src 'self' blob: https://continuum.chiefmonkey.art wss://relay.chiefmonkey.art`, `PUT /files/upload` 401 without a session.
 
+## v0.2.202-alpha: removal finishes before you leave (2026-11-09)
+
+Torii-teams ADR 0015 (Accepted). UI only: `src/lib/teams-frame.js` adds `teamsFrameRunning()`, `waitForRosterSynced(slug, {timeoutMs})` (resolves `{left, error}` or null; exact origin + source; slug/int/bool checked; sign-out ends waits) and `SYNC_WAIT_MS` 20 s; `src/views/team-roster.js` `save()` computes people gone from the stored roster, and `confirmRemoval()` sets the waiting/done/fallback status and a `beforeunload` guard only while waiting. Tests: `src/lib/teams-frame.test.js` (+3), `src/views/team-roster.test.js` (+6). Agent unchanged (version only). Ships with Teams 0.6.1-torii.16 and Suite v0.9.46-alpha.
+
 ## v0.2.201-alpha: invite QR codes and the invite step (2026-11-07)
 
 Torii-teams ADR 0012 §1 (Accepted). UI only: new `src/views/invite-share.js` (`inviteShare` readonly field + Copy link + Show/Hide QR, `inviteQr` via bundled `renderQR`); `src/views/team-roster.js` uses it for the shown link; `src/views/team-chat-setup.js` `sendStep()` after Create chat (personal link per picked person via `createInvite({kind:'named',pubkey})`, "Make a group link" ask-first with places = room left, "Open chat", `linkError` for no_teams_app/full/too_many); `src/views/projects.js` passes `createInvite`. Tests: `src/views/invite-share.test.js`, `src/views/team-chat-setup.test.js`, `src/views/team-roster.test.js`. Agent unchanged (version only). Ships with Teams 0.6.1-torii.13 and Suite v0.9.43-alpha.

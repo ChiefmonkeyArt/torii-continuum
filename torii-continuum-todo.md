@@ -126,6 +126,9 @@
       for links; invite step in the new-project chat setup; any member's
       client removes people who are off the newest signed list (Teams
       0.6.1-torii.13, Suite v0.9.43-alpha).
+    - [x] Removal finishes before you leave (v0.2.202-alpha, torii-teams
+      ADR 0015): the Team page waits for the owner's Teams to confirm a
+      removal. Needs Teams 0.6.1-torii.16 (Suite v0.9.46-alpha).
     - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
       add/remove, announcement maintainers (needs TEAMS-2b services).
   - [ ] TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path,

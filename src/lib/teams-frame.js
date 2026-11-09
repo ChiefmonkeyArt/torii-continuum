@@ -11,6 +11,8 @@
  * Messages, exact origins both ways:
  *   frame → here  `torii:session-request` (ADR 0008): answered with a scoped
  *                 owner team token for the same pubkey.
+ *   frame → here  `torii:roster-synced` (ADR 0015): after a roster-changed
+ *                 pass, `{slug, left, error}`; counts only, no keys.
  *   here → frame  `torii:roster-changed` (member list saved) and
  *                 `torii:navigate` (show a project; path checked on both ends).
  */
@@ -22,6 +24,8 @@ const HIDDEN = 'position:fixed;left:-12000px;top:0;width:960px;height:720px;visi
 
 let st = null; // { origin, pubkey, frame, loaded, docked, raf, offs[] }
 let starting = null;
+const waits = new Map(); // slug -> Set of resolvers for torii:roster-synced (ADR 0015)
+export const SYNC_WAIT_MS = 20 * 1000;
 let declined = false; // teamMe said no Teams / not owner: do not ask again until sign-out
 
 export function safeAppOrigin(raw) {
@@ -68,8 +72,10 @@ export function startTeamsFrame(api, { doc = document, win = window } = {}) {
     frame.addEventListener('load', () => { s.loaded = true; });
     let busy = false;
     const onAsk = async (e) => {
-      if (e.source !== frame.contentWindow || e.origin !== origin || busy) return;
+      if (e.source !== frame.contentWindow || e.origin !== origin) return;
       const ask = e.data;
+      if (ask?.type === 'torii:roster-synced') return settle(ask);
+      if (busy) return;
       if (!ask || ask.type !== 'torii:session-request' || ask.pubkey !== s.pubkey) return;
       busy = true;
       try {
@@ -91,6 +97,34 @@ export function startTeamsFrame(api, { doc = document, win = window } = {}) {
   return starting;
 }
 
+function settle(d) {
+  if (typeof d.slug !== 'string' || !SLUG_RE.test(d.slug)) return;
+  if (!Number.isInteger(d.left) || d.left < 0 || typeof d.error !== 'boolean') return;
+  const set = waits.get(d.slug);
+  if (!set) return;
+  waits.delete(d.slug);
+  for (const done of [...set]) done({ left: d.left, error: d.error });
+}
+
+/** True while a Teams frame is running on this page. */
+export function teamsFrameRunning() { return Boolean(st); }
+
+/**
+ * Wait for the frame's answer to the next roster-changed for `slug`
+ * (ADR 0015). Resolves `{left, error}`, or null without a frame or after
+ * `timeoutMs`. Call before dispatching ROSTER_CHANGED_EVENT.
+ */
+export function waitForRosterSynced(slug, { timeoutMs = SYNC_WAIT_MS } = {}) {
+  if (!st || typeof slug !== 'string' || !SLUG_RE.test(slug)) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let set = waits.get(slug);
+    if (!set) waits.set(slug, (set = new Set()));
+    const done = (v) => { clearTimeout(timer); set.delete(done); if (!set.size && waits.get(slug) === set) waits.delete(slug); resolve(v); };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    set.add(done);
+  });
+}
+
 /** Remove the frame (sign-out). */
 export function stopTeamsFrame() {
   declined = false;
@@ -99,6 +133,8 @@ export function stopTeamsFrame() {
   st.offs.forEach((off) => off());
   st.frame.remove();
   st = null;
+  for (const set of waits.values()) for (const done of [...set]) done(null);
+  waits.clear();
 }
 
 /** Show a project (or the list) in the frame without reloading it. */

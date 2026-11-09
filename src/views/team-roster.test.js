@@ -20,8 +20,10 @@ const stored = {
 
 const profiles = { [BOB]: { name: 'bob', display_name: 'Bob Builder', nip05: 'bob@example.com', avatar: true } };
 
-async function boot({ data = stored, signer, put, demo = false, people, inv } = {}) {
+async function boot({ data = stored, signer, put, demo = false, people, inv, frame } = {}) {
   vi.resetModules();
+  vi.doUnmock('../lib/teams-frame.js');
+  if (frame) vi.doMock('../lib/teams-frame.js', async (orig) => ({ ...(await orig()), ...frame }));
   dom = new JSDOM('<main></main>', { url: 'https://test.invalid/continuum/#/team' });
   for (const key of ['window', 'document', 'localStorage', 'CustomEvent', 'MutationObserver']) vi.stubGlobal(key, dom.window[key]);
   const api = {
@@ -362,4 +364,74 @@ test('members: removing someone who joined by link keeps them removed at save', 
   button('Save changes').click();
   await tick();
   expect(signEvent.mock.calls[0][0].tags.some((t) => t[1] === NEW)).toBe(false);
+});
+
+// ADR 0015: after a removal, wait for the owner's own Teams to confirm.
+const putFromTags = vi.fn(async (_slug, event) => ({ ok: true, data: { roster: { ...stored.roster, created_at: event.created_at, members: [{ pubkey: OWNER, role: 'owner' }, ...event.tags.filter((t) => t[0] === 'p').map((t) => ({ pubkey: t[1], role: t[2] }))] } } }));
+const signer = () => ({ signEvent: vi.fn(async (e) => ({ ...e, pubkey: OWNER, id: 'f'.repeat(64), sig: 'e'.repeat(128) })), getPublicKey: async () => OWNER });
+function removeBob() {
+  const row = [...document.querySelectorAll('.team-roster-row')].find((r) => r.textContent.includes('Bob Builder'));
+  [...row.querySelectorAll('button')].find((b) => b.textContent === 'Remove').click();
+  button('Save changes').click();
+}
+const noBot = { ...stored, roster: { ...stored.roster, members: [{ pubkey: OWNER, role: 'owner' }, { pubkey: BOB, role: 'maintainer' }, { pubkey: NEW, role: 'contributor' }] } };
+async function removal(answer, { running = true } = {}) {
+  let resolve;
+  const waitForRosterSynced = vi.fn(() => new Promise((r) => { resolve = r; }));
+  await boot({ data: noBot, signer: signer(), put: putFromTags, frame: { teamsFrameRunning: () => running, waitForRosterSynced } });
+  const order = [];
+  window.addEventListener('continuum:roster-changed', () => order.push(waitForRosterSynced.mock.calls.length));
+  const guards = [];
+  const add = window.addEventListener.bind(window);
+  vi.spyOn(window, 'addEventListener').mockImplementation((t, fn, o) => { if (t === 'beforeunload') guards.push(fn); return add(t, fn, o); });
+  removeBob();
+  await tick();
+  return { waitForRosterSynced, order, guards, finish: async () => { resolve?.(answer); await tick(); } };
+}
+
+test('removal: shows Taking out, then out of the chat when Teams answers left 0', async () => {
+  const { waitForRosterSynced, order, guards, finish } = await removal({ left: 0, error: false });
+  expect(waitForRosterSynced).toHaveBeenCalledWith('studio');
+  expect(order).toEqual([1]); // waiting before the frame is told
+  expect(document.body.textContent).toContain('Saved. Taking Bob Builder out of the chat\u2026');
+  expect(guards.length).toBe(1);
+  const ev = new dom.window.Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(ev);
+  expect(ev.defaultPrevented).toBe(true);
+  await finish();
+  expect(document.body.textContent).toContain('Saved. Bob Builder is out of the chat.');
+  const later = new dom.window.Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(later);
+  expect(later.defaultPrevented).toBe(false);
+});
+
+for (const [name, answer] of [['still in', { left: 1, error: false }], ['an error', { left: 0, error: true }], ['no answer', null]]) {
+  test(`removal: ${name} gives the fallback wording`, async () => {
+    const { finish } = await removal(answer);
+    await finish();
+    expect(document.body.textContent).toContain('Saved. Bob Builder can\u2019t sign in any more. Teams finishes taking them out of the chat the next time you or a teammate opens it.');
+  });
+}
+
+test('removal: two people are counted, not named', async () => {
+  let resolve;
+  const waitForRosterSynced = vi.fn(() => new Promise((r) => { resolve = r; }));
+  await boot({ data: noBot, signer: signer(), put: putFromTags, frame: { teamsFrameRunning: () => true, waitForRosterSynced } });
+  for (let i = 0; i < 2; i++) {
+    const row = document.querySelector('.team-roster-row');
+    [...row.querySelectorAll('button')].find((b) => b.textContent === 'Remove').click();
+  }
+  button('Save changes').click();
+  await tick();
+  expect(document.body.textContent).toContain('Saved. Taking 2 people out of the chat\u2026');
+  resolve({ left: 0, error: false });
+  await tick();
+  expect(document.body.textContent).toContain('Saved. 2 people are out of the chat.');
+});
+
+test('removal: no frame running, or nobody removed, means no wait', async () => {
+  const { waitForRosterSynced, guards } = await removal(null, { running: false });
+  expect(waitForRosterSynced).not.toHaveBeenCalled();
+  expect(guards.length).toBe(0);
+  expect(document.body.textContent).toContain('Saved. 2 people on this project.');
 });
