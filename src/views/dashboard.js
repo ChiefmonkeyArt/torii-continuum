@@ -11,6 +11,7 @@ import { h, clear, timeAgo } from './util.js';
 import * as store from '../data/store.js';
 import { setChatContext } from '../chat.js';
 import { isAgentConfigured, isLoggedIn, healthModels, walletHealth } from '../data/agent.js';
+import { FipsCard } from './fips-card.js';
 import { isDemo, demoSource, demoBanner, demoPath } from '../demo/demo-mode.js';
 
 // Module-level poll handle mirrors the routstr.js pattern. A single dashboard
@@ -270,6 +271,8 @@ export function renderDashboard(mount, opts = {}) {
   // calls (the /api/* endpoints are admin-gated and there is no session), so a
   // signed-out demo visitor never triggers an agent request.
   if (!demo) mount.appendChild(ProviderCard());
+  // docs/adr-fips-default.md §1: node mesh status and peer introductions.
+  if (!demo) mount.append(h('div', { style: 'height: 16px' }), FipsCard());
 
   mount.appendChild(h('div', { style: 'height: 16px' }));
 

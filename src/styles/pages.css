@@ -518,6 +518,8 @@
 }
 .provider-card-head h3 { margin: 0; }
 .provider-card-body { display: flex; flex-direction: column; gap: 6px; }
+.fips-card h3 { margin: 0 0 8px; }
+.fips-card .error { color: hsl(var(--destructive)); }
 .provider-row {
   display: flex;
   align-items: center;

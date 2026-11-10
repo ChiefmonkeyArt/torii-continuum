@@ -917,3 +917,9 @@ export async function updateStatus() {
 export async function cancelUpdate() {
   return req('POST', '/api/update/cancel', {});
 }
+
+// Node mesh (FIPS) card and peer introductions (docs/adr-fips-default.md §1, §4).
+export async function fipsStatus() { return req('GET', '/api/fips'); }
+export async function fipsIntroduction() { return req('GET', '/api/fips/introduction'); }
+export async function fipsCheckCard(card) { return req('POST', '/api/fips/introductions/check', { card }); }
+export async function putFipsPeers(event) { return req('PUT', '/api/fips/peers', { event }); }
