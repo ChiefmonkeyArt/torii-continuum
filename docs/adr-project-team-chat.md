@@ -105,5 +105,9 @@ chat membership).
   frame and gain "Open chat"; `workspace.css` hides the assistant bar on
   the Team tab only.
 - Tests: `src/views/project-team.test.js` (6),
-  `src/views/projects-create.test.js` (3), `src/views/team-roster.test.js`
+  `src/views/projects-create.test.js` (3),
+  `src/views/workspace-team-chat.test.js` (1), `src/views/team-roster.test.js`
   (+2, −2); `team-chat-setup.test.js` removed with its view.
+- Found in the local review: the route renders twice while the project
+  hydrates, so the new-project mark is taken only when the Team tab is about
+  to draw "Start team chat" (covered by the tests above).

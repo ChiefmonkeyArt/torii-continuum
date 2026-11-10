@@ -59,7 +59,7 @@ export function renderProjectTeam(mount, slug, deps = {}) {
 
   const line = (text) => h('p', { class: 'muted project-team-line', text });
 
-  async function draw({ autoStart = false } = {}) {
+  async function draw() {
     clear(body);
     body.append(line('Loading…'));
     const me = await api.teamMe().catch(() => null);
@@ -72,7 +72,10 @@ export function renderProjectTeam(mount, slug, deps = {}) {
     if (!body.isConnected) return;
     if (!r.ok) { body.append(line(`Couldn't load the people on this project: ${r.reason}`)); return; }
     const members = r.data?.roster?.members || [];
-    if (!members.length) return drawStart(autoStart);
+    // Take the new-project mark only here: the route can render twice while
+    // the project hydrates, and an earlier render must not use it up.
+    if (!members.length) return drawStart(takeNewProject(slug));
+    takeNewProject(slug);
     drawChat(members, new Set(r.data?.teams?.added || []));
   }
 
@@ -128,5 +131,5 @@ export function renderProjectTeam(mount, slug, deps = {}) {
     }).catch(() => {});
   }
 
-  draw({ autoStart: takeNewProject(slug) });
+  draw();
 }

@@ -45,6 +45,8 @@ async function boot({ me = { owner: true, pubkey: OWNER, teams_app_url: `${ORIGI
   if (fresh) nav.markNewProject('studio');
   const { renderProjectTeam } = await import('./project-team.js');
   const mount = document.querySelector('main');
+  // The route renders again while the project hydrates (main.js).
+  if (fresh) renderProjectTeam(mount, 'studio', { api, go, signer: () => signer });
   renderProjectTeam(mount, 'studio', { api, go, signer: () => signer });
   await tick();
   return { api, go, mount };
