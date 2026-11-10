@@ -28,6 +28,7 @@ import { createWallet } from './core/wallet.mjs';
 import { createRoutstr } from './core/routstr.mjs';
 import { createChatModelSettings, validModelId } from './core/chat-model-settings.mjs';
 import { createGitHubConnection, registerGitHubRoutes } from './core/github-connection.mjs';
+import { createFips, registerFipsRoutes } from './core/fips.mjs';
 import { createOllama } from './core/ollama.mjs';
 import { createModelRouter } from './core/model-router.mjs';
 import { createChatSkill } from './skills/chat.mjs';
@@ -602,6 +603,13 @@ function rateLimitConfig(max, route) {
     },
   };
 }
+
+// docs/adr-fips-default.md §1, §4: FIPS card + operator-signed peer list.
+registerFipsRoutes(app, { requireAdmin, rateLimit: rateLimitConfig, fips: deps.fips ?? createFips({
+  requestPath: join(MEMORY_ROOT, 'fips', 'peer-request.json'),
+  questBase: process.env.CONTINUUM_QUEST_BASE || 'http://127.0.0.1:8788',
+  adminHex: () => ownerHexFromNpub(auth.adminNpub()),
+}) });
 
 app.post('/api/auth/challenge', { config: rateLimitConfig(authChallengeMax, '/api/auth/challenge') }, async (req, reply) => {
   const clientIp = req.ip;

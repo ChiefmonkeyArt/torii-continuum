@@ -51,6 +51,11 @@
 ### Active tasks
 
 - [ ] **HIGH PRIORITY — FIPS-DEFAULT-1: FIPS on by default across all apps** (owner, 2026-11-04; schedule after the Teams MVP). Scope: Plebeian (market), Torii Quest, Torii Continuum and the marketplace. Rules: (1) each app gets an ADR before its behaviour changes; (2) any edit to PlebeianApp/market needs the owner's explicit approval, and analysis there stays read-only; (3) the FIPS trial teardown (removing fips-trial relay/coord/grasp, which hold :7334) does not remove or pause FIPS. It only frees the port for the real Teams FIPS install.
+  - [x] Suite ADR 0001: FIPS node on every install (Suite v0.9.47-alpha).
+  - [x] Continuum ADR `docs/adr-fips-default.md` Accepted 2026-11-10; torii-quest ADR-0151 Accepted (up to 8 peers, Quest v0.2.939-alpha, Suite v0.9.51-alpha).
+  - [x] Stage B (v0.2.203-alpha): FIPS card on the dashboard, introduction cards, operator-signed peer list; Suite root helper `torii-fips-peers` (v0.9.51-alpha).
+  - [ ] Stage C: member device notes (kind 27531) and `memory/teams/mesh.json`, Suite `torii-teams sync` path unit, Teams device panel (Teams has no git panel yet).
+  - [ ] Plebeian market/CMS: later stage (owner, 2026-11-09).
 
 - **CONT-CONNECTIONS-READONLY (v0.2.188-alpha):** implement Settings → Connections,
   GitHub App setup validation/device authorization, encrypted expiring credentials,

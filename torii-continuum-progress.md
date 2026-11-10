@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.203-alpha: node mesh card and peer introductions (2026-11-10)
+
+The dashboard now has a "Node mesh (FIPS)" card: whether FIPS runs, this node's FIPS name with Copy, and its Quest peers (up to 8). To link two nodes, each operator makes an introduction card, signs it, and sends it; the other pastes it, Continuum checks the signature and the other node's public heartbeat, and the operator signs the new peer list. The node's own root helper checks that signature again before it changes anything, so no SSH is needed. Removing a peer works the same way. Decision record: `docs/adr-fips-default.md` (Accepted), torii-quest ADR-0151.
+
 ## ops: `auctions` stage for Suite v0.9.48-alpha (2026-11-09)
 
 `suite-stages-vps.yml` and `ops/lib/run-suite-stages.sh` now allow `auctions` (Suite `install-auctions.sh`, flag `INSTALL_AUCTIONS`): Plebeian Auctions, team-only, at `auctions.<domain>`, no launcher card (Suite ADR 0002). No app change, no version bump.
