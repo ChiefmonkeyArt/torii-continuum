@@ -96,7 +96,7 @@ function cap(text, max = MAX_FRAGMENT_CHARS) {
  * @param {import('../lib/reflect.mjs').createReflector extends (...a:any) => infer R ? R : never} deps.reflector
  */
 export function createChatSkill(router, log, { memory, reflector } = {}) {
-  async function handle({ message, context, constitution, onDelta, telemetry, attachments = null }) {
+  async function handle({ message, context, constitution, onDelta, telemetry, attachments = null, history = [] }) {
     // Code-side guards (procedural, kind 30095 with guard === "code-only")
     // run BEFORE we spend a satoshi on the model.
     if (memory) {
@@ -114,6 +114,8 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
 
     const messages = [
       { role: 'system', content: systemPrompt },
+      // Earlier turns of this conversation, already bounded (docs/adr-chat-history.md).
+      ...history,
       { role: 'user', content: buildUserContent(message, attachments) },
     ];
 
@@ -124,7 +126,7 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
     // digest + rendered-header hash) so prompt provenance is auditable without
     // logging the prompt body. The constitution is public, versioned data.
     const { provenance } = buildWorkingValues(constitution);
-    log.info(`[chat] prompt tokens: ${promptTokens} · working-values ${provenance.constitution_version}/${provenance.code_of_practice_version} hdr=${provenance.header_sha256.slice(0, 12)}`);
+    log.info(`[chat] prompt tokens: ${promptTokens} (history ${history.length}) · working-values ${provenance.constitution_version}/${provenance.code_of_practice_version} hdr=${provenance.header_sha256.slice(0, 12)}`);
 
     const started = Date.now();
     // Router decides between Routstr (paid, sovereign) and Ollama (local, free).

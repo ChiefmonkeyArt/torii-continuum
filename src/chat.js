@@ -21,6 +21,7 @@ import { chat as agentChat, isAgentConfigured, getStoredToken, authEpochNow, lis
 import { hydrateFromServer } from './data/store.js';
 import { isSessionLive } from './auth.js';
 import { currentRoute } from './router.js';
+import { buildHistory } from './chat-history.js';
 import { threadKeyFor, pageTypeFor, projectSlugFrom, trimThread, sanitizeThreads, THREAD_CAP, sessionIdFor } from './chat-threads.js';
 import { clampInputHeight, inputShouldScroll, reserveSpaceFor } from './chat-layout.js';
 import { sealSession, unsealSession } from './session-crypto.js';
@@ -529,6 +530,8 @@ async function send() {
   const generation = ++turnGeneration;
   // Attachments go once; history keeps only their names (ADR §6).
   const sending = pending;
+  // Earlier exchanges of this conversation, taken before this turn is added.
+  const history = buildHistory(threads[turnKey]);
   pending = []; attachError = ''; renderChips();
   push('user', [text, attachedLine(sending)].filter(Boolean).join('\n'));
   inputEl.value = '';
@@ -539,7 +542,7 @@ async function send() {
   preview = { key: turnKey, token: turnToken, text: '', phase: 'Preparing', timingText: '', started: performance.now() };
   previewClock = setInterval(schedulePreviewPaint, 1000);
   renderLog();
-  const reply = await getReply(text, turnContext, toPayload(sending), event => {
+  const reply = await getReply(text, turnContext, toPayload(sending), history, event => {
     if (generation !== turnGeneration || turnToken !== getStoredToken()) return;
     if (event.type === 'reset') { preview.text = ''; preview.phase = 'Waiting for model'; }
     if (event.type === 'phase') preview.phase = phaseLabel(event.phase);
@@ -561,16 +564,17 @@ async function send() {
   // session-changed handler already reset in-memory threads, so re-pushing here
   // would resurrect a previous owner's conversation in a shared browser.
   if (turnToken !== getStoredToken()) return;
-  if (reply && typeof reply === 'object') pushTo(turnKey, 'ai', reply.text, reply.action, timingText);
+  if (reply && typeof reply === 'object') pushTo(turnKey, 'ai', reply.text, reply.action, timingText, reply.ok);
   else pushTo(turnKey, 'ai', reply, undefined, timingText);
 }
 
 // Append to a specific thread; only re-render when it is the visible one. An
 // optional `action` tags the message so renderLog can attach an affordance
 // (e.g. a "Top Up" button for an insufficient-funds reply).
-function pushTo(key, who, text, action, timingText) {
+// `ok` marks a real AI answer, the only kind sent back as history.
+function pushTo(key, who, text, action, timingText, ok) {
   if (!Array.isArray(threads[key])) threads[key] = [];
-  threads[key].push({ who, text, at: Date.now(), ...(action ? { action } : {}), ...(timingText ? { timingText } : {}) });
+  threads[key].push({ who, text, at: Date.now(), ...(action ? { action } : {}), ...(timingText ? { timingText } : {}), ...(ok ? { ok: true } : {}) });
   threads[key] = trimThread(threads[key], THREAD_CAP);
   if (who === 'user') dirtyThreads.add(key);
   saveThreads();
@@ -642,9 +646,9 @@ export function chatErrorMessage(result) {
  * missing or expired. Canned replies are served ONLY on the agent-less demo
  * build; a production build reports a structured error instead of a fake answer.
  */
-async function getReply(text, ctx, attachments, onEvent) {
+async function getReply(text, ctx, attachments, history, onEvent) {
   if (isSessionLive()) {
-    const r = await agentChat({ message: text, context: ctx, attachments, onEvent });
+    const r = await agentChat({ message: text, context: ctx, attachments, history, onEvent });
     if (r.ok && r.data?.reply) {
       // OWNER-UI-3: when the agent wrote to the shared store this turn (created/
       // updated a milestone or todo), reconcile the browser cache so the project
@@ -654,9 +658,10 @@ async function getReply(text, ctx, attachments, onEvent) {
       }
       // Be honest when the paid provider failed and the free local model answered.
       const fellBack = r.data.fell_back_from;
-      return fellBack
+      const text = fellBack
         ? `${r.data.reply}\n\n_(answered by the local ${r.data.model || 'fallback'} model — ${fellBack} was unavailable)_`
         : r.data.reply;
+      return { text, ok: true };
     }
     // Insufficient funds is a recoverable, user-actionable state — surface a
     // clear message plus a Top Up path.

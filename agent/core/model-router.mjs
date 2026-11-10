@@ -40,6 +40,7 @@
 
 import { isRetryableCode, inferCodeFromReason, ERROR_CODES, sanitizeReason } from '../lib/provider-errors.mjs';
 import { messagesHaveImages } from '../lib/chat-attachments.mjs';
+import { trimForLocal } from '../lib/chat-history.mjs';
 import {
   createBudget, resolveTotalBudgetMs, worthAttempting, describeBudget,
 } from '../lib/timeout-budget.mjs';
@@ -83,6 +84,8 @@ export function createModelRouter({ routstr, ollama, cfg, log, now }) {
     const { strategy: _strategyOverride, ...providerArgs } = args;
     /** Args for the next provider call, carrying whatever time is left. */
     const withBudget = () => ({ ...providerArgs, budget_ms: budget.remainingMs() });
+    /** The local model gets a shorter history (docs/adr-chat-history.md §6). */
+    const forLocal = () => ({ ...withBudget(), messages: trimForLocal(providerArgs.messages) });
     /** The turn ran out before this provider could be given a fair slice. */
     const exhausted = (provider) => ({
       ok: false,
@@ -108,12 +111,12 @@ export function createModelRouter({ routstr, ollama, cfg, log, now }) {
         if (!ollama?.enabled) {
           return { ok: false, code: ERROR_CODES.PROVIDER_DISABLED, reason: 'ollama disabled but ollama_only strategy set', retryable: false };
         }
-        return withProvider(await ollama.chat(withBudget()), 'ollama');
+        return withProvider(await ollama.chat(forLocal()), 'ollama');
       }
 
       case 'ollama_first': {
         if (ollama?.enabled) {
-          const first = await ollama.chat(withBudget());
+          const first = await ollama.chat(forLocal());
           if (first.ok) return withProvider(first, 'ollama');
           log.info(`[router] ollama_first: ollama failed (${first.reason}), trying routstr`);
           if (!worthAttempting(budget.remainingMs())) {
@@ -150,7 +153,7 @@ export function createModelRouter({ routstr, ollama, cfg, log, now }) {
           }, 'routstr');
         }
         log.info(`[router] routstr ${first.code || 'error'} (${first.reason}) — falling back to ollama`);
-        const second = await ollama.chat(withBudget());
+        const second = await ollama.chat(forLocal());
         if (second.ok) {
           // Tell the caller this reply came from the free local model after a
           // paid-provider failure, so the UI can be honest about provenance.

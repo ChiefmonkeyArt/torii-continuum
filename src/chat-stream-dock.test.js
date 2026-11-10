@@ -112,3 +112,22 @@ test('sign-out drops preview and late completion, never restores prior owner tex
   expect(text()).not.toContain('Old owner');
   expect(localStorage.getItem('continuum.chat.threads') || '').not.toContain('Old owner');
 });
+
+test('each turn sends the earlier real exchanges, never errors or the greeting', async () => {
+  const { send } = await setup();
+  const bodies = () => fetch.mock.calls.filter(([u]) => String(u).endsWith('/api/chat')).map(([, init]) => JSON.parse(init.body));
+  const say = async text => {
+    document.querySelector('textarea').value = text;
+    document.querySelector('.chat-send').click();
+    await sleep(10);
+  };
+  expect(bodies()[0].history).toBeUndefined();
+  send({ type: 'done', reply: 'apple, pear, plum' });
+  await sleep(70);
+  await say('and the last one?');
+  expect(bodies()[1].history).toEqual([{ role: 'user', text: 'gm' }, { role: 'assistant', text: 'apple, pear, plum' }]);
+  send({ type: 'error', code: 'upstream_empty', error: 'Interrupted' });
+  await sleep(70);
+  await say('try again');
+  expect(bodies()[2].history).toEqual([{ role: 'user', text: 'gm' }, { role: 'assistant', text: 'apple, pear, plum' }]);
+});

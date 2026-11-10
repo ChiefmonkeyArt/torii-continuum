@@ -97,3 +97,11 @@ describe('sealSession / unsealSession', () => {
     await expect(unsealSession({ decrypt: fakeDecrypt, pubkey: PUB }, ct)).rejects.toThrow(/message list/);
   });
 });
+
+describe('sanitizeMessages keeps the real-answer mark (docs/adr-chat-history.md)', () => {
+  it('keeps ok:true only, so a saved reply is still sent as history after reload', () => {
+    const out = sanitizeMessages([{ who: 'ai', text: 'a', at: 1, ok: true }, { who: 'ai', text: 'b', at: 2, ok: 'yes' }]);
+    expect(out[0].ok).toBe(true);
+    expect('ok' in out[1]).toBe(false);
+  });
+});

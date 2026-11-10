@@ -1,12 +1,19 @@
 # Torii Continuum — Master TODO
 
+## v0.2.207-alpha: the assistant remembers the conversation
+
+- [x] Recent turns sent with each message (pairs with a real answer only, bounded); agent re-checks; Ollama gets 2 exchanges.
+- [x] Owner reviewed the build locally; ADR Accepted.
+- [ ] Merge, tag v0.2.207-alpha, deploy (ask first).
+- [ ] Later: a summary of turns older than the window, if 10 exchanges proves too short.
+
 ## v0.2.206-alpha: one assistant bar everywhere
 
 - [x] One bar on every page: "+", box, Send; Context and This page/General removed; one running conversation.
 - [x] "+" and paste for images (shrunk in the browser) and text files; vision-only routing, `no_vision_model`, `bad_attachment`.
 - [x] Owner reviewed the build locally; ADR Accepted.
-- [ ] Merge, tag v0.2.206-alpha, deploy (ask first).
-- [ ] Later: send recent history to the agent with each turn (today it gets only the current message).
+- [x] Merged, tagged v0.2.206-alpha, deployed 2026-11-10.
+- [x] Later: send recent history to the agent with each turn (v0.2.207-alpha).
 
 ## v0.2.205-alpha: every project has its team chat
 
