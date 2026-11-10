@@ -94,5 +94,16 @@ web pages' own connections.
   re-checks the signature against `/etc/torii/fips/admin.npub`, requires it
   to be newer than the last list and within one day, validates each peer and
   rewrites `peers.json`. Quest re-reads `peers.json` within 30 s.
-- §2 and §3 (device notes, mesh projection) come next. Teams has no private
-  git panel yet, so the device panel lands in a Teams release.
+- v0.2.204-alpha (with Suite v0.9.53-alpha, Teams 0.6.1-torii.17; detail in
+  torii-teams ADR 0016): §2, §3 and §5. Device notes are kind 27531 (tag
+  `t=torii-teams-devices`, content `{v:1, devices:[{npub, label}]}`, up to 3,
+  label up to 32 plain characters), one per person, the full list each time,
+  signed by that person and within 10 minutes of the node's clock. The panel
+  is in Teams only; Continuum's own member view has none. Routes:
+  `GET`/`PUT /api/team/devices` for any team caller (`agent/lib/team-devices.mjs`).
+  The projection is `agent/memory/teams/mesh.json` (0600; root reads it):
+  `{version:1, projects:[{slug, roster, admitted:[{pubkey, role, grant}]}],
+  devices:[notes]}`, rewritten after a roster save, an admit, a device save
+  and at start, and only when its bytes change. Notes of people no longer on
+  any project are deleted. Root (`torii-teams sync`) verifies every signature
+  itself rather than trusting the agent's checks.

@@ -55,6 +55,7 @@ import { createUpdater } from './core/updater.mjs';
 import { createGenesis, ownerHexFromNpub } from './core/genesis.mjs';
 import { composeNoticeboard } from './core/noticeboard.mjs';
 import { createAudit } from './lib/audit.mjs';
+import { createTeamDevices } from './lib/team-devices.mjs';
 import { createRosterStore, project as projectRoster, effectiveRole, can as rosterCan, MAX_HUMANS } from './lib/roster.mjs';
 import { createTeamsState } from './lib/teams-state.mjs';
 import { createTeamInvites, INVITE_ID_RE, verifyInviteGrant } from './lib/team-invites.mjs';
@@ -248,6 +249,14 @@ const teamsState = deps.teamsState ?? createTeamsState({ dir: join(MEMORY_ROOT, 
 const teamInvites = deps.teamInvites ?? createTeamInvites({ dir: join(MEMORY_ROOT, 'teams') });
 // Join cards (torii-teams ADR 0011): memory/teams/groupinfo/<slug>.json, no secrets.
 const teamGroupInfo = deps.teamGroupInfo ?? createTeamGroupInfo({ dir: join(MEMORY_ROOT, 'teams', 'groupinfo') });
+// Your computers + the node's mesh file for root (torii-teams ADR 0016):
+// memory/teams/{devices,mesh}.json. A test that brings its own roster store
+// and no device store gets none, so it never writes the real memory dir.
+const teamDevices = deps.teamDevices !== undefined ? deps.teamDevices
+  : deps.rosterStore ? null
+  : createTeamDevices({ dir: join(MEMORY_ROOT, 'teams'), rosterStore, ownerHex: () => ownerHexFromNpub(auth.adminNpub()) });
+const meshChanged = () => teamDevices?.writeMesh().catch((e) => app.log.warn({ evt: 'team.mesh.write_failed', err: e.message }));
+meshChanged();
 const wssList = (v) => (Array.isArray(v) ? v.filter((u) => typeof u === 'string' && /^wss:\/\/[^\s]+$/.test(u)).slice(0, 8) : null);
 const teamProfiles = deps.teamProfiles ?? createTeamProfiles({
   profileRelays: wssList(cfg.teams?.profile_relays)
@@ -1137,6 +1146,7 @@ app.put(
       app.log.warn({ evt: 'team.roster.reject', code: result.code });
       return reply.code(result.code === 'stale' ? 409 : 400).send({ error: result.reason, code: result.code });
     }
+    await meshChanged();
     return { ok: true, roster: result.roster, projection: projectRoster(result.roster) };
   },
 );
@@ -1188,6 +1198,33 @@ app.post('/api/team/ready', { preHandler: requireTeamOrPendingCaller, config: ra
 // Torii Teams file server gate (torii-teams ADR 0007). The node's file server
 // asks this over loopback before an upload or delete: the owner, or anyone on
 // at least one roster, may store files. Cached there for 60 s.
+// GET /api/team/devices — any team caller: their own computers + this node's git address
+// PUT /api/team/devices — any team caller: { event } their signed full list (torii-teams ADR 0016)
+const fipsEtc = process.env.CONTINUUM_FIPS_ETC || '/etc/torii/fips';
+const nodeFipsNpub = deps.nodeFipsNpub ?? (async () => {
+  try { return (await readFile(join(fipsEtc, 'fips.pub'), 'utf8')).match(/npub1[023456789acdefghjklmnpqrstuvwxyz]{58}/)?.[0] || null; }
+  catch { return null; }
+});
+const teamsGitAddress = /^[a-z0-9.-]{1,64}:[0-9]{1,5}$/.test(process.env.TEAMS_GIT_ADDRESS || '') ? process.env.TEAMS_GIT_ADDRESS : 'torii-teams.fips:7334';
+app.get('/api/team/devices', { preHandler: requireTeamCaller, config: rateLimitConfig(teamsSignalMax, '/api/team/devices') }, async (req, reply) => {
+  if (!teamDevices) return reply.code(404).send({ error: 'not available' });
+  reply.header('cache-control', 'no-store');
+  const [mine, npub] = await Promise.all([teamDevices.get(req.teamCaller.pubkey), nodeFipsNpub()]);
+  return { ...mine, node: { npub, git: teamsGitAddress } };
+});
+app.put('/api/team/devices', { preHandler: requireTeamCaller, config: rateLimitConfig(rosterMax, '/api/team/devices:put') }, async (req, reply) => {
+  if (!teamDevices) return reply.code(404).send({ error: 'not available' });
+  reply.header('cache-control', 'no-store');
+  const r = await teamDevices.put(req.teamCaller.pubkey, req.body?.event);
+  if (!r.ok) {
+    app.log.warn({ evt: 'team.devices.reject', code: r.code });
+    const status = r.code === 'not_listed' ? 403 : r.code === 'stale' ? 409 : 400;
+    return reply.code(status).send({ error: r.reason, code: r.code });
+  }
+  await audit.append('team.devices.set', { devices: r.devices.length });
+  return { ok: true, devices: r.devices };
+});
+
 app.get('/api/team/files-ok', { preHandler: requireTeamCaller, config: rateLimitConfig(teamsSignalMax * 10, '/api/team/files-ok') }, async (req, reply) => {
   const c = req.teamCaller;
   if (!c.owner && (await rosterStore.memberships(c.pubkey)).length === 0) {
@@ -1440,6 +1477,7 @@ app.post('/api/team/invite/claim', { config: rateLimitConfig(authVerifyMax, '/ap
     if (!(await teamInvites.useAuto(b.id, b.secret)).ok) return inviteGone(reply);
     const a = await rosterStore.admit(inv.slug, { pubkey: v.pubkey, role: inv.role, invite: inv.id, grant: inv.grant, ownerHex: ownerHexFromNpub(auth.adminNpub()) });
     if (!a.ok) return inviteGone(reply);
+    await meshChanged();
     await audit.append('team.invite.admit', { slug: inv.slug });
     const s = auth.issueMemberSession(v.pubkey);
     return { token: s.token, expires_at: s.expires_at, slug: inv.slug };

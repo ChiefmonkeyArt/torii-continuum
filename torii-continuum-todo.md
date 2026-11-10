@@ -54,7 +54,8 @@
   - [x] Suite ADR 0001: FIPS node on every install (Suite v0.9.47-alpha).
   - [x] Continuum ADR `docs/adr-fips-default.md` Accepted 2026-11-10; torii-quest ADR-0151 Accepted (up to 8 peers, Quest v0.2.939-alpha, Suite v0.9.51-alpha).
   - [x] Stage B (v0.2.203-alpha): FIPS card on the dashboard, introduction cards, operator-signed peer list; Suite root helper `torii-fips-peers` (v0.9.51-alpha).
-  - [ ] Stage C: member device notes (kind 27531) and `memory/teams/mesh.json`, Suite `torii-teams sync` path unit, Teams device panel (Teams has no git panel yet).
+  - [x] Stage C v0.2.204-alpha: member device notes (kind 27531) and `memory/teams/mesh.json`, Suite v0.9.53-alpha `torii-teams sync` path unit, Teams 0.6.1-torii.17 "Your computers" (torii-teams ADR 0016).
+  - [ ] Real two-computer test of private git over the mesh.
   - [ ] Plebeian market/CMS: later stage (owner, 2026-11-09).
 
 - **CONT-CONNECTIONS-READONLY (v0.2.188-alpha):** implement Settings → Connections,

@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.204-alpha: your computers for private git (2026-11-10)
+
+People on a project can now add up to three of their own computers in Torii Teams, so the project's private git lets them in without the operator editing files over SSH. Each person signs their own list. Continuum keeps it and writes one file for the node with every signed member list and invite link; the node's root helper checks all the signatures itself before it changes who may connect. Removing someone from every project drops their computers too. Decision records: `docs/adr-fips-default.md`, torii-teams ADR 0016.
+
 ## v0.2.203-alpha: node mesh card and peer introductions (2026-11-10)
 
 The dashboard now has a "Node mesh (FIPS)" card: whether FIPS runs, this node's FIPS name with Copy, and its Quest peers (up to 8). To link two nodes, each operator makes an introduction card, signs it, and sends it; the other pastes it, Continuum checks the signature and the other node's public heartbeat, and the operator signs the new peer list. The node's own root helper checks that signature again before it changes anything, so no SSH is needed. Removing a peer works the same way. Decision record: `docs/adr-fips-default.md` (Accepted), torii-quest ADR-0151.
