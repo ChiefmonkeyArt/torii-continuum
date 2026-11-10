@@ -24,6 +24,7 @@ import { renderLogin } from './views/login.js';
 import { renderProjects } from './views/projects.js';
 import { renderProjectHome } from './views/projectHome.js';
 import { renderBoard } from './views/board.js';
+import { renderProjectTeam } from './views/project-team.js';
 import { renderMarketplace } from './views/marketplace.js';
 import { renderRoutstr } from './views/routstr.js';
 import { renderDashboard } from './views/dashboard.js';
@@ -134,6 +135,7 @@ function boot() {
   route('/projects/:slug/overview', guarded('/projects/:slug/overview', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug); renderSidebar(); }));
   route('/chat', guarded('/chat', () => { setLandingMode(false); renderNewChat(mainContent()); renderSidebar(); }));
   route('/sessions/:id', guarded('/sessions/:id', ({ id }) => { setLandingMode(false); renderWorkspace(mainContent(), { id }); renderSidebar(); }));
+  route('/projects/:slug/team', guarded('/projects/:slug/team', ({ slug }) => { setLandingMode(false); renderProjectTeam(mainContent(), slug); renderSidebar(); }));
   route('/projects/:slug/board', guarded('/projects/:slug/board', ({ slug }) => { setLandingMode(false); renderBoard(mainContent(), slug); renderSidebar(); }));
   route('/marketplace', guarded('/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent()); renderSidebar(); }));
   route('/routstr', guarded('/routstr', () => { setLandingMode(false); renderRoutstr(mainContent()); renderSidebar(); }));
@@ -155,6 +157,7 @@ function boot() {
   route('/demo/projects', demoRoute('/demo/projects', () => { setLandingMode(false); renderProjects(mainContent(), demoOpts); renderSidebar(); }));
   route('/demo/projects/:slug', demoRoute('/demo/projects/:slug', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug, demoOpts); renderSidebar(); }));
   route('/demo/projects/:slug/overview', demoRoute('/demo/projects/:slug/overview', ({ slug }) => { setLandingMode(false); renderProjectHome(mainContent(), slug, demoOpts); renderSidebar(); }));
+  route('/demo/projects/:slug/team', demoRoute('/demo/projects/:slug/team', () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Team chat' }); renderSidebar(); }));
   route('/demo/chat', demoRoute('/demo/chat', () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'New chat' }); renderSidebar(); }));
   route('/demo/sessions', demoRoute('/demo/sessions', () => { setLandingMode(false); renderDemoStub(mainContent(), demoOpts, { title: 'Conversations' }); renderSidebar(); }));
   route('/demo/marketplace', demoRoute('/demo/marketplace', () => { setLandingMode(false); renderMarketplace(mainContent(), demoOpts); renderSidebar(); }));

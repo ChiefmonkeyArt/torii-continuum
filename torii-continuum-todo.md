@@ -1,5 +1,12 @@
 # Torii Continuum — Master TODO
 
+## v0.2.205-alpha: every project has its team chat (on review)
+
+- [x] Team tab with the docked project chat, "Add people", "Start team chat"; new projects sign the owner-only list once.
+- [x] Team page without the chat frame; "Open chat" per project; Chats tab "Team chat" row; assistant bar hidden on the Team tab.
+- [ ] Owner reviews the build (tab placement: full-width tab or narrow side panel), then accepts the ADR.
+- [ ] Merge, tag v0.2.205-alpha after Teams 0.6.1-torii.18 and Suite v0.9.54-alpha; deploy (ask first).
+
 ## Teams FIPS trial automation (ops-only, no version bump)
 
 - [x] `ops/fips-trial/vps.sh` + `runner.sh` + manual `fips-trial.yml`: firewall-first install, strict ACL, admit list, hardened `fipstrial` services, Q1–Q4 tests from a throwaway runner node, always-restore, teardown. `ops/test/fips-trial.test.sh`.

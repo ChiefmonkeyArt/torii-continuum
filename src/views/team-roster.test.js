@@ -174,45 +174,17 @@ test('demo mode never loads or signs; Save changes goes to login', async () => {
   expect(signEvent).not.toHaveBeenCalled();
 });
 
-test('team chat: docks the one Teams frame over its card, with a full-window fallback', async () => {
-  vi.resetModules();
-  dom = new JSDOM('<main></main>', { url: 'https://test.invalid/continuum/#/team' });
-  for (const key of ['window', 'document']) vi.stubGlobal(key, dom.window[key]);
-  const { renderTeamChatLink } = await import('./team-roster.js');
-  const me = async () => ({ ok: true, data: { teams_app_url: 'https://teams.example.org', owner: true, pubkey: OWNER } });
-  const slot = renderTeamChatLink({ teamMe: me, teamHandoff: vi.fn() }, { projectSlug: 'studio' });
-  document.querySelector('main').append(slot);
-  await tick();
-  const frames = document.querySelectorAll('iframe');
-  expect(frames.length).toBe(1);
-  expect(slot.querySelector('iframe')).toBeNull(); // lives on <body>, docked over the slot
-  expect(frames[0].style.position).toBe('fixed');
-  expect(frames[0].style.visibility).not.toBe('hidden');
-  expect(frames[0].getAttribute('src')).toBe('https://teams.example.org/chat/p/studio?embed=1'); // not loaded yet: src set
-  const a = slot.querySelector('a');
-  expect(a.textContent).toBe('Open in full window');
-  expect(a.getAttribute('href')).toBe('https://teams.example.org/chat/p/studio');
-  expect(a.getAttribute('rel')).toBe('noopener noreferrer');
-  // Leaving the page hides the frame but keeps it running.
-  slot.remove();
-  await tick();
-  expect(document.querySelectorAll('iframe').length).toBe(1);
-  expect(frames[0].style.visibility).toBe('hidden');
-  expect(frames[0].inert).toBe(true);
-  const { _resetTeamsFrame } = await import('../lib/teams-frame.js');
-  _resetTeamsFrame();
+test('Team page: no chat frame, and Open chat goes to the project Team tab', async () => {
+  await boot();
+  expect(document.querySelector('iframe')).toBeNull();
+  const a = document.querySelector('a.team-open-chat');
+  expect(a.textContent).toBe('Open chat');
+  expect(a.getAttribute('href')).toBe('#/projects/studio/team');
 });
 
-test('team chat: nothing for a node without Teams', async () => {
-  vi.resetModules();
-  dom = new JSDOM('<main></main>', { url: 'https://test.invalid/continuum/#/team' });
-  for (const key of ['window', 'document']) vi.stubGlobal(key, dom.window[key]);
-  const { renderTeamChatLink } = await import('./team-roster.js');
-  const none = renderTeamChatLink({ teamMe: async () => ({ ok: true, data: { teams_app_url: null, owner: true } }) });
-  document.querySelector('main').append(none);
-  await tick();
-  expect(none.querySelector('a')).toBeNull();
-  expect(document.querySelector('iframe')).toBeNull();
+test('demo Team page: no Open chat link', async () => {
+  await boot({ demo: true });
+  expect(document.querySelector('a.team-open-chat')).toBeNull();
 });
 
 // ── invite links (Teams ADR 0009) ───────────────────────────────────────

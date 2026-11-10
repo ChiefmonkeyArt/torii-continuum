@@ -84,6 +84,8 @@ export function renderWorkspace(mount, { id, project = null }) {
       else if (name === 'Files') contents.append(renderFiles(project, store));
       else if (name === 'Chats') {
         const rows = sessionLibrary.rows().filter(r => r.metadata?.project === project);
+        // The project's team chat first (docs/adr-project-team-chat.md §3).
+        contents.append(h('a', { class: 'workspace-session-link workspace-team-chat', href: `#/projects/${project}/team`, text: 'Team chat' }));
         contents.append(h('h2', { text: 'Project conversations' }));
         if (!rows.length) contents.append(h('p', { class: 'muted', text: 'Start a chat here to keep it with this project.' }));
         for (const row of rows) contents.append(h('a', { class: 'workspace-session-link', href: '#/sessions/' + row.id, text: historyTitle(row) }));

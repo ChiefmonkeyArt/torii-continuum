@@ -29,7 +29,7 @@ import { signAndPutRoster } from '../lib/sign-roster.js';
 import { loadProfiles, personEl, displayName, setPeopleApi } from '../lib/people.js';
 import { renderPeoplePicker } from './people-picker.js';
 import { inviteShare } from './invite-share.js';
-import { ROSTER_CHANGED_EVENT, startTeamsFrame, teamsFrameRunning, waitForRosterSynced, dockTeamsFrame, teamsOrigin, chatPath, safeAppOrigin, navigateTeamsFrame } from '../lib/teams-frame.js';
+import { ROSTER_CHANGED_EVENT, teamsFrameRunning, waitForRosterSynced, safeAppOrigin } from '../lib/teams-frame.js';
 
 const ROLE_OPTS = [
   ['maintainer', 'Maintainer — can merge'],
@@ -104,9 +104,14 @@ export function renderProjectRosters(deps) {
     status.style.color = tone === 'error' ? 'var(--accent-danger)' : '';
   };
 
+  // The chat itself is on the project's Team tab (docs/adr-project-team-chat.md §4).
+  const openChat = h('a', { class: 'team-open-chat', style: 'font-size: 12.5px;', text: 'Open chat' });
+  const drawOpenChat = () => { openChat.href = `#/projects/${slug}/team`; };
+  drawOpenChat();
   card.appendChild(h('div', { style: 'display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;' }, [
     h('strong', { text: 'Members' }),
     select,
+    ...(deps.demo ? [] : [openChat]),
   ]));
   card.appendChild(h('div', { class: 'muted', style: 'font-size: 12.5px; margin-bottom: 10px; max-width: 640px;', text: `Up to ${MAX_HUMANS} people including you. Your Nostr signer signs every change; the list decides who can sign in, chat and use the project repository.` }));
   if (canInvite) card.appendChild(waitingBox);
@@ -115,7 +120,7 @@ export function renderProjectRosters(deps) {
   const invitesBox = h('div', { class: 'team-invites', style: 'margin-top: 14px; max-width: 640px;' });
   if (canInvite) card.appendChild(invitesBox);
 
-  select.addEventListener('change', () => { slug = select.value; picking = false; shown = null; removed = new Set(); navigateTeamsFrame(slug); load(); });
+  select.addEventListener('change', () => { slug = select.value; picking = false; shown = null; removed = new Set(); drawOpenChat(); load(); });
 
   const hexOf = (npub) => (parseNpub(npub).ok ? parseNpub(npub).hex : null);
 
@@ -435,34 +440,6 @@ export function renderProjectRosters(deps) {
     }, 60_000);
   }
   return card;
-}
-
-/**
- * Team chat (ADR 0002/0010, Teams repo). The owner's one Teams frame
- * (lib/teams-frame.js, started at sign-in) is docked over this card's slot;
- * leaving the page hides it without stopping it, so newcomers are still
- * added to the chat. "Open in full window" is the fallback for signers that
- * do not inject into frames.
- * @param {{teamMe:Function, teamHandoff?:Function}} api
- * @returns {HTMLElement} a placeholder that fills in (or stays empty)
- */
-export function renderTeamChatLink(api, { projectSlug = null } = {}) {
-  const slot = h('div', { class: 'team-chat-link' });
-  Promise.resolve(startTeamsFrame(api)).then((running) => {
-    const url = teamsOrigin();
-    if (!running || !url || !slot.isConnected) return;
-    const path = chatPath(projectSlug);
-    const dock = h('div', { class: 'team-chat-dock', style: 'height: max(480px, calc(100vh - 260px));' });
-    slot.appendChild(h('div', { class: 'card', style: 'margin-bottom: 16px;' }, [
-      h('div', { style: 'display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px;' }, [
-        h('strong', { text: 'Team chat' }),
-        h('a', { class: 'team-chat-open', href: `${url}${path}`, target: '_blank', rel: 'noopener noreferrer', text: 'Open in full window', style: 'font-size: 12.5px;' }),
-      ]),
-      dock,
-    ]));
-    dockTeamsFrame(dock, { projectSlug });
-  }).catch(() => {});
-  return slot;
 }
 
 export { safeAppOrigin };

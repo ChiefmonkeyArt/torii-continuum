@@ -17,17 +17,10 @@ import * as store from '../data/store.js';
 import { shortNpub } from '../lib/npub.js';
 import { setChatContext } from '../chat.js';
 import { isDemo, demoSource, demoBanner, goToLogin } from '../demo/demo-mode.js';
-import { renderProjectRosters, renderTeamChatLink } from './team-roster.js';
-import { TEAM_CHAT_PROJECT_KEY } from './team-chat-setup.js';
-import { projectRoster, putProjectRoster, teamMe, teamHandoff, peopleSearch, teamProfiles, teamAvatarBlob, createInvite, listInvites, revokeInvite, decideInvite, pendingInvites } from '../data/agent.js';
+import { renderProjectRosters } from './team-roster.js';
+import { takeTeamProject } from '../lib/team-nav.js';
+import { projectRoster, putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob, createInvite, listInvites, revokeInvite, decideInvite, pendingInvites } from '../data/agent.js';
 
-function takeChatProject() {
-  try {
-    const v = sessionStorage.getItem(TEAM_CHAT_PROJECT_KEY);
-    sessionStorage.removeItem(TEAM_CHAT_PROJECT_KEY);
-    return v;
-  } catch { return null; }
-}
 
 let storeUnsub = null;
 
@@ -52,8 +45,8 @@ export function renderTeam(mount, opts = {}) {
   ]);
   mount.appendChild(header);
 
-  const chatProject = demo ? null : takeChatProject();
-  if (!demo) mount.appendChild(renderTeamChatLink({ teamMe, teamHandoff }, { projectSlug: chatProject }));
+  // Chat is on each project's Team tab (docs/adr-project-team-chat.md §4).
+  const chatProject = demo ? null : takeTeamProject();
   // The member card reads the project list when drawn. Projects load from the
   // node after first paint, so redraw it whenever the set of projects changes
   // (ADR 0010: no more "Create a project first" for an owner with projects).

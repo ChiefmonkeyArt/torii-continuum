@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.205-alpha: every project has its team chat (2026-11-10, on review)
+
+Creating a project now starts its encrypted team chat straight away, and each project has a Team tab with that chat and an "Add people" button. The Team page is just for people, roles and invites, with "Open chat" beside each project. Decision record: `docs/adr-project-team-chat.md` (Proposed), torii-teams ADR 0017.
+
 ## v0.2.204-alpha: your computers for private git (2026-11-10)
 
 People on a project can now add up to three of their own computers in Torii Teams, so the project's private git lets them in without the operator editing files over SSH. Each person signs their own list. Continuum keeps it and writes one file for the node with every signed member list and invite link; the node's root helper checks all the signatures itself before it changes who may connect. Removing someone from every project drops their computers too. Decision records: `docs/adr-fips-default.md`, torii-teams ADR 0016.

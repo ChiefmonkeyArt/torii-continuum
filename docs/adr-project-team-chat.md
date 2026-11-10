@@ -85,3 +85,25 @@ chat membership).
 - Team page: no chat frame; each project has "Open chat"; member lists,
   roles, invites and the waiting queue unchanged; the frame still runs
   hidden and still answers roster changes (ADR 0015).
+
+## Implementation (v0.2.205-alpha, on review)
+
+- `src/lib/team-nav.js`: `openTeamFor` / `takeTeamProject` (Team page
+  project pick), `markNewProject` / `takeNewProject` (memory only), and
+  `startProjectChat` (signs the owner-only list with `signAndPutRoster`,
+  `rows: []`, then sends `continuum:roster-changed`; `stale` counts as done).
+- `src/views/project-team.js`: route `/projects/:slug/team` (and the demo
+  stub). Offline, no Teams and not-owner lines; "Start team chat" when the
+  project has no list (starts by itself once for a new project); otherwise
+  faces, "n people · n not joined yet", "Add people", "Open in full window"
+  and the docked frame (`dockTeamsFrame(dock, {projectSlug})`).
+- `src/views/projects.js`: Create opens the Team tab when the node has Teams
+  and you are the owner; the old "Team chat" step (`team-chat-setup.js`) is
+  gone.
+- `src/views/projectHome.js` Team tab; `src/views/workspace.js` "Team chat"
+  row first in Chats; `src/views/team.js` and `team-roster.js` lose the
+  frame and gain "Open chat"; `workspace.css` hides the assistant bar on
+  the Team tab only.
+- Tests: `src/views/project-team.test.js` (6),
+  `src/views/projects-create.test.js` (3), `src/views/team-roster.test.js`
+  (+2, −2); `team-chat-setup.test.js` removed with its view.
