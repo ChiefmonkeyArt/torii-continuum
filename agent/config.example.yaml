@@ -182,6 +182,12 @@ routstr:
     # held a chat turn open forever; the deadline aborts it and lets the router
     # fall back to the local Ollama model (or the next provider) instead.
     timeout_ms: 45000
+    # Paid turns watch the stream rather than one fixed clock
+    # (docs/adr-routstr-turns-dont-hang.md). Stop if nothing arrives within
+    # first_byte_ms (never more than timeout_ms), or if a started reply goes
+    # quiet for idle_ms. A reply that keeps arriving may use the turn budget.
+    first_byte_ms: 30000
+    idle_ms: 20000
 
   # ── Onboarding provider adapter (v0.2.35-alpha) ──
   #

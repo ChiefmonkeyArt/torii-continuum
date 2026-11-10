@@ -38,6 +38,7 @@ import { createRoutstrPayment } from './routstr-payment.mjs';
 import { isQuarantined } from './provider-quarantine.mjs';
 import { validModelId } from './chat-model-settings.mjs';
 import { messagesHaveImages } from '../lib/chat-attachments.mjs';
+import { createProviderHealth, isProviderFault } from './provider-health.mjs';
 import {
   ERROR_CODES, isRetryableCode, classifyHttpFailure, classifyThrownError, providerFailure, looksLikeHtml,
 } from '../lib/provider-errors.mjs';
@@ -50,6 +51,30 @@ import {
 
 /** Wall-clock deadline for a chat completion when config doesn't set one. */
 const DEFAULT_CHAT_TIMEOUT_MS = 45000;
+const DEFAULT_FIRST_BYTE_MS = 30000;
+const DEFAULT_IDLE_MS = 20000;
+const REFUND_RETRY_MS = 2000;
+// Kept back from the turn budget for the refund after a long stream.
+const SETTLE_MARGIN_MS = 10000;
+const positive = (v, d) => (Number.isFinite(v) && v > 0 ? v : d);
+
+/** Pass a stream through unchanged, calling `onChunk` for every chunk. */
+function watchActivity(body, onChunk) {
+  if (!body || typeof body.pipeThrough !== 'function') return body;
+  return body.pipeThrough(new TransformStream({ transform(chunk, c) { onChunk(); c.enqueue(chunk); } }));
+}
+
+/** Owner-facing phase of a failed attempt (ADR §4). Exported for tests. */
+export function failureExplanation(kind, { firstByteMs = DEFAULT_FIRST_BYTE_MS, idleMs = DEFAULT_IDLE_MS } = {}) {
+  const s = ms => Math.round(ms / 1000);
+  switch (kind) {
+    case 'upstream_timeout': return `The AI provider did not start replying within ${s(firstByteMs)} s.`;
+    case 'upstream_stalled': return `The AI provider went quiet for ${s(idleMs)} s in the middle of its reply.`;
+    case 'upstream_too_long': return 'The AI provider\'s reply ran past the turn limit.';
+    case 'upstream_incomplete': return 'The AI provider did not complete its reply.';
+    default: return 'The AI provider could not complete this request.';
+  }
+}
 
 /**
  * Rough estimate — we don't have per-model pricing yet, so we allocate up to
@@ -295,6 +320,13 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
   // Without a deadline a hung Routstr edge holds the chat request open forever
   // and the operator sees a spinner instead of the local-model fallback.
   const chatTimeoutMs = cfg.routstr.limits?.timeout_ms || DEFAULT_CHAT_TIMEOUT_MS;
+  // Bearer streams (docs/adr-routstr-turns-dont-hang.md §1).
+  const firstByteLimitMs = positive(cfg.routstr.limits?.first_byte_ms, DEFAULT_FIRST_BYTE_MS);
+  const idleLimitMs = positive(cfg.routstr.limits?.idle_ms, DEFAULT_IDLE_MS);
+  const watchdogTickMs = positive(deps.watchdogTickMs, 1000);
+  const refundRetryMs = deps.refundRetryMs ?? REFUND_RETRY_MS;
+  // Slow providers rest for a while (ADR §2).
+  const health = deps.health || createProviderHealth({ now });
 
   // Routstr Core v0.1.0 (RIP-03): providers are discovered, not hard-coded.
   // Deterministic bootstrap endpoints lead (explicit `providers`, then
@@ -619,12 +651,24 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     const started = now();
     const handle = await measure(hooks.telemetry, 'payment', () => bearerPayments.begin(baseUrl, sats));
     if (!handle.ok) return { ...handle, retryable: false };
+    // Watch the stream, not the clock (docs/adr-routstr-turns-dont-hang.md §1):
+    // stop when nothing starts, when it goes quiet, or at the turn limit.
+    const firstByteMs = Math.min(timeoutMs, firstByteLimitMs);
+    const totalMs = Math.max(timeoutMs, hooks.streamMs || 0);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs - (now() - started)));
+    let lastByte = null;
+    let stopKind = null;
+    const stop = kind => { if (!stopKind) { stopKind = kind; controller.abort(); } };
+    const watchdog = setInterval(() => {
+      const t = now();
+      if (lastByte === null && t - started >= firstByteMs) stop('upstream_timeout');
+      else if (t - started >= totalMs) stop('upstream_too_long');
+      else if (lastByte !== null && t - lastByte >= idleLimitMs) stop('upstream_stalled');
+    }, Math.max(5, Math.min(watchdogTickMs, Math.floor(firstByteMs / 4))));
     let result;
     let failureKind = null;
     try {
-      if (now() - started >= timeoutMs) {
+      if (now() - started >= firstByteMs) {
         failureKind = 'upstream_timeout';
         throw new Error('turn deadline reached');
       }
@@ -642,7 +686,8 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       const reading = now();
       let stream;
       try {
-        stream = await consumeSSE(res.body, {
+        // Any stream event counts as activity, thinking included.
+        stream = await consumeSSE(watchActivity(res.body, () => { lastByte = now(); }), {
           now, started,
           onDelta(delta) { if (first === null) first = now(); hooks.onDelta?.(delta); },
           onTrace: trace => hooks.telemetry?.upstream(trace),
@@ -656,22 +701,23 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
         tokens_in: stream.usage?.prompt_tokens || 0, tokens_out: stream.usage?.completion_tokens || 0 };
     } catch (error) {
       // Never silently send another paid request after an ambiguous deposit.
-      failureKind ||= controller.signal.aborted ? 'upstream_timeout' :
-        /stream|completion/.test(error?.message || '') ? 'upstream_incomplete' : 'network';
+      failureKind ||= stopKind || (controller.signal.aborted ? 'upstream_timeout' :
+        /stream|completion/.test(error?.message || '') ? 'upstream_incomplete' : 'network');
       result = { ok: false, code: 'payment_recovery_required',
         failure_kind: failureKind, retryable: false };
     } finally {
-      clearTimeout(timer);
+      clearInterval(watchdog);
     }
-    const settlement = await measure(hooks.telemetry, 'settlement', () => bearerPayments.finish(handle));
+    let settlement = await measure(hooks.telemetry, 'settlement', () => bearerPayments.finish(handle));
+    // A stopped stream may still hold the balance for a moment (ADR §3).
+    if (settlement.pending && stopKind && !settlement.quarantined) {
+      await new Promise(r => setTimeout(r, refundRetryMs));
+      settlement = await measure(hooks.telemetry, 'settlement', () => bearerPayments.settleAgain(handle));
+    }
     if (settlement.pending) hooks.telemetry?.refundPending?.();
     if (settlement.dust_msats) hooks.telemetry?.refundDust?.(settlement.dust_msats);
     if (!result.ok) {
-      const explanation = failureKind === 'upstream_timeout'
-        ? 'The AI provider took too long to reply.'
-        : failureKind === 'upstream_incomplete'
-          ? 'The AI provider did not complete its reply.'
-          : 'The AI provider could not complete this request.';
+      const explanation = failureExplanation(failureKind, { firstByteMs, idleMs: idleLimitMs });
       result.reason = `${explanation} No second payment was sent. ${settlement.pending
         ? 'Payment recovery is pending; your claim is retained. Check Routstr.'
         : settlement.refunded > 0
@@ -767,6 +813,9 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       candidates = seeing;
     }
 
+    // Resting providers go last, so the next turn avoids a slow one (ADR §2).
+    candidates = health.order(candidates);
+
     if (candidates.length === 0) {
       if (budget && !worthAttempting(budget.remainingMs())) {
         return providerFailure(ERROR_CODES.BUDGET_EXHAUSTED, `routstr skipped: ${describeBudget(budget)}`);
@@ -820,8 +869,15 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
         break;
       }
       reservedSats += sats;
-      attempt = await callOnceAt(cand.baseUrl, cand.model.id, messages, sats, sliceNow(), true, { onDelta, telemetry });
-      if (attempt.ok) break;
+      // A stream that keeps arriving may use the turn, less the refund margin.
+      const streamMs = budget ? Math.max(0, budget.remainingMs() - SETTLE_MARGIN_MS) : 0;
+      attempt = await callOnceAt(cand.baseUrl, cand.model.id, messages, sats, sliceNow(), true, { onDelta, telemetry, streamMs });
+      if (attempt.ok) { health.ok(cand.baseUrl, cand.model.id); break; }
+      if (isProviderFault(attempt.failure_kind || attempt.code)) {
+        health.fail(cand.baseUrl, cand.model.id);
+        const other = candidates.some(c => c !== cand && !health.resting(c.baseUrl, c.model.id));
+        if (other && attempt.failure_kind) attempt.reason = `${attempt.reason} Your next message will use another provider.`;
+      }
       log.warn(`[routstr] ${cand.model.id}@${cand.baseUrl} failed: ${attempt.reason}`);
       // Stop before another paid request on a terminal (non-retryable) failure.
       if (attempt.code && !isRetryableCode(attempt.code)) break;

@@ -105,7 +105,7 @@ test('funded provider timeout is classified, settled once, and never retried', a
     const result = await router.chat({ messages: [{ role: 'user', content: 'gm' }] });
     assert.equal(result.ok, false);
     assert.equal(result.failure_kind, 'upstream_timeout');
-    assert.match(result.reason, /took too long/);
+    assert.match(result.reason, /did not start replying/);
     assert.match(result.reason, /refund was returned/);
     assert.equal(requests, 1);
     assert.equal(f.count().sends, 1);

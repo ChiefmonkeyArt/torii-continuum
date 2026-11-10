@@ -16,7 +16,7 @@ const name='rrefund_'+'a'.repeat(20);
 const raw=JSON.stringify({base:bad,sats:2,token,key});
 const json=d=>new Response(JSON.stringify(d));
 const cfg={session_secret:'a'.repeat(64),routstr:{payment_mode:'ephemeral_bearer',quarantined_providers:[bad]}};
-function fixture(record=raw) {
+function fixture(record=raw,{refundFails=false}={}) {
   const records=new Map([[name,record]]);
   let sends=0, requests=0;
   const store={get:async n=>records.get(n),put:async(n,v)=>records.set(n,v),
@@ -24,6 +24,7 @@ function fixture(record=raw) {
   const wallet={send:async()=>{sends++;return{ok:true,token};},receive:async()=>({ok:true,added_sats:1})};
   const fetchFn=async(url,init)=>{
     requests++;assert.ok(!url.startsWith(bad));
+    if(refundFails&&url.endsWith('/refund'))return new Response('busy',{status:503});
     return url.endsWith('/create')?json({api_key:key}):json({token:'cashuAREFUND'});
   };
   return{records,store,wallet,fetchFn,count:()=>({sends,requests})};
@@ -57,7 +58,9 @@ test('without explicit quarantine, or with corrupt/other-provider claims, the gl
     [{...cfg,routstr:{payment_mode:'ephemeral_bearer'}},raw],
     [cfg,'{}'],[cfg,JSON.stringify({base:good,token,key,sats:2})],
   ]) {
-    const f=fixture(record),p=createRoutstrPayment(config,f.wallet,{store:f.store,fetchFn:f.fetchFn});
+    // begin() now tries to settle a pending claim first (adr-routstr-turns-dont-hang §3);
+    // the guard must still hold whenever that settlement does not complete.
+    const f=fixture(record,{refundFails:true}),p=createRoutstrPayment(config,f.wallet,{store:f.store,fetchFn:f.fetchFn});
     assert.equal((await p.begin(good,1)).ok,false);
     assert.equal(f.count().sends,0);
     assert.equal(f.records.get(name),record);
@@ -111,4 +114,14 @@ test('operator isolation is atomic, idempotent, private-backed and preserves mod
     assert.equal((await quarantineProvider(bad,{path,backupDir})).changed,false);
     await assert.rejects(quarantineProvider('https://localhost',{path,backupDir}));
   }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('begin settles a refundable older claim first, then pays once (adr-routstr-turns-dont-hang)',async()=>{
+  const other=JSON.stringify({base:good,token,key,sats:2});
+  const f=fixture(other),p=createRoutstrPayment(cfg,f.wallet,{store:f.store,fetchFn:f.fetchFn});
+  const h=await p.begin(good,1);
+  assert.equal(h.ok,true);
+  assert.equal(f.records.has(name),false);
+  assert.equal(f.count().sends,1);
+  await p.finish(h);
 });
