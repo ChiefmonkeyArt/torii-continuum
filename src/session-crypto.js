@@ -17,7 +17,7 @@ export const SESSION_BLOB_VERSION = 1;
  * Coerce arbitrary decoded JSON into a valid message list, dropping malformed
  * entries. Defensive so a corrupted/foreign blob can never crash the renderer.
  * @param {unknown} raw
- * @returns {Array<{who:string,text:string,at:number,action?:string}>}
+ * @returns {Array<{who:string,text:string,at:number,action?:string,ok?:true}>}
  */
 export function sanitizeMessages(raw) {
   if (!Array.isArray(raw)) return [];
@@ -30,6 +30,8 @@ export function sanitizeMessages(raw) {
       text: m.text,
       at: typeof m.at === 'number' ? m.at : 0,
       ...(typeof m.action === 'string' && m.action ? { action: m.action } : {}),
+      // A real AI answer, sent back as history (docs/adr-chat-history.md §2).
+      ...(m.ok === true ? { ok: true } : {}),
     });
   }
   return out;

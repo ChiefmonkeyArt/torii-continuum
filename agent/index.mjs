@@ -32,6 +32,7 @@ import { createFips, registerFipsRoutes } from './core/fips.mjs';
 import { createOllama } from './core/ollama.mjs';
 import { createModelRouter } from './core/model-router.mjs';
 import { createChatSkill } from './skills/chat.mjs';
+import { parseHistory } from './lib/chat-history.mjs';
 import { parseAttachments, attachmentNames } from './lib/chat-attachments.mjs';
 import { createChatTelemetry, createPreviewFilter, openChatStream } from './lib/chat-stream.mjs';
 import { createMemoryCache, validateCiphertext, ciphertextFilename, fingerprintCiphertext } from './lib/crypto.mjs';
@@ -901,6 +902,8 @@ app.post('/api/chat', { preHandler: requireAdmin, bodyLimit: 1024 * 1024 }, asyn
   const parsed = parseAttachments(req.body?.attachments);
   if (!parsed.ok) return reply.code(400).send({ error: parsed.error, code: 'bad_attachment' });
   const names = attachmentNames(parsed);
+  const past = parseHistory(req.body?.history);
+  if (!past.ok) return reply.code(400).send({ error: past.error, code: 'bad_history' });
   const trimmed = message.trim();
   if (trimmed.length === 0 && names.length === 0) return reply.code(400).send({ error: 'empty message' });
   if (trimmed.length > 4000) return reply.code(400).send({ error: 'message too long (max 4000)' });
@@ -923,6 +926,7 @@ app.post('/api/chat', { preHandler: requireAdmin, bodyLimit: 1024 * 1024 }, asyn
   const result = await chatSkill.handle({
     message: trimmed, context, constitution, telemetry,
     attachments: names.length ? { ...parsed, names } : null,
+    history: past.messages,
     onDelta: streaming ? delta => filter.push(delta) : undefined,
   });
   if (!result.ok) {

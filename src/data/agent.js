@@ -649,12 +649,14 @@ export async function discardDraft(file) {
 
 // ─── Chat ───────────────────────────────────────────────────
 
-export async function chat({ message, context, attachments, onEvent }) {
+export async function chat({ message, context, attachments, history, onEvent }) {
   // Longer than any other call: a chat turn legitimately waits on a model.
   // See CHAT_CLIENT_TIMEOUT_MS for the agent/nginx ordering this has to respect.
   // `attachments` come from the bar's "+" (docs/adr-one-assistant-bar.md).
   return req('POST', '/api/chat', { message, context,
     ...(attachments?.length ? { attachments } : {}),
+    // Earlier turns of this conversation (docs/adr-chat-history.md).
+    ...(history?.length ? { history } : {}),
     ...(onEvent ? { stream: true } : {}) }, { timeoutMs: CHAT_CLIENT_TIMEOUT_MS, onEvent });
 }
 

@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.207-alpha: the assistant remembers the conversation (2026-11-10)
+
+Follow-up questions now work: each message takes the recent turns of the conversation with it (up to 10 exchanges), so "use the second one" means something to the AI. The conversation stays encrypted in your browser; only the recent turns travel with each message. Error notices and greetings are never sent. Decision record: `docs/adr-chat-history.md` (Accepted).
+
 ## v0.2.206-alpha: one assistant bar everywhere (2026-11-10)
 
 The chat bar to your AI is now the same on every page. The Context and This page buttons are gone: the assistant already knows which page you are on, and it is one running conversation. A new "+" button (or paste) adds pictures or text files to a message. Pictures need a model that can see images, chosen on the Routstr page. Decision record: `docs/adr-one-assistant-bar.md` (Accepted).
