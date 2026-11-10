@@ -1,8 +1,8 @@
 # Torii Continuum — Progress log
 
-## v0.2.205-alpha: every project has its team chat (2026-11-10, on review)
+## v0.2.205-alpha: every project has its team chat (2026-11-10)
 
-Creating a project now starts its encrypted team chat straight away, and each project has a Team tab with that chat and an "Add people" button. The Team page is just for people, roles and invites, with "Open chat" beside each project. Decision record: `docs/adr-project-team-chat.md` (Proposed), torii-teams ADR 0017.
+Creating a project now starts its encrypted team chat straight away, and each project has a Team tab with that chat and an "Add people" button. The Team page is just for people, roles and invites, with "Open chat" beside each project. Decision record: `docs/adr-project-team-chat.md` (Accepted), torii-teams ADR 0017.
 
 ## v0.2.204-alpha: your computers for private git (2026-11-10)
 

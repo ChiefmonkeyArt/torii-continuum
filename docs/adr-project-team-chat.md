@@ -1,10 +1,10 @@
 # Every project has its team chat, on the project page
 
-Date: 2026-11-10. Status: **Proposed** (owner, 2026-11-10: "the Teams screen
+Date: 2026-11-10. Status: **Accepted** 2026-11-10 after a local review of the build (owner chose the full-width Team tab over the right-hand panel). Proposed (owner, 2026-11-10: "the Teams screen
 is confusing... I don't think we need the chat panel there"; "When I create a
 project i want it to create a group too... and the group chat should than
 appear in the tab on the project page"). Target: Continuum `v0.2.205-alpha`
-with torii-teams `0.6.1-torii.18` (its ADR 0017) and Suite `v0.9.54-alpha`
+with torii-teams `0.6.1-torii.18` (its ADR 0017) and Suite `v0.9.56-alpha`
 (pin only). Amends `adr-teams-membership-signals.md` (the optional "Team chat"
 step after creating a project) and torii-teams ADR 0010 §2 (where the one
 Teams frame is docked). Keeps `adr-team-collaboration.md` (one owner-signed
@@ -86,7 +86,7 @@ chat membership).
   roles, invites and the waiting queue unchanged; the frame still runs
   hidden and still answers roster changes (ADR 0015).
 
-## Implementation (v0.2.205-alpha, on review)
+## Implementation (v0.2.205-alpha)
 
 - `src/lib/team-nav.js`: `openTeamFor` / `takeTeamProject` (Team page
   project pick), `markNewProject` / `takeNewProject` (memory only), and
