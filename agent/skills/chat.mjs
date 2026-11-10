@@ -25,7 +25,8 @@
  * offline reflection.
  */
 
-import { buildWorkingValues, fenceUntrusted } from '../lib/workingvalues.mjs';
+import { buildWorkingValues, fenceUntrusted, DATA_FENCE } from '../lib/workingvalues.mjs';
+import { contentStats, IMAGE_TOKEN_ESTIMATE } from '../lib/chat-attachments.mjs';
 
 // Kept deliberately short. This prompt is prefilled on every chat turn, and on
 // a low-spec VPS (no AVX2) each token of prefill costs real wall-clock time, so
@@ -57,9 +58,27 @@ Use the project slug from the current page's context when available. If you are 
 // even with character + semantic + procedural all present.
 const MAX_FRAGMENT_CHARS = 600;
 
-/** Rough token estimate (\u22484 chars/token) for logging prompt size. */
-function estimateTokens(text) {
-  return Math.ceil((text || '').length / 4);
+/** Rough token estimate (\u22484 chars/token, images flat) for logging prompt size. */
+function estimateTokens(content) {
+  const { chars, images } = contentStats(content);
+  return Math.ceil(chars / 4) + images * IMAGE_TOKEN_ESTIMATE;
+}
+
+/**
+ * The user turn: the typed text plus any attachments (ADR one-assistant-bar).
+ * Text files are fenced as untrusted data so a file can't instruct the model;
+ * images become OpenAI-style image parts, which only vision models accept.
+ * Exported for tests.
+ */
+export function buildUserContent(message, attachments) {
+  const texts = attachments?.texts || [];
+  const images = attachments?.images || [];
+  const parts = [message || (images.length ? 'Please look at the attached image.' : 'Please look at the attached file.')];
+  // A file must not be able to close the fence and speak as the operator.
+  for (const t of texts) parts.push(fenceUntrusted(`Attached file "${t.name}"`, t.text.split(DATA_FENCE).join('[fence removed]') || '(empty file)'));
+  const text = parts.join('\n\n');
+  if (!images.length) return text;
+  return [{ type: 'text', text }, ...images.map((i) => ({ type: 'image_url', image_url: { url: i.dataUrl } }))];
 }
 
 /** Truncate an injected fragment so it can't blow up the prefill budget. */
@@ -77,11 +96,13 @@ function cap(text, max = MAX_FRAGMENT_CHARS) {
  * @param {import('../lib/reflect.mjs').createReflector extends (...a:any) => infer R ? R : never} deps.reflector
  */
 export function createChatSkill(router, log, { memory, reflector } = {}) {
-  async function handle({ message, context, constitution, onDelta, telemetry }) {
+  async function handle({ message, context, constitution, onDelta, telemetry, attachments = null }) {
     // Code-side guards (procedural, kind 30095 with guard === "code-only")
     // run BEFORE we spend a satoshi on the model.
     if (memory) {
-      const guard = memory.applyProceduralGuards(message);
+      let guard = memory.applyProceduralGuards(message);
+      // Text files go to the model too, so the same code-side guards apply.
+      for (const t of attachments?.texts || []) if (guard.ok) guard = memory.applyProceduralGuards(t.text);
       if (!guard.ok) {
         log.warn(`[chat] procedural guard blocked: ${guard.reason}`);
         return { ok: false, reason: `guard: ${guard.reason}` };
@@ -93,7 +114,7 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
 
     const messages = [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: message },
+      { role: 'user', content: buildUserContent(message, attachments) },
     ];
 
     // Prefill cost is the bottleneck on low-spec (no-AVX2) hardware, so log the
@@ -124,6 +145,8 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
       try {
         await reflector.appendEpisodic({
           user_message: message,
+          // Names only: attachment contents are never logged (ADR §6).
+          ...(attachments?.names?.length ? { attachments: attachments.names } : {}),
           assistant_reply: result.content,
           model: result.model,
           context,
@@ -150,13 +173,28 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
   return { handle };
 }
 
+const clip = (v, n = 80) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f"`]/g, '').trim().slice(0, n) : '');
+
+/**
+ * Where the operator is, in full (ADR one-assistant-bar §3). One conversation
+ * follows them across pages, so say the page can change. Values come from the
+ * browser: clipped and stripped of quotes/control characters. Exported for tests.
+ */
+export function pageLine(context) {
+  const label = clip(context?.label);
+  if (!label) return '';
+  const details = [clip(context.pageType, 40), clip(context.route, 120)].filter((v) => v && v !== 'unknown');
+  const slug = clip(context.projectSlug, 64);
+  if (slug) details.push(`project ${slug}`);
+  else if (!details.length && clip(context.where)) details.push(clip(context.where));
+  return `The operator is on the "${label}" page${details.length ? ` (${details.join(', ')})` : ''}. One conversation follows them around the app, so the page can change between messages; they may also tell you where they are.`;
+}
+
 /**
  * Build the four-layer system prompt. Exported for tests.
  */
 export function composeSystemPrompt({ memory, context, constitution }) {
-  const ctxLine = context?.label
-    ? `The operator is currently on the "${context.label}" page (${context.where || 'unknown'}).`
-    : '';
+  const ctxLine = pageLine(context);
 
   // Layer 0: the working-values header (Genesis constitution + Code of Practice)
   // is injected ABOVE character and any retrieved memory. It is the live

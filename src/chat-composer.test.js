@@ -117,9 +117,12 @@ describe('chat.js: auto-grow + reserved-space wiring', () => {
 });
 
 describe('chat.js: existing controls + actions preserved', () => {
-  it('keeps the context chip, page/general scope, send and toggle controls', () => {
-    for (const cls of ['chat-context', 'chat-mode', 'chat-send', 'chat-toggle', 'chat-input']) {
+  it('has "+", send, toggle and input, and no context chip or scope switch (adr-one-assistant-bar)', () => {
+    for (const cls of ['chat-attach', 'chat-file', 'chat-attachments', 'chat-send', 'chat-toggle', 'chat-input']) {
       expect(chatSrc).toContain(cls);
+    }
+    for (const gone of ['chat-context', 'chat-mode', 'This page', 'toggleMode']) {
+      expect(chatSrc).not.toContain(gone);
     }
   });
   it('keeps send() and the non-sending compose() prefill', () => {

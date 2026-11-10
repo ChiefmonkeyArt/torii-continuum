@@ -38,6 +38,8 @@ export const ERROR_CODES = Object.freeze({
   PROVIDER_DISABLED: 'provider_disabled',
   UPSTREAM_BAD_JSON: 'upstream_bad_json',
   BUDGET_EXHAUSTED: 'budget_exhausted',
+  // An image turn with no model that accepts images (adr-one-assistant-bar §5).
+  NO_VISION_MODEL: 'no_vision_model',
 });
 
 /**
