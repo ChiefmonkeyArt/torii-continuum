@@ -12,7 +12,9 @@
  *     for their sovereign bot. See mockRepliesAllowed().
  *
  * Each view sets context via setChatContext() so replies can reference
- * the current project/page.
+ * the current project/page. The bar is the same everywhere: "+", message box,
+ * Send (docs/adr-one-assistant-bar.md). One running conversation follows the
+ * owner around; the page goes with every message instead of a scope switch.
  */
 
 import { chat as agentChat, isAgentConfigured, getStoredToken, authEpochNow, listSessions, readSession, saveSession, deleteSession } from './data/agent.js';
@@ -24,15 +26,21 @@ import { clampInputHeight, inputShouldScroll, reserveSpaceFor } from './chat-lay
 import { sealSession, unsealSession } from './session-crypto.js';
 import { createSessionLibrary, historyTitle } from './session-library.js';
 import { phaseLabel, timingLabel } from './chat-stream.js';
+import { ACCEPT, readFile, checkAdd, attachedLine, toPayload } from './chat-attachments.js';
 
-let logEl, inputEl, sendBtn, contextEl, modeEl, toggleEl, dockEl;
+let logEl, inputEl, sendBtn, attachBtn, fileEl, chipsEl, toggleEl, dockEl;
+// Images/files waiting to go with the next message ("+", ADR §4).
+let pending = [];
+let attachError = '';
 let dockResizeObserver = null;
 // Per-thread message history. Each key (see chat-threads.threadKeyFor) maps to
 // its own message array so navigating between pages/projects swaps the visible
 // conversation without losing any thread's history.
 let threads = {};
 let activeKey = 'page:/';
-let mode = 'page'; // 'page' (default) | 'general'
+// The dock's one running conversation (ADR §2). It reuses the old "General"
+// thread key, so that history carries over.
+const RUNNING_KEY = threadKeyFor({}, 'general');
 let context = { label: 'Continuum', where: 'projects' };
 let expanded = false;
 let thinking = false;
@@ -138,9 +146,10 @@ export function mountChat(root) {
   dockEl.innerHTML = `
     <div class="chat-save-status" role="status" hidden></div>
     <div class="chat-log" role="log" aria-live="polite"></div>
+    <div class="chat-attachments" hidden></div>
     <div class="chat-input-row">
-      <span class="chat-context" title="Chat context"></span>
-      <button class="chat-mode" type="button"></button>
+      <button class="chat-attach" type="button" aria-label="Add images or files" title="Add images or files">+</button>
+      <input class="chat-file" type="file" multiple hidden tabindex="-1" aria-hidden="true">
       <textarea class="chat-input" placeholder="Ask Continuum anything…" rows="1" aria-label="Chat input"></textarea>
       <button class="chat-send" type="button">Send</button>
       <button class="chat-toggle" type="button" aria-label="Toggle chat">▲</button>
@@ -151,8 +160,10 @@ export function mountChat(root) {
   logEl = dockEl.querySelector('.chat-log');
   inputEl = dockEl.querySelector('.chat-input');
   sendBtn = dockEl.querySelector('.chat-send');
-  contextEl = dockEl.querySelector('.chat-context');
-  modeEl = dockEl.querySelector('.chat-mode');
+  attachBtn = dockEl.querySelector('.chat-attach');
+  fileEl = dockEl.querySelector('.chat-file');
+  chipsEl = dockEl.querySelector('.chat-attachments');
+  fileEl.accept = ACCEPT;
   toggleEl = dockEl.querySelector('.chat-toggle');
 
   sendBtn.addEventListener('click', send);
@@ -160,7 +171,13 @@ export function mountChat(root) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
   inputEl.addEventListener('input', autosize);
-  modeEl.addEventListener('click', toggleMode);
+  attachBtn.addEventListener('click', () => fileEl.click());
+  fileEl.addEventListener('change', () => { void addFiles([...fileEl.files]); fileEl.value = ''; });
+  // A pasted screenshot goes in as an attachment; pasted text stays text.
+  inputEl.addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files || [])];
+    if (files.length) { e.preventDefault(); void addFiles(files); }
+  });
   toggleEl.addEventListener('click', () => setExpanded(!expanded));
 
   // Keep the content scroller's reserved bottom space in lockstep with the
@@ -213,7 +230,7 @@ function updatePlaceholder() {
   if (!inputEl) return;
   inputEl.placeholder = thinking ? 'Reply in progress…' : !isSessionLive() && mockRepliesAllowed()
     ? 'Ask Continuum anything… (mock responses)'
-    : inlineChat ? 'Ask your clanker…' : 'Ask Continuum anything…';
+    : 'Ask Continuum anything…'; // one bar, one wording everywhere (adr-one-assistant-bar)
 }
 
 // Auto-grow the textarea with its content up to a sensible max, then let it
@@ -259,7 +276,7 @@ export function setChatContext(next) {
 /**
  * Build the enriched context sent to the agent: the label/where the current
  * view set, plus the router-derived route/pageType/projectSlug and the current
- * mode. columnId/cardId are best-effort (the board keeps them in-memory, not in
+ * page. columnId/cardId are best-effort (the board keeps them in-memory, not in
  * the hash) so they are null here. Unknown fields are ignored server-side.
  */
 function buildContext() {
@@ -269,7 +286,6 @@ function buildContext() {
   return {
     label: context.label,
     where: context.where,
-    mode,
     route,
     pageType: pageTypeFor(r.pattern),
     projectSlug: explicitThread ? threadMetadata[explicitThread]?.project || null : (r.params && r.params.slug) || projectSlugFrom(context) || null,
@@ -278,20 +294,14 @@ function buildContext() {
   };
 }
 
-// Recompute the active thread key from the current context + mode, swap the
-// visible history to that thread, greet it if empty, and refresh the chrome.
+// The opened conversation, else the running one: the page no longer picks the
+// thread (ADR §2). Greet it if empty and refresh the chrome.
 function syncActiveThread() {
-  activeKey = explicitThread || threadKeyFor(buildContext(), mode);
+  activeKey = explicitThread || RUNNING_KEY;
   if (!Array.isArray(threads[activeKey])) threads[activeKey] = [];
   if (threads[activeKey].length === 0) greet();
-  renderContext();
   updatePlaceholder();
   renderLog();
-}
-
-function toggleMode() {
-  mode = mode === 'general' ? 'page' : 'general';
-  syncActiveThread();
 }
 
 function currentMessages() {
@@ -299,20 +309,44 @@ function currentMessages() {
   return threads[activeKey];
 }
 
-function renderContext() {
-  if (!contextEl) return;
-  const label = mode === 'general' ? 'general' : context.label;
-  contextEl.textContent = `context · ${label}`;
-  contextEl.title = `Context: ${label} · ${context.where} · ${mode}`;
-  if (modeEl) {
-    const general = mode === 'general';
-    modeEl.textContent = general ? 'General' : 'This page';
-    modeEl.classList.toggle('active', general);
-    modeEl.setAttribute('aria-pressed', String(general));
-    modeEl.setAttribute('aria-label', general
-      ? 'Chat scope: general side conversation. Switch to this page.'
-      : 'Chat scope: this page. Switch to a general side conversation.');
+// Read picked/pasted files into pending items, refusing what won't fit.
+async function addFiles(files) {
+  attachError = '';
+  for (const file of files) {
+    const { item, error } = await readFile(file);
+    const why = error || checkAdd(pending, item);
+    if (why) { attachError = why; continue; }
+    pending.push(item);
   }
+  renderChips();
+  inputEl?.focus();
+}
+
+function renderChips() {
+  if (!chipsEl) return;
+  chipsEl.replaceChildren();
+  chipsEl.hidden = pending.length === 0 && !attachError;
+  dockEl?.classList.toggle('has-attachments', !chipsEl.hidden);
+  pending.forEach((item, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'chat-chip';
+    chip.textContent = item.name;
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.textContent = '×';
+    x.setAttribute('aria-label', `Remove ${item.name}`);
+    x.addEventListener('click', () => { pending.splice(i, 1); attachError = ''; renderChips(); });
+    chip.append(x);
+    chipsEl.append(chip);
+  });
+  if (attachError) {
+    const err = document.createElement('span');
+    err.className = 'chat-attach-error';
+    err.setAttribute('role', 'alert');
+    err.textContent = attachError;
+    chipsEl.append(err);
+  }
+  reserveSpace();
 }
 
 function push(who, text) {
@@ -469,7 +503,7 @@ function setExpanded(v) {
 
 async function send() {
   const text = (inputEl.value || '').trim();
-  if (!text || thinking) return;
+  if ((!text && pending.length === 0) || thinking) return;
   // Pin the turn to the thread it was sent from, so an AI reply that arrives
   // after the user has navigated to another page still lands in the right
   // conversation rather than the newly-active one.
@@ -493,7 +527,10 @@ async function send() {
     }
   }
   const generation = ++turnGeneration;
-  push('user', text);
+  // Attachments go once; history keeps only their names (ADR §6).
+  const sending = pending;
+  pending = []; attachError = ''; renderChips();
+  push('user', [text, attachedLine(sending)].filter(Boolean).join('\n'));
   inputEl.value = '';
   autosize();
   if (!expanded) setExpanded(true);
@@ -502,7 +539,7 @@ async function send() {
   preview = { key: turnKey, token: turnToken, text: '', phase: 'Preparing', timingText: '', started: performance.now() };
   previewClock = setInterval(schedulePreviewPaint, 1000);
   renderLog();
-  const reply = await getReply(text, turnContext, event => {
+  const reply = await getReply(text, turnContext, toPayload(sending), event => {
     if (generation !== turnGeneration || turnToken !== getStoredToken()) return;
     if (event.type === 'reset') { preview.text = ''; preview.phase = 'Waiting for model'; }
     if (event.type === 'phase') preview.phase = phaseLabel(event.phase);
@@ -581,6 +618,10 @@ export function chatErrorMessage(result) {
       return 'No model provider is available: Routstr failed and no local Ollama model is enabled. Enable a local model or restore Routstr access.';
     case 'bad_request':
       return 'The agent rejected that request as malformed. This is a bug worth reporting rather than a provider outage.';
+    case 'no_vision_model':
+      return "Your chat model can't read images. Choose one that can on the Routstr page, or send the message without the image.";
+    case 'bad_attachment':
+      return `The agent refused an attachment: ${result && typeof result.reason === 'string' ? result.reason : 'unsupported file'}.`;
     case 'budget_exhausted':
       return 'That turn ran out of time before any model could answer, so it was stopped rather than left hanging. Nothing was charged. Try again, or raise the agent’s turn budget (model_router.total_budget_ms).';
     case 'client_timeout':
@@ -601,9 +642,9 @@ export function chatErrorMessage(result) {
  * missing or expired. Canned replies are served ONLY on the agent-less demo
  * build; a production build reports a structured error instead of a fake answer.
  */
-async function getReply(text, ctx, onEvent) {
+async function getReply(text, ctx, attachments, onEvent) {
   if (isSessionLive()) {
-    const r = await agentChat({ message: text, context: ctx, onEvent });
+    const r = await agentChat({ message: text, context: ctx, attachments, onEvent });
     if (r.ok && r.data?.reply) {
       // OWNER-UI-3: when the agent wrote to the shared store this turn (created/
       // updated a milestone or todo), reconcile the browser cache so the project
@@ -729,7 +770,6 @@ export async function openConversation(id, project = null) {
   }
   threadMetadata[explicitThread] ||= { title: '', pinned: false, project };
   context = { label: project || 'Conversation', where: project ? 'project:' + project : 'chat' };
-  mode = 'page';
   syncActiveThread();
   setExpanded(true);
   return true;
@@ -748,11 +788,9 @@ export function forgetConversation(record) {
  */
 export function compose(text) {
   if (!inputEl) return;
-  mode = 'page';
   syncActiveThread();
   inputEl.value = text;
   autosize();
   setExpanded(true);
-  renderContext();
   inputEl.focus();
 }

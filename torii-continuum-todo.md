@@ -1,11 +1,19 @@
 # Torii Continuum — Master TODO
 
+## v0.2.206-alpha: one assistant bar everywhere
+
+- [x] One bar on every page: "+", box, Send; Context and This page/General removed; one running conversation.
+- [x] "+" and paste for images (shrunk in the browser) and text files; vision-only routing, `no_vision_model`, `bad_attachment`.
+- [x] Owner reviewed the build locally; ADR Accepted.
+- [ ] Merge, tag v0.2.206-alpha, deploy (ask first).
+- [ ] Later: send recent history to the agent with each turn (today it gets only the current message).
+
 ## v0.2.205-alpha: every project has its team chat
 
 - [x] Team tab with the docked project chat, "Add people", "Start team chat"; new projects sign the owner-only list once.
 - [x] Team page without the chat frame; "Open chat" per project; Chats tab "Team chat" row; assistant bar hidden on the Team tab.
 - [x] Owner reviewed the build locally and chose the full-width Team tab; ADR Accepted.
-- [ ] Merge, tag v0.2.205-alpha after Teams 0.6.1-torii.18 and Suite v0.9.56-alpha; deploy (ask first).
+- [x] Merged, tagged v0.2.205-alpha, deployed 2026-11-10.
 
 ## Teams FIPS trial automation (ops-only, no version bump)
 

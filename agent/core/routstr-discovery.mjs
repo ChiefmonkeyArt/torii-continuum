@@ -19,6 +19,7 @@
 
 import { SimplePool } from 'nostr-tools/pool';
 import { isIP } from 'node:net';
+import { contentStats, IMAGE_TOKEN_ESTIMATE } from '../lib/chat-attachments.mjs';
 
 const KIND_PROVIDER_ANNOUNCEMENT = 38421;
 const DEFAULT_RELAYS = [
@@ -347,7 +348,27 @@ function describeModel(m) {
     name: typeof m.name === 'string' && m.name ? m.name : m.id,
     pricing_sats: pricingSats,
     max_cost_sats: sortSats,
+    input_modalities: inputModalities(m),
   };
+}
+
+/**
+ * Advertised input types (OpenRouter-style `architecture.input_modalities`, or
+ * the older `architecture.modality` "text+image->text"). Untrusted catalog data:
+ * short lowercase words only, at most 8. Always includes 'text'.
+ */
+export function inputModalities(m) {
+  const arch = m?.architecture && typeof m.architecture === 'object' ? m.architecture : {};
+  let list = Array.isArray(arch.input_modalities) ? arch.input_modalities
+    : typeof arch.modality === 'string' ? arch.modality.split('->')[0].split('+') : [];
+  list = list.filter((x) => typeof x === 'string').map((x) => x.trim().toLowerCase())
+    .filter((x) => /^[a-z]{1,16}$/.test(x)).slice(0, 8);
+  return [...new Set(['text', ...list])];
+}
+
+/** True when the catalog says this model accepts images. */
+export function acceptsImages(model) {
+  return Array.isArray(model?.input_modalities) && model.input_modalities.includes('image');
 }
 
 function num(x) {
@@ -379,9 +400,11 @@ function estimateTokenCost(model, maxTokensOut, messages) {
 /** Rough token count for a message list (~4 chars/token for English). */
 function estimatePromptTokens(messages) {
   if (!Array.isArray(messages)) return 0;
-  let chars = 0;
+  let chars = 0, images = 0;
   for (const m of messages) {
-    if (typeof m?.content === 'string') chars += m.content.length;
+    const st = contentStats(m?.content);
+    chars += st.chars; images += st.images;
   }
-  return Math.max(16, Math.ceil(chars / 4));
+  // Each image is priced as ~1,600 prompt tokens so a picture can't underpay.
+  return Math.max(16, Math.ceil(chars / 4) + images * IMAGE_TOKEN_ESTIMATE);
 }

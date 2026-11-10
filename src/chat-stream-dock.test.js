@@ -71,16 +71,34 @@ test('dock clears failed-provider partials when the fallback begins', async () =
   expect(text()).not.toContain('Local answer');
 });
 
-test('navigation pins live text to the originating thread', async () => {
+test('one running conversation: the live reply follows the owner to another page', async () => {
   const { module, send, text } = await setup();
   window.location.hash = '#/projects';
   module.setChatContext({ route: '/projects', where: 'projects', label: 'Projects' });
-  send({ type: 'delta', delta: 'Private dashboard text' });
+  send({ type: 'delta', delta: 'Live text' });
   await sleep(70);
-  expect(text()).not.toContain('Private dashboard text');
-  send({ type: 'done', reply: 'Final dashboard text' });
+  expect(text()).toContain('Live text');
+  send({ type: 'done', reply: 'Final text' });
   await sleep(70);
-  expect(text()).not.toContain('Final dashboard text');
+  expect(text()).toContain('gm');
+  expect(text()).toContain('Final text');
+});
+
+test('a reply to an opened conversation stays in it after navigating away', async () => {
+  const { module, send, text } = await setup();
+  send({ type: 'done', reply: 'first' });
+  await sleep(70);
+  const id = module.newConversation();
+  await module.openConversation(id);
+  document.querySelector('textarea').value = 'in the old chat';
+  document.querySelector('.chat-send').click();
+  await sleep(10);
+  module.setChatContext({ route: '/marketplace', where: 'marketplace', label: 'Marketplace' });
+  send({ type: 'done', reply: 'Opened-chat reply' });
+  await sleep(70);
+  expect(text()).not.toContain('Opened-chat reply');
+  await module.openConversation(id);
+  expect(text()).toContain('Opened-chat reply');
 });
 
 test('sign-out drops preview and late completion, never restores prior owner text', async () => {

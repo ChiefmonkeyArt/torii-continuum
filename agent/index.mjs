@@ -32,6 +32,7 @@ import { createFips, registerFipsRoutes } from './core/fips.mjs';
 import { createOllama } from './core/ollama.mjs';
 import { createModelRouter } from './core/model-router.mjs';
 import { createChatSkill } from './skills/chat.mjs';
+import { parseAttachments, attachmentNames } from './lib/chat-attachments.mjs';
 import { createChatTelemetry, createPreviewFilter, openChatStream } from './lib/chat-stream.mjs';
 import { createMemoryCache, validateCiphertext, ciphertextFilename, fingerprintCiphertext } from './lib/crypto.mjs';
 import { scrub } from './lib/scrub.mjs';
@@ -889,14 +890,19 @@ app.get('/api/health/secrets', { preHandler: requireAdmin }, async () => {
   return { ok: report.ok, count: report.count, undecryptable: report.undecryptable };
 });
 
-app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
-  const message = req.body?.message;
+// 1 MB for this route only, matching nginx's client_max_body_size, so the
+// assistant bar's "+" can carry a shrunk image (docs/adr-one-assistant-bar.md).
+app.post('/api/chat', { preHandler: requireAdmin, bodyLimit: 1024 * 1024 }, async (req, reply) => {
+  const message = req.body?.message ?? '';
   const context = req.body?.context || null;
-  if (!message || typeof message !== 'string') {
+  if (typeof message !== 'string') {
     return reply.code(400).send({ error: 'body.message required' });
   }
+  const parsed = parseAttachments(req.body?.attachments);
+  if (!parsed.ok) return reply.code(400).send({ error: parsed.error, code: 'bad_attachment' });
+  const names = attachmentNames(parsed);
   const trimmed = message.trim();
-  if (trimmed.length === 0) return reply.code(400).send({ error: 'empty message' });
+  if (trimmed.length === 0 && names.length === 0) return reply.code(400).send({ error: 'empty message' });
   if (trimmed.length > 4000) return reply.code(400).send({ error: 'message too long (max 4000)' });
 
   const streaming = req.body?.stream === true;
@@ -916,6 +922,7 @@ app.post('/api/chat', { preHandler: requireAdmin }, async (req, reply) => {
   const constitution = await telemetry.measure('prepare', () => resolveConstitutionVersions(req.session.npub));
   const result = await chatSkill.handle({
     message: trimmed, context, constitution, telemetry,
+    attachments: names.length ? { ...parsed, names } : null,
     onDelta: streaming ? delta => filter.push(delta) : undefined,
   });
   if (!result.ok) {

@@ -37,6 +37,7 @@ import { measure } from '../lib/chat-stream.mjs';
 import { createRoutstrPayment } from './routstr-payment.mjs';
 import { isQuarantined } from './provider-quarantine.mjs';
 import { validModelId } from './chat-model-settings.mjs';
+import { messagesHaveImages } from '../lib/chat-attachments.mjs';
 import {
   ERROR_CODES, isRetryableCode, classifyHttpFailure, classifyThrownError, providerFailure, looksLikeHtml,
 } from '../lib/provider-errors.mjs';
@@ -44,7 +45,7 @@ import {
   createBudget, sliceForProvider, worthAttempting, describeBudget,
 } from '../lib/timeout-budget.mjs';
 import {
-  discoverProviders, fetchProviderCatalog, estimateSatsForModel,
+  discoverProviders, fetchProviderCatalog, estimateSatsForModel, acceptsImages,
 } from './routstr-discovery.mjs';
 
 /** Wall-clock deadline for a chat completion when config doesn't set one. */
@@ -751,13 +752,29 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       candidates = await measure(telemetry, 'discovery', () => resolveCandidates(null));
     }
 
+    // Image turns go only to models whose catalog lists image input, and stop
+    // before any payment when none can (docs/adr-one-assistant-bar.md §5).
+    const imageTurn = messagesHaveImages(messages);
+    if (imageTurn && candidates.length) {
+      let seeing = candidates.filter((c) => acceptsImages(c.model));
+      if (!seeing.length && !ownerChoice && requested) {
+        seeing = (await resolveCandidates(null)).filter((c) => acceptsImages(c.model));
+      }
+      if (!seeing.length) {
+        return providerFailure(ERROR_CODES.NO_VISION_MODEL,
+          "Your chat model can't read images. Choose one that can on the Routstr page.");
+      }
+      candidates = seeing;
+    }
+
     if (candidates.length === 0) {
       if (budget && !worthAttempting(budget.remainingMs())) {
         return providerFailure(ERROR_CODES.BUDGET_EXHAUSTED, `routstr skipped: ${describeBudget(budget)}`);
       }
       // Nothing reachable. Fall back to a directly-configured legacy endpoint
-      // (offline / discovery-disabled operator) before failing closed.
-      if (legacyEndpoint) {
+      // (offline / discovery-disabled operator) before failing closed. Not for
+      // image turns: nothing says that endpoint's model can see.
+      if (legacyEndpoint && !imageTurn) {
         const attempt = await callOnceAt(legacyEndpoint, wanted, messages, satsFor(null, messages), sliceNow(), true, { onDelta, telemetry });
         await appendCostLog(cfg, {
           at: new Date().toISOString(), skill, model: wanted,

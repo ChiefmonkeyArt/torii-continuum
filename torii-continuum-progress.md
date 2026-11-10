@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.206-alpha: one assistant bar everywhere (2026-11-10)
+
+The chat bar to your AI is now the same on every page. The Context and This page buttons are gone: the assistant already knows which page you are on, and it is one running conversation. A new "+" button (or paste) adds pictures or text files to a message. Pictures need a model that can see images, chosen on the Routstr page. Decision record: `docs/adr-one-assistant-bar.md` (Accepted).
+
 ## v0.2.205-alpha: every project has its team chat (2026-11-10)
 
 Creating a project now starts its encrypted team chat straight away, and each project has a Team tab with that chat and an "Add people" button. The Team page is just for people, roles and invites, with "Open chat" beside each project. Decision record: `docs/adr-project-team-chat.md` (Accepted), torii-teams ADR 0017.

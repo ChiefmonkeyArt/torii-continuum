@@ -39,6 +39,7 @@
  */
 
 import { isRetryableCode, inferCodeFromReason, ERROR_CODES, sanitizeReason } from '../lib/provider-errors.mjs';
+import { messagesHaveImages } from '../lib/chat-attachments.mjs';
 import {
   createBudget, resolveTotalBudgetMs, worthAttempting, describeBudget,
 } from '../lib/timeout-budget.mjs';
@@ -89,6 +90,15 @@ export function createModelRouter({ routstr, ollama, cfg, log, now }) {
       reason: sanitizeReason(`${provider} not attempted: ${describeBudget(budget)}`),
       retryable: false,
     });
+
+    // The local model can't see images: an image turn goes to Routstr only,
+    // with no silent local fallback (docs/adr-one-assistant-bar.md §5).
+    if (messagesHaveImages(providerArgs.messages)) {
+      if (turnStrategy === 'ollama_only') {
+        return { ok: false, code: ERROR_CODES.NO_VISION_MODEL, reason: "The local model can't read images.", retryable: false, provider: 'ollama' };
+      }
+      return withProvider(await routstr.chat(withBudget()), 'routstr');
+    }
 
     switch (turnStrategy) {
       case 'routstr_only':
