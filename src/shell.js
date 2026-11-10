@@ -10,7 +10,7 @@ import { isSessionLive, startLogin, cancelLogin, endSession, readSessionMarker }
 import { isAgentConfigured, versionInfo, requestUpdate, teamMe, teamHandoff, teamProfiles, teamAvatarBlob, pendingInvites } from './data/agent.js';
 import { initAccountChip, paintAccount, paintWaiting, startWaiting, stopWaiting } from './lib/account-chip.js';
 import { startTeamsFrame, stopTeamsFrame } from './lib/teams-frame.js';
-import { TEAM_CHAT_PROJECT_KEY } from './views/team-chat-setup.js';
+import { openTeamFor } from './lib/team-nav.js';
 import { describeVersionState, updateTargetTag } from './data/release.js';
 import { h, openModal } from './views/util.js';
 import { demoAware } from './demo/demo-mode.js';
@@ -63,10 +63,7 @@ export function mountShell(root) {
 
 export function mainContent() { return mainEl; }
 
-function openWaiting(slug) {
-  try { if (slug) sessionStorage.setItem(TEAM_CHAT_PROJECT_KEY, slug); } catch { /* storage off: opens on the first project */ }
-  navigate('/team');
-}
+function openWaiting(slug) { openTeamFor(slug, navigate); }
 
 // Build-time version string baked in by Vite (`define: __APP_VERSION__`).
 // Returns e.g. "v0.2.57-alpha", or "v—" when the constant is absent (running

@@ -5,8 +5,8 @@ import { navigate } from '../router.js';
 import { setChatContext } from '../chat.js';
 import { renderSidebar } from '../shell.js';
 import { isDemo, demoSource, demoBanner, demoPath, goToLogin } from '../demo/demo-mode.js';
-import { teamMe, putProjectRoster, peopleSearch, createInvite, teamProfiles, teamAvatarBlob } from '../data/agent.js';
-import { openTeamChatSetup } from './team-chat-setup.js';
+import { teamMe } from '../data/agent.js';
+import { markNewProject } from '../lib/team-nav.js';
 
 export function renderProjects(mount, opts = {}) {
   const demo = isDemo(opts);
@@ -149,7 +149,7 @@ function openNewProject() {
 
   nameInput.focus();
 
-  function submit() {
+  async function submit() {
     errorEl.textContent = '';
     const name = nameInput.value.trim();
     if (!name) { errorEl.textContent = 'Give the project a name.'; return; }
@@ -176,25 +176,16 @@ function openNewProject() {
       });
       modal.close();
       renderSidebar();
-      navigate(`/projects/${ev.content.slug}`);
-      offerTeamChat(ev.content);
+      // Every project gets its group (docs/adr-project-team-chat.md §1): with
+      // Teams installed, open the Team tab, which signs the owner-only list.
+      const slug = ev.content.slug;
+      const me = await teamMe().catch(() => null);
+      if (me?.ok && me.data?.owner && me.data?.teams_app_url) {
+        markNewProject(slug);
+        navigate(`/projects/${slug}/team`);
+      } else navigate(`/projects/${slug}`);
     } catch (e) {
       errorEl.textContent = e.message;
     }
   }
-}
-
-/**
- * After a project is created: when Torii Teams is installed, offer its team
- * chat and teammate invites (docs/adr-teams-membership-signals.md). Silent
- * when Teams is absent or the agent is offline.
- */
-async function offerTeamChat(project) {
-  const r = await teamMe().catch(() => null);
-  if (!r?.ok || !r.data?.owner || !r.data?.teams_app_url) return;
-  openTeamChatSetup({
-    project: { slug: project.slug, name: project.name },
-    api: { putProjectRoster, peopleSearch, createInvite, teamProfiles, teamAvatarBlob },
-    navigate,
-  });
 }

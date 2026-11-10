@@ -233,6 +233,7 @@ export function renderProjectTabs(slug, active, opts = {}) {
   };
   return h('nav', { class: 'view-tabs', 'aria-label': 'Project views' }, [
     tab('workspace', 'Workspace', `/projects/${slug}`),
+    tab('team', 'Team', `/projects/${slug}/team`),
     tab('overview', 'Overview', `/projects/${slug}/overview`),
     tab('board', 'Board', `/projects/${slug}/board`),
   ]);
