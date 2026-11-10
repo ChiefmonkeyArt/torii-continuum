@@ -281,7 +281,8 @@ export function createRosterStore({ dir, audit = null, now = () => Math.floor(Da
    * current files each call (a handful at most), so a removal is seen at
    * once. Unreadable/corrupt files are skipped, never fatal.
    */
-  async function memberships(pubkey) {
+  /** Every stored project slug, sorted. */
+  async function slugs() {
     let names = [];
     try {
       names = await readdir(dir);
@@ -289,11 +290,12 @@ export function createRosterStore({ dir, audit = null, now = () => Math.floor(Da
       if (e.code === 'ENOENT') return [];
       throw e;
     }
+    return names.filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5)).filter((s) => SLUG_RE.test(s)).sort();
+  }
+
+  async function memberships(pubkey) {
     const out = [];
-    for (const n of names.sort()) {
-      if (!n.endsWith('.json')) continue;
-      const slug = n.slice(0, -5);
-      if (!SLUG_RE.test(slug)) continue;
+    for (const slug of await slugs()) {
       let stored = null;
       try { stored = await get(slug); } catch { continue; }
       const role = stored ? effectiveRole(stored.roster, pubkey) : null;
@@ -302,5 +304,5 @@ export function createRosterStore({ dir, audit = null, now = () => Math.floor(Da
     return out;
   }
 
-  return { get, put, admit, memberships };
+  return { get, put, admit, memberships, slugs };
 }
