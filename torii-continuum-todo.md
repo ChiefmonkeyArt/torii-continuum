@@ -114,8 +114,9 @@
 - **TEAMS-ADR (proposed 2026-10-29, docs-only):** Cordn + private
   ngit-grasp + roster-scoped clankers; sandbox trial passed 9/9 checks with one
   upstream Cordn handoff defect. See `docs/adr-team-collaboration.md`.
-  - [ ] Confirm Cordn core licence (asked in https://github.com/Cordn-msg/cordn-web/issues/51; needed before TEAMS-2b
-    packaging, not before) and cordn-web NIP-07/NIP-46 signer support.
+  - [x] cordn-web NIP-07/NIP-46/NIP-55 signer support: confirmed (Teams uses it).
+  - [ ] Cordn core licence: still no licence file (npm packages say MIT; asked in
+    https://github.com/Cordn-msg/cordn-web/issues/51). Follow-up tracked in `torii-teams-todo.md`.
   - [x] Report the post-handoff defect to Cordn: https://github.com/Cordn-msg/cordn-web/issues/51
     (snapshot omits `group.stream`; messages lost after handoff + restart).
   - TEAMS-2a: load-bearing signed roster + NIP-17 invite/accept; project it
@@ -157,8 +158,10 @@
       `POST /api/team/auth/refresh`, owner handoff to the Teams frame via
       admin-only `POST /api/team/auth/handoff`. Needs Teams 0.6.1-torii.8
       (Suite v0.9.38-alpha). Live on the VPS 2026-11-06.
-    - [ ] One sign-in follow-ups: coordinator handshake still signs once per
-      page load (needs Cordn session support); per-pubkey "sign out everywhere".
+    - [x] One sign-in follow-up, signing on load: closed by torii-teams ADR 0019
+      (`0.6.1-torii.20`, Suite v0.9.63-alpha, live 2026-11-11). After first sign-in,
+      reloads make 0 signer calls; no session key needed.
+    - [ ] Per-pubkey "sign out everywhere".
     - [x] 2a-3: invite links (v0.2.198-alpha, torii-teams ADR 0009, replaces the
       NIP-17 invite plan): open links with owner approval ("Let in" signs the
       roster once), named links, hashes only, one refusal body. Needs Teams
@@ -178,13 +181,16 @@
     - [x] Removal finishes before you leave (v0.2.202-alpha, torii-teams
       ADR 0015): the Team page waits for the owner's Teams to confirm a
       removal. Needs Teams 0.6.1-torii.16 (Suite v0.9.46-alpha).
-    - [ ] 2a-4: apply projections — ngit-grasp env + restart, Cordn
-      add/remove, announcement maintainers (needs TEAMS-2b services).
-  - [ ] TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path,
+    - [x] 2a-4 Cordn part: the Teams client applies roster adds and removals
+      (torii-teams ADR 0005, 0012, 0015).
+    - [ ] 2a-4 git part: `git-members` / `member-nodes` and announcement
+      maintainers from the signed roster (Suite todo, TEAMS-2b services).
+  - [x] TEAMS-2b: Torii Suite packaging for ngit-grasp (private mode, base path,
     `NGIT_USER_INDEX_RELAYS` = node relay) and cordn-rs, with backups.
     - [x] Built: Suite v0.9.26-alpha `install-teams.sh` (chat public via the node
       relay, git mesh-only; owner choice 2026-10-31). ADR addendum "TEAMS-2b packaging".
-    - [ ] Deploy to chiefmonkey.art after the Plebeian test + trial teardown (owner approval).
+    - [x] Deployed: the live `teams.<domain>/torii-node.json` lists the node
+      coordinator and mesh git (checked 2026-11-11).
   - [ ] TEAMS-2c: (a) Torii Teams app (`torii-teams`, cordn-web basis, approved
     2026-10-31) opened from the Team view with roster roles — Torii Teams session;
     (b) clanker harness with a NIP-46 signer and an LLM in place of the trial's
@@ -193,20 +199,19 @@
       `/torii-node.json` (node coordinator + `wss://relay.<domain>`); torii-teams
       ADR 0001, PRs #4/#5. Suite installer v0.9.27-alpha (`INSTALL_TEAMS_APP=1`),
       plus `teams.app_url` in the agent config v0.9.28-alpha.
-    - [ ] (a) first app tag `0.6.1-torii.1`, pin it in the Suite, DNS for
-      `teams.<domain>`, deploy (owner approval; after the Plebeian trial).
+    - [x] (a) tagged, pinned and deployed: `teams.<domain>` live, now
+      `0.6.1-torii.20` (Suite v0.9.63-alpha, 2026-11-11).
     - [ ] (a) roster roles handed in from Continuum (uses TEAMS-2a-2 member sign-in).
     - The "Open team chat" link is the Continuum Teams session's "TEAMS-2a Team
       view link" item (shown only when `teams.app_url` is set).
   - TEAMS-2d (proposed, docs-only so far): FIPS private mode + Teams napplet.
     See the ADR amendment "FIPS private mode and the Teams napplet".
-    - [ ] FIPS trial on the VPS + one other machine (needs owner approval;
-      the sandbox has no root for the `fips0` TUN): services on `fips0`,
-      `.fips` names, peer admission vs routed sessions, firewall drop-in.
-      Plan ready: `docs/trials/teams-fips/README.md` (preflight, firewall
-      before first start, throwaway node keys, Q1 to Q4, abort + teardown).
-    - [ ] Roster device entries (`["p", node, "device", human]`) and the
-      fourth projection (FIPS peer allow list + `fips0` firewall drop-in).
+    - [x] FIPS trial on the VPS + one other machine: run 2026-10-29, Q1, Q2 and
+      Q4 pass, Q3 inconclusive (re-run tracked above). See
+      `docs/trials/teams-fips/RESULTS.md`.
+    - [x] Roster device entries: replaced by member device notes (kind 27531)
+      and `memory/teams/mesh.json` (`docs/adr-fips-default.md`, Stage C
+      v0.2.204-alpha).
     - [x] Suite packaging of the FIPS daemon (Suite v0.9.26-alpha: 0.5.3 + `fips.d`).
     - [ ] Continuum napplet host (port Quest's sandboxed runtime) and a
       `nap-torii-team@1` contract draft; matching note in torii-quest.
@@ -222,10 +227,10 @@
     role-checked fold, Actions panel (no AI), `/action` + `A` shortcut, source
     badges, local status lines, decision log.
     - [x] Slice 1 merged in `ChiefmonkeyArt/torii-teams` PR #1 (2026-10-31).
-    - [ ] Slices 2+ tracked in `torii-teams-todo.md` (Torii project files); the
-      team app is now its own app, `torii-teams`.
-  - [ ] J1b: threads, reactions, encrypted files/images, on-device search, pins
-    (as far as Cordn supports).
+    - [ ] Slices 2+ tracked in `torii-teams-todo.md` (Torii Teams project
+      files); the team app is its own app, `torii-teams`.
+  - [ ] J1b gaps only: threads, reactions, files/images, search and pins already
+    ship in Teams; remaining gaps tracked in `torii-teams-todo.md`.
   - [ ] J2: scribe clanker suggestions; per-group extraction setting, default off.
   - [ ] J3: job spec + promotion; in-house dispatch; per-job reservation from
     the Coco agent allowance.
