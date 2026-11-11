@@ -1,6 +1,6 @@
 # Routstr turns that don't hang
 
-Date: 2026-11-10. Status: **Proposed**. Request (owner, 2026-11-10: "Do the
+Date: 2026-11-10. Status: **Accepted** 2026-11-11 (owner: "Accept and ship"). Request (owner, 2026-11-10: "Do the
 routstr issue", about the repeated "The AI provider took too long to reply"
 errors). Target: Continuum `v0.2.208-alpha`. No Suite or Teams change. Amends
 `docs/adr-routstr-streaming-payment.md` (timers and recovery only; its payment
