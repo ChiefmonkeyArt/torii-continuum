@@ -3,7 +3,7 @@
 ## v0.2.210-alpha: GLiClass Edge stages
 
 - [x] Stages `gliclass`, `gliclass_bench`, `gliclass_remove` (with Suite v0.9.65-alpha, Suite ADR 0004); removal flags written after enable flags.
-- [ ] Merge, tag, deploy with owner approval; run `gliclass,gliclass_bench` and record the numbers.
+- [x] Merge, tag, deploy with owner approval (run 43036613732); `gliclass,gliclass_bench` from Suite v0.9.68-alpha (run 43043337336): routing 28/30 vs Jev 29/30, median 3.8 s on the VPS CPU (no AVX2).
 - [ ] Later: decide (new ADR) whether choice questions (tool routing, approve/deny) go to the local model.
 
 ## v0.2.209-alpha: Routstr falls back automatically
