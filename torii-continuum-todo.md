@@ -48,7 +48,7 @@
 - [ ] Re-run Q3 later (routed session via test-uk01).
 - [ ] Owner admits the real team (`action=admit`), then live test; record Q1–Q4 in the trial README Results.
 - [ ] Owner + Plebeian team: install FIPS, send node npubs; owner runs `action=admit`.
-- [ ] Report the cordn-server IPv6-literal bug upstream (owner approval to file).
+- [x] Report the cordn-server IPv6-literal bug upstream: [cordn-rs #1](https://github.com/Cordn-msg/cordn-rs/issues/1) (filed by the owner, 2026-11-11; open). Hostname workaround stays until it is fixed.
 
 ## v0.2.190-alpha: refund protocol compatibility
 
