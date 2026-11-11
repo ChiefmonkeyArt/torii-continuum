@@ -164,17 +164,29 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
       if (isQuarantined(cfg, base)) return { ok: false, code: 'payment_recovery_required',
         reason: 'This provider is isolated by the owner. No payment was sent.' };
       let unresolved = false;
+      // Settle up to two pending claims now rather than waiting for the
+      // minute tick (docs/adr-routstr-turns-dont-hang.md §3).
+      let tries = 0;
+      let left = names.length;
       for (const n of names) {
         if (active.has(n)) continue;
         if (!validName(n)) throw failure();
-        const record = validate(JSON.parse(await store.get(n)));
+        const raw = await store.get(n);
+        if (!raw) { left--; continue; }
+        const record = validate(JSON.parse(raw));
         // Only an explicit quarantine may lift the global guard for a claim.
         // Unknown/corrupt claims and non-quarantined failures still fail closed.
-        if (!isQuarantined(cfg, record.base)) unresolved = true;
+        if (isQuarantined(cfg, record.base)) continue;
+        if (tries < 2) {
+          tries++;
+          const settled = await settle(n);
+          if (!settled.pending) { left--; continue; }
+        }
+        unresolved = true;
       }
       // Unsettled older requests block further deposits rather than silently
       // accumulating provider custody. Concurrent active turns remain bounded.
-      if (names.length >= MAX_PENDING || unresolved) {
+      if (left >= MAX_PENDING || unresolved) {
         return { ok: false, code: 'payment_recovery_required',
           reason: 'An earlier payment is awaiting recovery. No new payment was sent.' };
       }
@@ -211,6 +223,11 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
   async function finish(handle) {
     try { return await settle(handle.name); }
     finally { active.delete(handle.name); }
+  }
+
+  /** One more refund try for a claim this turn just finished (ADR §3). */
+  async function settleAgain(handle) {
+    return settle(handle.name);
   }
 
   async function recover() {
@@ -250,5 +267,5 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
     } catch { summary.available = false; summary.blocked = true; }
     return summary;
   }
-  return { begin, finish, recover, start, stop, status };
+  return { begin, finish, settleAgain, recover, start, stop, status };
 }

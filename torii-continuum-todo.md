@@ -1,10 +1,17 @@
 # Torii Continuum — Master TODO
 
+## v0.2.208-alpha: Routstr turns that don't hang
+
+- [x] Stream watchdog (first byte 30 s, idle 20 s, turn budget for a live stream); provider rest memory; one refund retry; begin settles older claims; phase-specific errors.
+- [ ] Owner review; ADR Accepted.
+- [ ] Merge, tag v0.2.208-alpha, deploy (ask first).
+- [ ] After deploy: check `failure_kind` in the private cost log for a day of use.
+
 ## v0.2.207-alpha: the assistant remembers the conversation
 
 - [x] Recent turns sent with each message (pairs with a real answer only, bounded); agent re-checks; Ollama gets 2 exchanges.
 - [x] Owner reviewed the build locally; ADR Accepted.
-- [ ] Merge, tag v0.2.207-alpha, deploy (ask first).
+- [x] Merged, tagged v0.2.207-alpha, deployed 2026-11-10.
 - [ ] Later: a summary of turns older than the window, if 10 exchanges proves too short.
 
 ## v0.2.206-alpha: one assistant bar everywhere
