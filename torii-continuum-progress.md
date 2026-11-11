@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.210-alpha: stages for the optional choice model (2026-11-11)
+
+Three new Suite stages, run with the owner's approval: `gliclass` installs GLiClass Edge (a small model that picks one of several options, offline on the CPU), `gliclass_bench` measures it on the server against Jev 1.13's recorded answers, and `gliclass_remove` takes it off and keeps it off. Continuum does not use the model yet. Needs Suite v0.9.65-alpha (Suite ADR 0004).
+
 ## v0.2.209-alpha: Routstr falls back automatically (2026-11-11)
 
 When a Routstr provider fails before showing any reply, Continuum now tries the next provider in the same turn, then a backup model, and the reply says who answered. It only pays a second provider once the first one's balance is settled, and it pays only from mints that provider accepts. The local Ollama model is now off by default and can be removed from the server. Decision record: `docs/adr-routstr-provider-fallback.md` (Accepted).
