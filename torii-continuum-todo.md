@@ -1,5 +1,11 @@
 # Torii Continuum — Master TODO
 
+## v0.2.210-alpha: GLiClass Edge stages
+
+- [x] Stages `gliclass`, `gliclass_bench`, `gliclass_remove` (with Suite v0.9.65-alpha, Suite ADR 0004); removal flags written after enable flags.
+- [ ] Merge, tag, deploy with owner approval; run `gliclass,gliclass_bench` and record the numbers.
+- [ ] Later: decide (new ADR) whether choice questions (tool routing, approve/deny) go to the local model.
+
 ## v0.2.209-alpha: Routstr falls back automatically
 
 - [x] Same-turn failover across providers when nothing streamed and the refund settled; fallback ladder on by default; max 6 attempts.

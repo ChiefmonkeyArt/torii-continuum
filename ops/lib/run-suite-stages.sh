@@ -26,8 +26,12 @@ declare -A INSTALLER=(
   [teams_app]=install-teams-app.sh
   [auctions]=install-auctions.sh
   [ollama_remove]=remove-ollama.sh
+  [gliclass]=install-gliclass.sh
+  [gliclass_bench]=bench-gliclass.sh
+  [gliclass_remove]=remove-gliclass.sh
 )
-declare -A FLAG=([teams]=INSTALL_TEAMS [continuum_host]=INSTALL_CONTINUUM_HOST [teams_app]=INSTALL_TEAMS_APP [auctions]=INSTALL_AUCTIONS)
+declare -A FLAG=([teams]=INSTALL_TEAMS [continuum_host]=INSTALL_CONTINUUM_HOST [teams_app]=INSTALL_TEAMS_APP [auctions]=INSTALL_AUCTIONS
+  [gliclass]=INSTALL_GLICLASS)
 IFS=, read -r -a list <<< "$stages"
 for s in "${list[@]}"; do [[ -n "${INSTALLER[$s]:-}" ]] || die "unknown stage: $s"; done
 
@@ -36,18 +40,22 @@ set_env() { # KEY VALUE: replace or append, keeping owner and mode
   if grep -q "^${k}=" "$env_file"; then sed -i "s|^${k}=.*|${k}=${v}|" "$env_file"
   else printf '%s=%s\n' "$k" "$v" >> "$env_file"; fi
 }
-# Removing the local model also turns it off for every later bootstrap, so a
-# redeploy can never reinstall it (Suite docs/adr-0003-ollama-optional.md). Not tied to enable=1.
-for s in "${list[@]}"; do
-  [[ "$s" == ollama_remove ]] || continue
-  set_env INSTALL_OLLAMA 0; echo "set INSTALL_OLLAMA=0 in .env"
-done
 if [[ "$enable" == 1 ]]; then
   for s in "${list[@]}"; do
     [[ -n "${FLAG[$s]:-}" ]] || continue
     set_env "${FLAG[$s]}" 1; echo "set ${FLAG[$s]}=1 in .env"
   done
 fi
+# Removing the local model also turns it off for every later bootstrap, so a
+# redeploy can never reinstall it (Suite docs/adr-0003-ollama-optional.md). Not tied to enable=1, and
+# written after it, so a removal stage always leaves its flag off.
+# Same for the optional choice model (Suite docs/adr-0004-gliclass-edge-optional.md).
+for s in "${list[@]}"; do
+  case "$s" in
+    ollama_remove) set_env INSTALL_OLLAMA 0; echo "set INSTALL_OLLAMA=0 in .env" ;;
+    gliclass_remove) set_env INSTALL_GLICLASS 0; echo "set INSTALL_GLICLASS=0 in .env" ;;
+  esac
+done
 
 set -a; source "$env_file"; set +a
 export SUITE_WORK_DIR="${SUITE_WORK_DIR:-/opt/torii-suite/work}" APPS_ROOT="${APPS_ROOT:-/apps}"
