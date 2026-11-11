@@ -53,9 +53,8 @@ test('healthy provider can fund and settle while the explicitly held claim survi
   assert.equal(f.records.size,1);
   assert.equal(f.count().sends,1);
 });
-test('without explicit quarantine, or with corrupt/other-provider claims, the global guard remains',async()=>{
+test('a corrupt claim, or an open claim at the same provider, still blocks deposits',async()=>{
   for(const [config,record] of [
-    [{...cfg,routstr:{payment_mode:'ephemeral_bearer'}},raw],
     [cfg,'{}'],[cfg,JSON.stringify({base:good,token,key,sats:2})],
   ]) {
     // begin() now tries to settle a pending claim first (adr-routstr-turns-dont-hang §3);
@@ -124,4 +123,24 @@ test('begin settles a refundable older claim first, then pays once (adr-routstr-
   assert.equal(f.records.has(name),false);
   assert.equal(f.count().sends,1);
   await p.finish(h);
+});
+
+// docs/adr-routstr-provider-fallback.md §2: one stuck provider cannot block failover.
+test('an open claim at another provider allows a bounded deposit elsewhere and is kept',async()=>{
+  const config={...cfg,routstr:{payment_mode:'ephemeral_bearer'}};
+  const f=fixture(raw,{refundFails:true}),p=createRoutstrPayment(config,f.wallet,{store:f.store,fetchFn:f.fetchFn});
+  const h=await p.begin(good,1);
+  assert.equal(h.ok,true);
+  assert.equal(f.count().sends,1);
+  assert.equal(f.records.get(name),raw);
+});
+test('more than two open claims at other providers block new deposits everywhere',async()=>{
+  const config={...cfg,routstr:{payment_mode:'ephemeral_bearer'}};
+  const f=fixture(raw,{refundFails:true});
+  for(const c of 'bcd') f.records.set('rrefund_'+c.repeat(20),raw);
+  const p=createRoutstrPayment(config,f.wallet,{store:f.store,fetchFn:f.fetchFn});
+  const r=await p.begin(good,1);
+  assert.equal(r.ok,false);
+  assert.equal(r.safe_to_retry,false);
+  assert.equal(f.count().sends,0);
 });

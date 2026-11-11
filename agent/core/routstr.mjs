@@ -39,6 +39,7 @@ import { isQuarantined } from './provider-quarantine.mjs';
 import { validModelId } from './chat-model-settings.mjs';
 import { messagesHaveImages } from '../lib/chat-attachments.mjs';
 import { createProviderHealth, isProviderFault } from './provider-health.mjs';
+import { mintsOverlap } from '../lib/mint-url.mjs';
 import {
   ERROR_CODES, isRetryableCode, classifyHttpFailure, classifyThrownError, providerFailure, looksLikeHtml,
 } from '../lib/provider-errors.mjs';
@@ -296,9 +297,17 @@ function modelForSkill(cfg, skill) {
 
 function fallbackLadder(cfg, skill) {
   if (!cfg.routstr.fallback?.enabled) return null;
-  const ladder = cfg.routstr.fallback?.[skill];
+  const ladder = cfg.routstr.fallback?.[skill] ?? (skill === 'chat' ? null : cfg.routstr.fallback?.chat);
   return Array.isArray(ladder) && ladder.length > 0 ? ladder : null;
 }
+
+/** A short plain-text label (no markup, no control characters). */
+function plainLabel(v) {
+  return String(v ?? '').replace(/^https?:\/\//, '').replace(/[^A-Za-z0-9 ._:/-]/g, '').trim().slice(0, 60) || 'unknown';
+}
+
+/** Most paid attempts one turn may make across providers and fallback models. */
+const MAX_TURN_ATTEMPTS = 6;
 
 async function appendCostLog(cfg, entry) {
   const path = resolve(agentRoot(), cfg.logging?.cost_log || 'memory/costs.jsonl');
@@ -499,7 +508,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       reason: 'This provider is isolated by the owner. No payment was sent.', retryable: false };
     if (bearerPayments) return callBearerAt(baseUrl, model, messages, sats, timeoutMs, hooks);
     hooks.telemetry?.attempt('routstr');
-    const send = await measure(hooks.telemetry, 'payment', () => wallet.send(sats));
+    const send = await measure(hooks.telemetry, 'payment', () => wallet.send(sats, hooks.mints ? { mints: hooks.mints } : undefined));
     if (!send.ok) {
       // A dry / floor-blocked wallet is a payment-path failure: structured so the
       // router can downgrade to the free local model and the SPA can offer top-up.
@@ -649,8 +658,10 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
   async function callBearerAt(baseUrl, model, messages, sats, timeoutMs, hooks) {
     hooks.telemetry?.attempt('routstr');
     const started = now();
-    const handle = await measure(hooks.telemetry, 'payment', () => bearerPayments.begin(baseUrl, sats));
-    if (!handle.ok) return { ...handle, retryable: false };
+    const handle = await measure(hooks.telemetry, 'payment', () => bearerPayments.begin(baseUrl, sats, { mints: hooks.mints }));
+    // Nothing reached the provider, or what did was fully settled: another
+    // provider may be tried (docs/adr-routstr-provider-fallback.md §2).
+    if (!handle.ok) return { ...handle, retryable: handle.safe_to_retry === true };
     // Watch the stream, not the clock (docs/adr-routstr-turns-dont-hang.md §1):
     // stop when nothing starts, when it goes quiet, or at the turn limit.
     const firstByteMs = Math.min(timeoutMs, firstByteLimitMs);
@@ -667,6 +678,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     }, Math.max(5, Math.min(watchdogTickMs, Math.floor(firstByteMs / 4))));
     let result;
     let failureKind = null;
+    let first = null;
     try {
       if (now() - started >= firstByteMs) {
         failureKind = 'upstream_timeout';
@@ -682,7 +694,6 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
         failureKind = res.status >= 500 ? 'upstream_5xx' : 'upstream_4xx';
         throw new Error('provider request failed');
       }
-      let first = null;
       const reading = now();
       let stream;
       try {
@@ -716,9 +727,17 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     }
     if (settlement.pending) hooks.telemetry?.refundPending?.();
     if (settlement.dust_msats) hooks.telemetry?.refundDust?.(settlement.dust_msats);
+    // Failover is allowed only when the owner saw nothing from this provider
+    // and its balance is settled — never a second payment beside an open claim
+    // (docs/adr-routstr-provider-fallback.md §2).
+    if (!result.ok && first === null && !settlement.pending && isProviderFault(failureKind)) {
+      result.code = failureKind;
+      result.retryable = true;
+      result.settled = true;
+    }
     if (!result.ok) {
       const explanation = failureExplanation(failureKind, { firstByteMs, idleMs: idleLimitMs });
-      result.reason = `${explanation} No second payment was sent. ${settlement.pending
+      result.reason = `${explanation} ${result.settled ? '' : 'No second payment was sent. '}${settlement.pending
         ? 'Payment recovery is pending; your claim is retained. Check Routstr.'
         : settlement.refunded > 0
           ? 'The available refund was returned to your wallet.'
@@ -741,11 +760,16 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
   async function resolveCandidates(modelId) {
     const available = await ensureCatalog();
     const matches = [];
+    const walletMints = Array.isArray(wallet?.mints) ? wallet.mints : null;
     for (const provider of available) {
       if (isQuarantined(cfg, provider.baseUrl)) continue;
+      // Skip a provider that cannot redeem any of our mints: paying it would
+      // fail after the token left the wallet (ADR provider-fallback §3).
+      if (!mintsOverlap(walletMints, provider.mints)) continue;
+      const mints = Array.isArray(provider.mints) && provider.mints.length ? provider.mints : null;
       for (const m of provider.models) {
         if (modelId && m.id !== modelId) continue;
-        matches.push({ baseUrl: provider.baseUrl, model: m, providerName: provider.name });
+        matches.push({ baseUrl: provider.baseUrl, model: m, providerName: provider.name, mints });
       }
     }
     matches.sort((a, b) => {
@@ -790,10 +814,13 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     const sliceNow = () => sliceForProvider(chatTimeoutMs, remaining());
 
     let candidates = await measure(telemetry, 'discovery', () => resolveCandidates(requested));
-    if (ownerChoice && candidates.length === 0)
+    const ladder = (fallbackLadder(cfg, skill) || []).filter(id => id !== requested);
+    // An owner-chosen model nobody serves falls to the ladder, labelled
+    // (supersedes adr-live-chat-model-selection's hard error).
+    if (ownerChoice && candidates.length === 0 && !ladder.length)
       return providerFailure(ERROR_CODES.PROVIDER_DISABLED,
         'Your selected chat model is unavailable. Choose another model on the Routstr page.');
-    if (requested && candidates.length === 0) {
+    if (requested && candidates.length === 0 && !ownerChoice) {
       log.warn(`[routstr] configured model "${requested}" is not served by any reachable provider — degrading to cheapest available`);
       candidates = await measure(telemetry, 'discovery', () => resolveCandidates(null));
     }
@@ -815,6 +842,17 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
 
     // Resting providers go last, so the next turn avoids a slow one (ADR §2).
     candidates = health.order(candidates);
+
+    // Fallback models follow, each on any provider that serves it.
+    const tried = new Set(candidates.map(c => c.model.id));
+    for (const id of ladder) {
+      if (tried.has(id)) continue;
+      tried.add(id);
+      let extra = await resolveCandidates(id);
+      if (imageTurn) extra = extra.filter(c => acceptsImages(c.model));
+      for (const c of health.order(extra)) candidates.push({ ...c, fallback: true });
+    }
+    candidates = candidates.slice(0, MAX_TURN_ATTEMPTS);
 
     if (candidates.length === 0) {
       if (budget && !worthAttempting(budget.remainingMs())) {
@@ -871,16 +909,35 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       reservedSats += sats;
       // A stream that keeps arriving may use the turn, less the refund margin.
       const streamMs = budget ? Math.max(0, budget.remainingMs() - SETTLE_MARGIN_MS) : 0;
-      attempt = await callOnceAt(cand.baseUrl, cand.model.id, messages, sats, sliceNow(), true, { onDelta, telemetry, streamMs });
-      if (attempt.ok) { health.ok(cand.baseUrl, cand.model.id); break; }
+      let streamed = false;
+      const relay = onDelta ? (d) => { streamed = true; onDelta(d); } : null;
+      attempt = await callOnceAt(cand.baseUrl, cand.model.id, messages, sats, sliceNow(), true,
+        { onDelta: relay, telemetry, streamMs, mints: cand.mints });
+      if (attempt.ok) {
+        health.ok(cand.baseUrl, cand.model.id);
+        const first = candidates[0];
+        if (cand !== first || (requested && cand.model.id !== requested)) {
+          // Say who answered and who did not (never a silent switch).
+          // Provider names come from untrusted announcements: plain text only.
+          attempt.routstr_fallback = {
+            model: plainLabel(cand.model.id), provider: plainLabel(cand.providerName || cand.baseUrl),
+            from_model: plainLabel(requested || first.model.id),
+            from_provider: cand !== first ? plainLabel(first.providerName || first.baseUrl) : null,
+          };
+        }
+        break;
+      }
       if (isProviderFault(attempt.failure_kind || attempt.code)) {
         health.fail(cand.baseUrl, cand.model.id);
         const other = candidates.some(c => c !== cand && !health.resting(c.baseUrl, c.model.id));
         if (other && attempt.failure_kind) attempt.reason = `${attempt.reason} Your next message will use another provider.`;
       }
       log.warn(`[routstr] ${cand.model.id}@${cand.baseUrl} failed: ${attempt.reason}`);
-      // Stop before another paid request on a terminal (non-retryable) failure.
-      if (attempt.code && !isRetryableCode(attempt.code)) break;
+      // Stop before another paid request on a terminal (non-retryable) failure,
+      // or once the owner has seen part of a reply.
+      const canContinue = attempt.retryable === true ||
+        (attempt.retryable !== false && (!attempt.code || isRetryableCode(attempt.code)));
+      if (!canContinue || streamed) break;
     }
 
     await appendCostLog(cfg, {

@@ -25,6 +25,7 @@ declare -A INSTALLER=(
   [continuum_host]=install-continuum-host.sh
   [teams_app]=install-teams-app.sh
   [auctions]=install-auctions.sh
+  [ollama_remove]=remove-ollama.sh
 )
 declare -A FLAG=([teams]=INSTALL_TEAMS [continuum_host]=INSTALL_CONTINUUM_HOST [teams_app]=INSTALL_TEAMS_APP [auctions]=INSTALL_AUCTIONS)
 IFS=, read -r -a list <<< "$stages"
@@ -35,6 +36,12 @@ set_env() { # KEY VALUE: replace or append, keeping owner and mode
   if grep -q "^${k}=" "$env_file"; then sed -i "s|^${k}=.*|${k}=${v}|" "$env_file"
   else printf '%s=%s\n' "$k" "$v" >> "$env_file"; fi
 }
+# Removing the local model also turns it off for every later bootstrap, so a
+# redeploy can never reinstall it (Suite docs/adr-0003-ollama-optional.md). Not tied to enable=1.
+for s in "${list[@]}"; do
+  [[ "$s" == ollama_remove ]] || continue
+  set_env INSTALL_OLLAMA 0; echo "set INSTALL_OLLAMA=0 in .env"
+done
 if [[ "$enable" == 1 ]]; then
   for s in "${list[@]}"; do
     [[ -n "${FLAG[$s]:-}" ]] || continue

@@ -26,6 +26,11 @@ An unavailable explicitly chosen model returns a clear error rather than
 silently selecting a cheaper/different remote model. Existing local fallback
 policy and request caps remain unchanged.
 
+> Superseded in part (2026-11-11, v0.2.209-alpha): with the Routstr fallback on
+> (the default), an unavailable chosen model is answered by the fallback ladder
+> and the reply names the model that answered. The clear error remains when
+> `routstr.fallback.enabled: false`. See `docs/adr-routstr-provider-fallback.md`.
+
 ## UX and speed tests
 
 The real Routstr card shows current model, search, a native keyboard-accessible

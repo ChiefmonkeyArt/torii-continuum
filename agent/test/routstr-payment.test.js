@@ -84,7 +84,8 @@ test('recovery status is read-only, redacted, and preserves the global guard', a
   assert.equal((await reopened.status()).blocked, true);
 });
 
-test('funded provider timeout is classified, settled once, and never retried', async () => {
+// docs/adr-routstr-provider-fallback.md §2: settled and nothing shown → next provider.
+test('funded provider timeout is classified, settled, then the next provider is tried', async () => {
   const f = fixture();
   const dir = await mkdtemp(join(tmpdir(), 'routstr-timeout-'));
   const saved = globalThis.fetch;
@@ -107,9 +108,9 @@ test('funded provider timeout is classified, settled once, and never retried', a
     assert.equal(result.failure_kind, 'upstream_timeout');
     assert.match(result.reason, /did not start replying/);
     assert.match(result.reason, /refund was returned/);
-    assert.equal(requests, 1);
-    assert.equal(f.count().sends, 1);
-    assert.equal(f.count().receives, 1);
+    assert.equal(requests, 2);
+    assert.equal(f.count().sends, 2);
+    assert.equal(f.count().receives, 2);
     assert.equal((await router.paymentStatus()).pending, 0);
   } finally { globalThis.fetch = saved; await rm(dir, { recursive: true, force: true }); }
 });

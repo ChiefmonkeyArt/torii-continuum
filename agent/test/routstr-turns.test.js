@@ -141,7 +141,9 @@ test('the refund retry happens only once, then stays honest', async () => {
   } finally { await t.done(); }
 });
 
-test('a slow provider rests; the next message goes to another one', async () => {
+// docs/adr-routstr-provider-fallback.md §2: a silent, settled provider hands
+// the same turn to the next one, labelled; the slow one rests.
+test('a slow provider rests and the same turn moves to another one, labelled', async () => {
   const health = createProviderHealth();
   const t = await router({ timeout_ms: 500, first_byte_ms: 20 }, {
     providers: [A, B], health,
@@ -149,13 +151,16 @@ test('a slow provider rests; the next message goes to another one', async () => 
   });
   try {
     const first = await ask(t.r);
-    assert.equal(first.ok, false);
-    assert.match(first.reason, /next message will use another provider/);
-    assert.equal(t.calls.length, 1, 'no second paid call in the same turn');
+    assert.equal(first.ok, true, first.reason);
+    assert.equal(first.content, 'from b');
+    assert.ok(t.calls.at(-1).startsWith(B));
+    assert.equal(first.routstr_fallback.from_provider, 'a.example');
+    assert.equal(first.routstr_fallback.provider, 'b.example');
     assert.equal(health.resting(A, 'm'), true);
+    const n = t.calls.length;
     const second = await ask(t.r);
     assert.equal(second.ok, true);
-    assert.ok(t.calls[1].startsWith(B));
+    assert.ok(t.calls[n].startsWith(B), 'the resting provider goes last next time');
   } finally { await t.done(); }
 });
 

@@ -26,6 +26,7 @@ import { resolve, join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { Mint, Wallet, getEncodedToken, getTokenMetadata, CheckStateEnum, MintQuoteState } from '@cashu/cashu-ts';
 import { agentRoot } from './config.mjs';
+import { mintKey } from '../lib/mint-url.mjs';
 
 // Non-reversible short id for a mint URL — lets health output/logs reference a
 // mint without echoing a full endpoint everywhere. Domain-separated label.
@@ -313,11 +314,14 @@ export async function createWallet(cfg, log, deps = {}) {
    *
    * If no mint has enough balance, returns { ok: false, reason }.
    */
-  async function send(sats, { maxDebitSats } = {}) {
-    return withMutationLock(() => sendLocked(sats, maxDebitSats));
+  // `mints` (optional): only pay from these mints — the ones the receiving
+  // Routstr provider accepts (docs/adr-routstr-provider-fallback.md §3).
+  async function send(sats, { maxDebitSats, mints: only } = {}) {
+    return withMutationLock(() => sendLocked(sats, maxDebitSats, only));
   }
 
-  async function sendLocked(sats, maxDebitSats) {
+  async function sendLocked(sats, maxDebitSats, only) {
+    const allowed = Array.isArray(only) && only.length ? new Set(only.map(mintKey).filter(Boolean)) : null;
     if (sats < 1) return { ok: false, reason: 'sats must be >= 1' };
     if (maxDebitSats !== undefined && (!Number.isSafeInteger(maxDebitSats) || maxDebitSats < sats)) {
       return { ok: false, reason: 'invalid total debit limit' };
@@ -325,6 +329,7 @@ export async function createWallet(cfg, log, deps = {}) {
     const floor = cfg.cashu?.hard_floor_sats || 0;
 
     for (const [mintUrl, wallet] of mints) {
+      if (allowed && !allowed.has(mintKey(mintUrl))) continue;
       const stored = await readProofs(walletDir, mintUrl);
       if (stored.length === 0) continue;
 
@@ -394,7 +399,9 @@ export async function createWallet(cfg, log, deps = {}) {
 
     return {
       ok: false,
-      reason: `insufficient balance across all mints for ${sats} sats (need +${floor} floor)`,
+      reason: allowed
+        ? `insufficient balance on the mints this provider accepts for ${sats} sats (need +${floor} floor)`
+        : `insufficient balance across all mints for ${sats} sats (need +${floor} floor)`,
     };
   }
 
