@@ -4,7 +4,7 @@
 
 - [x] Stream watchdog (first byte 30 s, idle 20 s, turn budget for a live stream); provider rest memory; one refund retry; begin settles older claims; phase-specific errors.
 - [ ] Owner review; ADR Accepted.
-- [ ] Merge, tag v0.2.208-alpha, deploy (ask first).
+- [x] Merged (PR #281), tagged v0.2.208-alpha, deployed to chiefmonkey.art 2026-11-11 (owner approved; first try stopped on a full VPS disk, retried after the owner cleared space).
 - [ ] After deploy: check `failure_kind` in the private cost log for a day of use.
 
 ## v0.2.207-alpha: the assistant remembers the conversation
