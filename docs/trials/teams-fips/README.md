@@ -283,7 +283,8 @@ Suite: a reviewed `include` (for example `/etc/torii/fips/fips.d/*.nft`) in
 - **cordn-server cannot dial bracketed IPv6 relay URLs** (`ws://[fd…]:10547`
   fails with "failed to lookup address information"; a hostname that resolves
   to the same address works). `vps.sh` maps `fips-trial-relay` to the mesh
-  address in `/etc/hosts`. The Cordn CLI is unaffected.
+  address in `/etc/hosts`. The Cordn CLI is unaffected. Reported as
+  [cordn-rs #1](https://github.com/Cordn-msg/cordn-rs/issues/1).
 - **ngit-grasp private mode assumes https** for any non-loopback domain, so
   members' NIP-98 credentials for `http://<npub>.fips:7334` were refused.
   `run-grasp.sh` sets `NGIT_PRIVATE_PUBLIC_ORIGIN=http://torii-teams.fips:7334`

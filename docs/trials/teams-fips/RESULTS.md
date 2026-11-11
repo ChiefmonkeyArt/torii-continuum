@@ -19,7 +19,7 @@ interoperate (no wire change in 0.5.2/0.5.3).
   firewall reload. Durable version: a Suite `fips.d` include (TEAMS-2d step 3).
 - ngit v3.0.5 truncates URLs at `npub1`, breaking `<npub>.fips` git hosts.
   Workaround: FIPS shortname. Upstream issue drafted, awaiting approval.
-- cordn-server cannot dial bracketed IPv6 relay URLs. Workaround: hostname.
+- cordn-server cannot dial bracketed IPv6 relay URLs. Workaround: hostname. Reported as [cordn-rs #1](https://github.com/Cordn-msg/cordn-rs/issues/1).
 - Suite FIPS is on 0.5.1; upgrading to 0.5.3 is a separate Suite change.
 
 ## Consequence for TEAMS-2d step 3
