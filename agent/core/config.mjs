@@ -55,6 +55,10 @@ export function loadConfig(path) {
 
   // Validate invariants
   const errors = [];
+  const ladder = cfg.routstr?.fallback?.chat;
+  if (ladder != null && (!Array.isArray(ladder) ||
+      !ladder.every(m => typeof m === 'string' && /^[A-Za-z0-9._:/-]{1,128}$/.test(m))))
+    errors.push('routstr.fallback.chat must be a list of model ids');
   if (!validQuarantine(cfg.routstr?.quarantined_providers ?? []))
     errors.push('routstr.quarantined_providers must be at most 8 safe HTTPS origins');
   if (cfg.routstr?.payment_mode != null &&
@@ -180,7 +184,13 @@ export function loadConfig(path) {
   // optional chaining above); normalize a missing block before dereferencing it.
   cfg.routstr ??= {};
   cfg.routstr.limits ??= { max_tokens_out: 2048, max_sats_per_request: 50 };
-  cfg.routstr.fallback ??= { enabled: false };
+  // Automatic fallback is on by default (docs/adr-routstr-provider-fallback.md):
+  // when every provider for the chosen model fails, the next model in the
+  // ladder is tried — on any provider — and the reply says so.
+  cfg.routstr.fallback ??= {};
+  cfg.routstr.fallback.enabled ??= true;
+  cfg.routstr.fallback.chat ??= ['deepseek-v4.1-flash', 'deepseek-v4-flash'];
+  cfg.routstr.fallback.chat = cfg.routstr.fallback.chat.slice(0, 4);
   // Routstr Core v0.1.0 (RIP-03): models are no longer hard-required — a
   // missing pin defaults to "auto" (cheapest reachable model). Provider
   // discovery (core/routstr-discovery.mjs) lazily finds live nodes via Nostr

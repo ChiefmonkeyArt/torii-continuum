@@ -646,6 +646,20 @@ export function chatErrorMessage(result) {
  * missing or expired. Canned replies are served ONLY on the agent-less demo
  * build; a production build reports a structured error instead of a fake answer.
  */
+/**
+ * Honest provenance when Routstr moved to another provider or model this turn
+ * (docs/adr-routstr-provider-fallback.md §4). Plain text only.
+ */
+export function routstrFallbackNote(fb) {
+  if (!fb || typeof fb !== 'object') return '';
+  const t = v => String(v ?? '').replace(/[^A-Za-z0-9 ._:/-]/g, '').slice(0, 60);
+  const via = fb.provider ? ` via ${t(fb.provider)}` : '';
+  const what = fb.from_model && fb.from_model !== fb.model
+    ? `${t(fb.from_model)} was unavailable`
+    : `${t(fb.from_provider) || 'the first provider'} was unavailable`;
+  return `\n\n_(answered by ${t(fb.model)}${via} — ${what})_`;
+}
+
 async function getReply(text, ctx, attachments, history, onEvent) {
   if (isSessionLive()) {
     const r = await agentChat({ message: text, context: ctx, attachments, history, onEvent });
@@ -660,7 +674,7 @@ async function getReply(text, ctx, attachments, history, onEvent) {
       const fellBack = r.data.fell_back_from;
       const text = fellBack
         ? `${r.data.reply}\n\n_(answered by the local ${r.data.model || 'fallback'} model — ${fellBack} was unavailable)_`
-        : r.data.reply;
+        : r.data.reply + routstrFallbackNote(r.data.routstr_fallback);
       return { text, ok: true };
     }
     // Insufficient funds is a recoverable, user-actionable state — surface a

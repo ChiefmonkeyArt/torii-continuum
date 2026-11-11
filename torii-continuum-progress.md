@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.209-alpha: Routstr falls back automatically (2026-11-11)
+
+When a Routstr provider fails before showing any reply, Continuum now tries the next provider in the same turn, then a backup model, and the reply says who answered. It only pays a second provider once the first one's balance is settled, and it pays only from mints that provider accepts. The local Ollama model is now off by default and can be removed from the server. Decision record: `docs/adr-routstr-provider-fallback.md` (Accepted).
+
 ## v0.2.208-alpha: Routstr turns that don't hang (2026-11-10)
 
 Paid AI replies no longer get cut off at 45 seconds while they are still arriving. Continuum now waits for the provider to start (up to 30 s) and stops only if a reply goes silent. A provider that was slow is rested for a while so your next message goes elsewhere, and a stopped reply gets its refund retried straight away. Decision record: `docs/adr-routstr-turns-dont-hang.md` (Accepted 2026-11-11).

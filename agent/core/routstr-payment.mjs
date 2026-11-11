@@ -12,6 +12,9 @@ import { isQuarantined } from './provider-quarantine.mjs';
 
 const PREFIX = 'rrefund_';
 const MAX_PENDING = 8;
+// Open claims at OTHER providers that still allow a new deposit here, so one
+// stuck provider cannot block failover (docs/adr-routstr-provider-fallback.md §2).
+const MAX_PENDING_ELSEWHERE = 2;
 const MAX_JSON = 128 * 1024;
 const VERIFIED_DUST_RESPONSE = Symbol('verified-dust-response');
 const failure = () => new Error('Streaming payment could not be completed; recovery retained.');
@@ -151,7 +154,7 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
     try { return await task; } finally { settling.delete(name); }
   }
 
-  async function begin(base, sats) {
+  async function begin(base, sats, { mints } = {}) {
     const prior = gate;
     let unlock;
     gate = new Promise(resolve => { unlock = resolve; });
@@ -161,9 +164,10 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
       if (safeRemoteBaseUrl(base) !== base || new URL(base).search || new URL(base).hash ||
           !Number.isSafeInteger(sats) || sats < 1) throw failure();
       const names = (await store.list()).filter(n => n.startsWith(PREFIX));
-      if (isQuarantined(cfg, base)) return { ok: false, code: 'payment_recovery_required',
+      if (isQuarantined(cfg, base)) return { ok: false, code: 'payment_recovery_required', safe_to_retry: true,
         reason: 'This provider is isolated by the owner. No payment was sent.' };
-      let unresolved = false;
+      let unresolvedHere = false;
+      let unresolvedElsewhere = 0;
       // Settle up to two pending claims now rather than waiting for the
       // minute tick (docs/adr-routstr-turns-dont-hang.md §3).
       let tries = 0;
@@ -182,16 +186,20 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
           const settled = await settle(n);
           if (!settled.pending) { left--; continue; }
         }
-        unresolved = true;
+        if (record.base === base) unresolvedHere = true;
+        else unresolvedElsewhere++;
       }
-      // Unsettled older requests block further deposits rather than silently
-      // accumulating provider custody. Concurrent active turns remain bounded.
-      if (left >= MAX_PENDING || unresolved) {
-        return { ok: false, code: 'payment_recovery_required',
+      // An open claim at this provider blocks deposits here. Open claims at
+      // other providers are tolerated up to a small bound, so failover still
+      // works while custody stays capped. No payment is sent either way, so
+      // the caller may try another provider (safe_to_retry).
+      if (left >= MAX_PENDING || unresolvedHere || unresolvedElsewhere > MAX_PENDING_ELSEWHERE) {
+        return { ok: false, code: 'payment_recovery_required', safe_to_retry: unresolvedHere && left < MAX_PENDING && unresolvedElsewhere <= MAX_PENDING_ELSEWHERE,
           reason: 'An earlier payment is awaiting recovery. No new payment was sent.' };
       }
-      sent = await wallet.send(sats);
-      if (!sent.ok) return { ok: false, code: sent.code || 'insufficient_funds', reason: 'Wallet cannot fund this request.' };
+      sent = await wallet.send(sats, Array.isArray(mints) && mints.length ? { mints } : undefined);
+      if (!sent.ok) return { ok: false, code: sent.code || 'insufficient_funds', safe_to_retry: true,
+        reason: 'Wallet cannot fund this request.' };
       name = PREFIX + randomBytes(10).toString('hex');
       const record = validate({ base, sats, token: sent.token, key: keyFor(sent.token) });
       active.add(name);
@@ -205,18 +213,24 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
       if (created.api_key !== record.key) throw failure();
       return { ok: true, name, key: record.key };
     } catch {
+      let safe = false;
       if (!dispatched && sent?.ok) {
         // This is the ONLY rollback boundary: no provider request was sent.
         try {
           if (typeof sent.rollback !== 'function') throw failure();
           await sent.rollback();
           if (name) await store.remove(name);
+          safe = true;
         } catch { /* Retain any existing record; never claim rolled-back funds. */ }
       } else if (name) {
-        await settle(name);
+        // Deposit reached the provider: only a confirmed settle (refund or
+        // verified-empty) makes another provider safe to try.
+        safe = (await settle(name)).pending === false;
       }
       if (name) active.delete(name);
-      return { ok: false, code: 'payment_recovery_required', reason: 'Payment setup failed. No second payment was sent; recovery is retained.' };
+      return { ok: false, code: 'payment_recovery_required', safe_to_retry: safe,
+        reason: safe ? 'Payment setup failed and was settled.'
+          : 'Payment setup failed. No second payment was sent; recovery is retained.' };
     } finally { unlock(); }
   }
 

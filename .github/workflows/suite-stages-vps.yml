@@ -3,7 +3,7 @@ name: Suite stages on VPS
 # Ops-only. Runs named Torii Suite stage installers on the operator's VPS from
 # an explicit, merged Suite release tag (ops/lib/run-suite-stages.sh). Used for
 # opt-in stages the Continuum deploy does not run: fips, teams,
-# continuum_host, teams_app, auctions. Operator approval is required before each run.
+# continuum_host, teams_app, auctions, ollama_remove. Operator approval is required before each run.
 # Same secrets and host-key pinning as deploy-continuum-vps.yml. Logs are
 # public: remote output is masked (addresses, keys, npubs).
 
@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       stages:
-        description: 'Comma list, in order: fips, teams, continuum_host, teams_app, auctions'
+        description: 'Comma list, in order: fips, teams, continuum_host, teams_app, auctions, ollama_remove'
         required: true
         type: string
       enable:
@@ -47,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SUITE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::bad suite_tag"; exit 1; }
-          [[ "$STAGES" =~ ^(fips|teams|continuum_host|teams_app|auctions)(,(fips|teams|continuum_host|teams_app|auctions))*$ ]] || { echo "::error::bad stages"; exit 1; }
+          [[ "$STAGES" =~ ^(fips|teams|continuum_host|teams_app|auctions|ollama_remove)(,(fips|teams|continuum_host|teams_app|auctions|ollama_remove))*$ ]] || { echo "::error::bad stages"; exit 1; }
 
       - uses: actions/checkout@v4
         with:

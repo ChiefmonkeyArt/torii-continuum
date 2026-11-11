@@ -123,8 +123,10 @@ cashu:
 # monthly bill, no custody.
 #
 # Provider set is pinned in config so a hostile relay can't route us to a bad
-# provider. Fallback ladder is present but off by default — set `fallback: true`
-# to allow automatic downgrade to the next entry when the primary fails.
+# provider. When every provider for the chosen model fails, the fallback
+# ladder (routstr.fallback.chat, on by default) is tried on any provider that
+# serves it, and the reply says which model and provider answered
+# (docs/adr-routstr-provider-fallback.md). Disable with fallback.enabled: false.
 #
 routstr:
   # Optional streaming-compatible payment flow (requires provider support).
@@ -135,6 +137,12 @@ routstr:
   # Explicit operator hold only. Retains disputed refunds; no polling/payment
   # to these origins. Other uncertain claims still block new funding.
   quarantined_providers: []
+  # Automatic fallback (on by default). Up to 4 model ids, tried in order
+  # after the chosen model fails on every provider. At most 6 paid attempts
+  # per turn in total; none after any part of a reply has been shown.
+  fallback:
+    enabled: true
+    chat: [deepseek-v4.1-flash, deepseek-v4-flash]
   # ── Provider discovery (Routstr Core v0.1.0, RIP-03) ──
   # Providers are found at runtime, not hard-coded. Live nodes announce
   # themselves as Nostr kind-38421 events; the agent merges them with the
@@ -265,7 +273,10 @@ nwc:
 #
 ollama:
   # Master switch. false = agent never touches Ollama, even if it's running.
-  enabled: true
+  # Off by default since v0.2.209-alpha: Routstr falls back across providers
+  # and models instead (docs/adr-routstr-provider-fallback.md). The Suite turns
+  # this on only when INSTALL_OLLAMA=1.
+  enabled: false
 
   # Where the Ollama daemon listens. Loopback only for security.
   endpoint: "http://127.0.0.1:11434"

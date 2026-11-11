@@ -970,6 +970,7 @@ app.post('/api/chat', { preHandler: requireAdmin, bodyLimit: 1024 * 1024 }, asyn
     duration_ms: result.duration_ms,
     sats_spent: result.sats_spent,
     fell_back_from: result.fell_back_from || null,
+    routstr_fallback: result.routstr_fallback || null,
     store_writes: store_writes.length ? store_writes : null,
     timings: telemetry.snapshot(),
   };

@@ -169,6 +169,7 @@ export function createChatSkill(router, log, { memory, reflector } = {}) {
       // Set when the paid provider failed and the free local model answered, so
       // the dock can label the reply honestly rather than implying Routstr ran.
       fell_back_from: result.fell_back_from || null,
+      routstr_fallback: result.routstr_fallback || null,
     };
   }
 

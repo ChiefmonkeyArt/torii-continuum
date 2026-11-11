@@ -19,6 +19,7 @@
 
 import { SimplePool } from 'nostr-tools/pool';
 import { isIP } from 'node:net';
+import { mintKey } from '../lib/mint-url.mjs';
 import { contentStats, IMAGE_TOKEN_ESTIMATE } from '../lib/chat-attachments.mjs';
 
 const KIND_PROVIDER_ANNOUNCEMENT = 38421;
@@ -313,7 +314,11 @@ export async function fetchProviderCatalog(providers, {
             .filter((m) => typeof m?.id === 'string' && m.id)
             .map((m) => describeModel(m))
         : [];
-      out.push({ baseUrl: p.baseUrl, name: p.name || p.baseUrl, npub: p.npub || null, models });
+      // Which Cashu mints the provider takes (GET /v1/info `mints`), so a
+      // payment is only ever sent from a mint it can redeem
+      // (docs/adr-routstr-provider-fallback.md §3). null = unknown.
+      const mints = await fetchProviderMints(p.baseUrl, { fetchFn, signal: ac.signal });
+      out.push({ baseUrl: p.baseUrl, name: p.name || p.baseUrl, npub: p.npub || null, models, mints });
     } catch { /* provider unreachable — skip */ }
     finally { clearTimeout(timer); }
   }
@@ -324,6 +329,30 @@ export async function fetchProviderCatalog(providers, {
     await Promise.all(list.slice(i, i + concurrency).map(one));
   }
   return out;
+}
+
+const MAX_INFO_BODY_BYTES = 65_536;
+const MAX_PROVIDER_MINTS = 20;
+
+/**
+ * Read the provider's accepted mints from GET {baseUrl}/v1/info. Bounded body,
+ * no redirects, never throws: null when the provider does not say.
+ */
+export async function fetchProviderMints(baseUrl, { fetchFn = fetch, signal } = {}) {
+  try {
+    const res = await fetchFn(`${baseUrl}/v1/info`, { signal, headers: { accept: 'application/json' }, redirect: 'error' });
+    if (!res.ok) return null;
+    const text = await res.text();
+    if (Buffer.byteLength(text) > MAX_INFO_BODY_BYTES) return null;
+    const list = JSON.parse(text)?.mints;
+    if (!Array.isArray(list)) return null;
+    const out = [];
+    for (const m of list.slice(0, MAX_PROVIDER_MINTS)) {
+      const k = typeof m === 'string' ? mintKey(m) : null;
+      if (k && !out.includes(k)) out.push(k);
+    }
+    return out.length ? out : null;
+  } catch { return null; }
 }
 
 /** Reduce a /v1/models entry to what the router needs (id, name, sats pricing). */

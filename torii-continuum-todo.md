@@ -1,5 +1,13 @@
 # Torii Continuum — Master TODO
 
+## v0.2.209-alpha: Routstr falls back automatically
+
+- [x] Same-turn failover across providers when nothing streamed and the refund settled; fallback ladder on by default; max 6 attempts.
+- [x] Per-provider claim block (2 open claims elsewhere tolerated); mint-aware candidates and payment; labelled replies.
+- [x] `ollama.enabled` off by default; `ollama_remove` stage (with Suite v0.9.64-alpha).
+- [ ] Merge, tag, deploy with owner approval; run `ollama_remove`.
+- [ ] After deploy: check `routstr_fallback` and `failure_kind` in a day of use.
+
 ## v0.2.208-alpha: Routstr turns that don't hang
 
 - [x] Stream watchdog (first byte 30 s, idle 20 s, turn budget for a live stream); provider rest memory; one refund retry; begin settles older claims; phase-specific errors.

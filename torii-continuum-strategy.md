@@ -240,7 +240,7 @@ Turn Continuum from a read-only mockup dashboard into a sovereign personal AI + 
 - **VPS-only.** Linux and Mac clients come later as thin frontends. No local-machine dependency in v1.
 - **No key material on the VPS.** Signing lives in the browser via Plebeian Signer (NIP-07).
 - **No plaintext Nostr write path.** The `nostr.draft` skill only emits NIP-17 gift-wrapped envelopes. The plaintext code path is absent, not disabled.
-- **Model layer = Routstr.** OpenAI-compatible client paying per-request in Cashu against pinned providers. Per-skill model pinning; fallback ladder present but off by default.
+- **Model layer = Routstr.** OpenAI-compatible client paying per-request in Cashu against pinned providers. Per-skill model pinning; automatic, labelled fallback across providers and a short model ladder, on by default since v0.2.209-alpha (`docs/adr-routstr-provider-fallback.md`). The local Ollama model is optional and off by default.
 - **Human-in-the-loop by construction.** Agent drafts to `agent/pending/*.json`; Continuum Console renders them; user clicks Approve; Plebeian Signer signs; browser publishes.
 - **Four skills, only these:**
   - `brain.read` — read-only under `projects/torii-*/knowledge/`, `memory/knowledge/`, `memory/notes/`.
