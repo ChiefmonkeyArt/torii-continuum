@@ -6,6 +6,8 @@ VPS: Continuum 0.2.196-alpha on `https://continuum.chiefmonkey.art/continuum/` (
 
 ## v0.2.210-alpha: GLiClass Edge stages (2026-11-11)
 
+Deployed 2026-11-11 (owner approved; run 43036613732). Stages ran from Suite v0.9.68-alpha after three fix releases (v0.9.66 apt update, v0.9.67 no apt, v0.9.68 NumPy 2.3.5 for the x86-64-v1 CPU); run 43043337336 installed and benchmarked it. Numbers in the Suite handoff.
+
 Ops only, no app code. `ops/lib/run-suite-stages.sh`: `[gliclass]=install-gliclass.sh` (FLAG `INSTALL_GLICLASS`), `[gliclass_bench]=bench-gliclass.sh`, `[gliclass_remove]=remove-gliclass.sh` (always writes `INSTALL_GLICLASS=0`). Removal flags are now written after the enable=1 flags, so `x,x_remove` with enable=true leaves the flag off. `suite-stages-vps.yml` regex/descriptions updated. New `ops/test/suite-stages.test.sh` keeps the allowlist and the workflow regex in step. Needs Suite v0.9.65-alpha. The model is not wired into Continuum; see Suite `docs/adr-0004-gliclass-edge-optional.md` (onnxruntime pinned 1.28.0: 1.29+ sends telemetry to Microsoft).
 
 ## v0.2.209-alpha: Routstr falls back automatically (2026-11-11)
