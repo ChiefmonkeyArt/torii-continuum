@@ -1,3 +1,4 @@
+import { renderProjectMissing } from './project-missing.js';
 import { h, clear } from './util.js';
 import * as store from '../data/store.js';
 import { navigate } from '../router.js';
@@ -17,13 +18,7 @@ export function renderWorkspace(mount, { id, project = null }) {
   const projectRecord = project && store.getProject(project);
   if (project && !projectRecord) {
     setChatContext({ label: 'Projects', where: 'projects' });
-    const empty = h('div', { class: 'empty' }, [h('h1', { text: 'Project unavailable' }), h('p', { text: 'No project with that slug. Return to Projects, or wait for your projects to finish loading.' }),
-      h('button', { text: 'Projects', onclick: () => navigate('/projects') })]);
-    mount.append(empty);
-    const unsubscribe = store.subscribe(() => {
-      if (!empty.isConnected) { unsubscribe(); return; }
-      if (store.getProject(project)) { unsubscribe(); renderWorkspace(mount, { id, project }); }
-    });
+    renderProjectMissing(mount, project, () => renderWorkspace(mount, { id, project }));
     return;
   }
   const root = h('section', { class: 'conversation-workspace' });

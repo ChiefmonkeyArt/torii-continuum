@@ -96,13 +96,15 @@ test('add person: one step adds, signs a newer kind-30098 and PUTs it', async ()
   expect(dispatched).toEqual([{ slug: 'studio' }]);
 });
 
-test('rows show display name, NIP-05 and avatar initials, never a raw npub input', async () => {
+test('rows show display name, NIP-05 and the Teams avatar colour, never a raw npub input', async () => {
   await boot({ signer: null });
   const row = document.querySelector('.team-roster-row');
   expect(row.querySelector('input')).toBeNull();
   expect(row.querySelector('.person-name').textContent).toBe('Bob Builder');
   expect(row.textContent).toContain('bob@example.com');
-  expect(row.querySelector('.person-avatar').textContent).toBe('B');
+  const face = row.querySelector('.person-avatar');
+  expect(face.textContent).toBe('');
+  expect(face.style.background).toMatch(/rgb\(187, 187, 187\)|#bbbbbb/); // Teams: #<first 6 hex>
   // Unnamed people fall back to a short npub, not the full key.
   const bot = document.querySelectorAll('.team-roster-row')[1];
   expect(bot.querySelector('.person-name').textContent).toMatch(/^npub1.+…/);

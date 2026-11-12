@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.212-alpha: the team chat feels like part of Continuum (2026-11-12)
+
+The Team tab opens at the latest message, with a "New messages" line above anything that arrived while you were elsewhere. Unread counts show on the Team tab and in the sidebar. A Search button opens the chat's search, voice notes work, and faces use the same colours as the chat. Reloading a project on a phone now shows "Loading project" with a small animated ring instead of "No project with that slug". Needs Teams torii.25 and Suite v0.9.73-alpha.
+
 ## v0.2.211-alpha: the project chat looks like Continuum (2026-11-12)
 
 The Team tab's chat now uses Continuum's own colours and switches with Continuum's light and dark mode. There is one header instead of two: Continuum's strip shows the team count straight from the chat and opens Your computers. On a phone the extra buttons sit in a More menu. Needs Teams torii.22 (Teams ADR 0021).

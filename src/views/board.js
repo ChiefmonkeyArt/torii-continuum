@@ -8,6 +8,7 @@
  * Rendering goes exclusively through util.h() (textContent only) — no raw
  * HTML, so user-entered titles/descriptions can never inject markup.
  */
+import { renderProjectMissing } from './project-missing.js';
 import { h, clear, openModal, timeAgo } from './util.js';
 import {
   getProject,
@@ -153,12 +154,7 @@ export function renderBoard(mount, slug) {
 
   const p = getProject(slug);
   if (!p) {
-    clear(mount);
-    mount.appendChild(h('div', { class: 'empty' }, [
-      h('div', { class: 'big', text: '⛩' }),
-      h('div', { text: 'No project with that slug.' }),
-      h('button', { style: 'margin-top: 12px', onClick: () => navigate('/projects') }, ['Back to projects']),
-    ]));
+    renderProjectMissing(mount, slug, () => renderBoard(mount, slug));
     return;
   }
 
