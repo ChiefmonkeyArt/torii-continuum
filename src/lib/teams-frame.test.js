@@ -60,7 +60,8 @@ test('starts once, hidden and inert, for the owner of a node with Teams', async 
   expect(a.teamMe).toHaveBeenCalledTimes(1);
   expect(dom.window.document.querySelectorAll('iframe').length).toBe(1);
   const f = frameOf();
-  expect(f.getAttribute('src')).toBe(`${ORIGIN}/chat?embed=1&mode=dark`);
+  expect(f.getAttribute('src')).toBe(`${ORIGIN}/chat?embed=1&mode=dark&hidden=1`);
+  expect(f.getAttribute('allow')).toBe('clipboard-write; microphone');
   expect(f.getAttribute('aria-hidden')).toBe('true');
   expect(f.getAttribute('referrerpolicy')).toBe('no-referrer');
   expect(f.inert).toBe(true);
@@ -120,7 +121,7 @@ test('relays a saved member list and navigates once loaded', async () => {
   const f = frameOf();
   // Before load: navigating sets the src instead of messaging.
   navigateTeamsFrame('studio');
-  expect(f.getAttribute('src')).toBe(`${ORIGIN}/chat/p/studio?embed=1&mode=dark`);
+  expect(f.getAttribute('src')).toBe(`${ORIGIN}/chat/p/studio?embed=1&mode=dark&hidden=1`);
   f.dispatchEvent(new dom.window.Event('load'));
   const post = spyPost(f);
   dom.window.dispatchEvent(new dom.window.CustomEvent(ROSTER_CHANGED_EVENT, { detail: { slug: 'studio' } }));
@@ -205,7 +206,7 @@ test('ADR 0021: light mode goes in the address; the toggle is sent, only on chan
   root.setAttribute('data-theme', 'light');
   await startTeamsFrame(api(), { doc: dom.window.document, win: dom.window });
   const f = frameOf();
-  expect(f.getAttribute('src')).toBe(`${ORIGIN}/chat?embed=1&mode=light`);
+  expect(f.getAttribute('src')).toBe(`${ORIGIN}/chat?embed=1&mode=light&hidden=1`);
   const post = spyPost(f);
   root.setAttribute('data-theme', 'dark');
   await tick();
@@ -244,4 +245,120 @@ test('ADR 0021: Your computers is sent to the loaded frame only', async () => {
   f.dispatchEvent(new dom.window.Event('load'));
   expect(openTeamsComputers()).toBe(true);
   expect(post).toHaveBeenCalledWith({ type: 'torii:open-computers' }, ORIGIN);
+});
+
+// torii-teams ADR 0023: the chat feels like part of Continuum.
+const start = async () => {
+  await mod.startTeamsFrame(api(), { doc: dom.window.document, win: dom.window });
+  const f = frameOf();
+  const post = spyPost(f);
+  return { f, post };
+};
+
+test('ADR 0023: torii:unread from the frame only; badges painted, 99+', async () => {
+  const { teamUnread, unreadBadge, unreadLabel, TEAM_UNREAD_EVENT } = await boot();
+  const { f } = await start();
+  const badge = unreadBadge('studio');
+  dom.window.document.body.append(badge);
+  expect(badge.hidden).toBe(true);
+  const heard = vi.fn();
+  dom.window.addEventListener(TEAM_UNREAD_EVENT, heard);
+  ask(f, { type: 'torii:unread', counts: { studio: 3, 'Bad Slug': 4, other: -1, x: 1.5, y: '2' } });
+  expect(teamUnread('studio')).toBe(3);
+  expect(teamUnread('Bad Slug')).toBe(0);
+  expect(teamUnread('other')).toBe(0);
+  expect(badge.hidden).toBe(false);
+  expect(badge.textContent).toBe('3');
+  expect(badge.getAttribute('aria-label')).toBe('3 unread');
+  expect(heard).toHaveBeenCalledTimes(1);
+  ask(f, { type: 'torii:unread', counts: { studio: 9 } }, 'https://evil.x');
+  ask(f, { type: 'torii:unread', counts: { studio: 9 } }, ORIGIN, {});
+  ask(f, { type: 'torii:unread', counts: [1] });
+  expect(teamUnread('studio')).toBe(3);
+  ask(f, { type: 'torii:unread', counts: { studio: 0 } });
+  expect(badge.hidden).toBe(true);
+  expect(unreadLabel(0)).toBe('');
+  expect(unreadLabel(100)).toBe('99+');
+});
+
+test('ADR 0023: ready per page; a new page waits for its own ready', async () => {
+  const { teamReady, navigateTeamsFrame, TEAM_READY_EVENT } = await boot();
+  const { f } = await start();
+  f.dispatchEvent(new dom.window.Event('load'));
+  navigateTeamsFrame('studio');
+  expect(teamReady('studio')).toBe(false);
+  const heard = vi.fn();
+  dom.window.addEventListener(TEAM_READY_EVENT, (e) => heard(e.detail));
+  ask(f, { type: 'torii:ready', slug: 'studio' }, 'https://evil.x');
+  expect(teamReady('studio')).toBe(false);
+  ask(f, { type: 'torii:ready', slug: 'studio' });
+  expect(teamReady('studio')).toBe(true);
+  expect(heard).toHaveBeenCalledWith({ slug: 'studio' });
+  navigateTeamsFrame('other');
+  expect(teamReady('studio')).toBe(false);
+  expect(teamReady('other')).toBe(false);
+});
+
+test('ADR 0023: visible on dock, hidden on undock, and resent when the frame speaks', async () => {
+  const { dockTeamsFrame } = await boot();
+  const raf = [];
+  dom.window.requestAnimationFrame = (fn) => { raf.push(fn); return raf.length; };
+  dom.window.cancelAnimationFrame = () => {};
+  const { f, post } = await start();
+  f.dispatchEvent(new dom.window.Event('load'));
+  ask(f, { type: 'torii:unread', counts: {} });
+  expect(post).toHaveBeenLastCalledWith({ type: 'torii:visible', on: false }, ORIGIN);
+  const slot = dom.window.document.getElementById('slot');
+  dockTeamsFrame(slot, { projectSlug: 'studio' });
+  expect(post).toHaveBeenCalledWith({ type: 'torii:visible', on: true }, ORIGIN);
+  // Transparent until ready; then shown.
+  expect(f.style.opacity).toBe('0');
+  ask(f, { type: 'torii:ready', slug: 'studio' });
+  expect(post).toHaveBeenLastCalledWith({ type: 'torii:visible', on: true }, ORIGIN);
+  raf.shift()();
+  expect(f.style.opacity).toBe('1');
+  slot.remove();
+  raf.shift()();
+  expect(post).toHaveBeenLastCalledWith({ type: 'torii:visible', on: false }, ORIGIN);
+});
+
+test('ADR 0023: an older Teams that never says ready is shown after the wait', async () => {
+  const { dockTeamsFrame, READY_WAIT_MS } = await boot();
+  vi.useFakeTimers();
+  try {
+    const raf = [];
+    dom.window.requestAnimationFrame = (fn) => { raf.push(fn); return raf.length; };
+    dom.window.cancelAnimationFrame = () => {};
+    const { f } = await (async () => {
+      const p = mod.startTeamsFrame(api(), { doc: dom.window.document, win: dom.window });
+      await vi.advanceTimersByTimeAsync(10);
+      await p;
+      return { f: frameOf() };
+    })();
+    spyPost(f);
+    dockTeamsFrame(dom.window.document.getElementById('slot'), { projectSlug: 'studio' });
+    expect(f.style.opacity).toBe('0');
+    expect(f.style.pointerEvents).toBe('none');
+    vi.advanceTimersByTime(READY_WAIT_MS);
+    raf.shift()();
+    expect(f.style.opacity).toBe('1');
+  } finally { vi.useRealTimers(); }
+});
+
+test('ADR 0023: Search goes to the loaded frame only; warm points the hidden frame', async () => {
+  const { openTeamsSearch, warmTeamsFrame } = await boot();
+  expect(openTeamsSearch()).toBe(false);
+  warmTeamsFrame('studio'); // no frame: nothing
+  const { f, post } = await start();
+  expect(openTeamsSearch()).toBe(false);
+  f.dispatchEvent(new dom.window.Event('load'));
+  expect(openTeamsSearch()).toBe(true);
+  expect(post).toHaveBeenCalledWith({ type: 'torii:search' }, ORIGIN);
+  warmTeamsFrame('studio');
+  expect(post).toHaveBeenLastCalledWith({ type: 'torii:navigate', path: '/chat/p/studio' }, ORIGIN);
+  const n = post.mock.calls.length;
+  warmTeamsFrame('studio'); // already there
+  warmTeamsFrame('../x');
+  expect(post.mock.calls.length).toBe(n);
+  expect(f.inert).toBe(true); // still hidden
 });

@@ -20,9 +20,14 @@ const roster = {
   teams: { chat: { group_id: 'g1', claimed: false }, ready: [OWNER, BOB], added: [] },
 };
 
-async function boot({ me = { owner: true, pubkey: OWNER, teams_app_url: `${ORIGIN}/` }, data = roster, signer, put, fresh = false } = {}) {
+const storeState = { loading: false, has: true, subs: new Set() };
+async function boot({ me = { owner: true, pubkey: OWNER, teams_app_url: `${ORIGIN}/` }, data = roster, signer, put, fresh = false, slug = 'studio' } = {}) {
   vi.resetModules();
-  vi.doMock('../data/store.js', () => ({ getProject: (slug) => (slug === 'studio' ? { content: { slug, name: 'Studio' } } : null) }));
+  vi.doMock('../data/store.js', () => ({
+    getProject: (s) => (s === 'studio' && storeState.has ? { content: { slug: s, name: 'Studio' } } : null),
+    storeLoading: () => storeState.loading,
+    subscribe: (fn) => { storeState.subs.add(fn); return () => storeState.subs.delete(fn); },
+  }));
   vi.doMock('../chat.js', () => ({ setChatContext: vi.fn() }));
   vi.doMock('../shell.js', () => ({ renderSidebar: vi.fn() }));
   dom = new JSDOM('<main id="main-content"></main>', { url: 'https://test.invalid/continuum/#/projects/studio/team' });
@@ -46,8 +51,8 @@ async function boot({ me = { owner: true, pubkey: OWNER, teams_app_url: `${ORIGI
   const { renderProjectTeam } = await import('./project-team.js');
   const mount = document.querySelector('main');
   // The route renders again while the project hydrates (main.js).
-  if (fresh) renderProjectTeam(mount, 'studio', { api, go, signer: () => signer });
-  renderProjectTeam(mount, 'studio', { api, go, signer: () => signer });
+  if (fresh) renderProjectTeam(mount, slug, { api, go, signer: () => signer });
+  renderProjectTeam(mount, slug, { api, go, signer: () => signer });
   await tick();
   return { api, go, mount };
 }
@@ -56,6 +61,8 @@ const text = () => document.querySelector('main').textContent;
 const button = (label) => [...document.querySelectorAll('button')].find((b) => b.textContent === label);
 
 afterEach(async () => {
+  Object.assign(storeState, { loading: false, has: true });
+  storeState.subs.clear();
   const { _resetTeamsFrame } = await import('../lib/teams-frame.js');
   _resetTeamsFrame();
   vi.unstubAllGlobals();
@@ -69,7 +76,8 @@ test('Team tab: the project chat docked full width, people count, Add people and
   const tabs = [...document.querySelectorAll('.view-tabs a')].map((a) => a.textContent);
   expect(tabs).toEqual(['Workspace', 'Team', 'Overview', 'Board']);
   expect(document.querySelector('.view-tabs a[aria-current="page"]').textContent).toBe('Team');
-  expect(text()).toContain('2 people · 1 not joined yet'); // the agent is not counted
+  expect(text()).toContain('2 people'); // the agent is not counted
+  expect(text()).not.toContain('not joined yet'); // ADR 0023 §6: no guess before the frame
   const frames = document.querySelectorAll('iframe.team-chat-frame');
   expect(frames.length).toBe(1);
   expect(frames[0].getAttribute('src')).toBe(`${ORIGIN}/chat/p/studio?embed=1&mode=dark`);
@@ -158,10 +166,64 @@ test('ADR 0021: Your computers in the strip and in More; the count follows the f
   f.dispatchEvent(new window.Event('load'));
   comps[0].click();
   expect(post).toHaveBeenCalledWith({ type: 'torii:open-computers' }, ORIGIN);
+  expect(text()).not.toContain('not joined yet');
+  const say = (data) => {
+    const ev = new window.MessageEvent('message', { data, origin: ORIGIN });
+    Object.defineProperty(ev, 'source', { value: f.contentWindow });
+    window.dispatchEvent(ev);
+  };
+  say({ type: 'torii:members', slug: 'studio', joined: 1, waiting: 1 });
   expect(text()).toContain('2 people · 1 not joined yet');
-  const ev = new window.MessageEvent('message', { data: { type: 'torii:members', slug: 'studio', joined: 2, waiting: 0 }, origin: ORIGIN });
-  Object.defineProperty(ev, 'source', { value: f.contentWindow });
-  window.dispatchEvent(ev);
+  say({ type: 'torii:members', slug: 'studio', joined: 2, waiting: 0 });
   expect(text()).toContain('2 people');
   expect(text()).not.toContain('not joined yet');
+});
+
+test('ADR 0023: Search in the strip and in More opens the chat search', async () => {
+  await boot();
+  await tick();
+  const search = [...document.querySelectorAll('button')].filter((b) => b.textContent === 'Search');
+  expect(search).toHaveLength(2);
+  expect(search.every((b) => !b.hidden)).toBe(true);
+  const f = document.querySelector('iframe.team-chat-frame');
+  const post = vi.fn();
+  Object.defineProperty(f, 'contentWindow', { value: { postMessage: post }, configurable: true });
+  f.dispatchEvent(new window.Event('load'));
+  search[1].click();
+  expect(post).toHaveBeenCalledWith({ type: 'torii:search' }, ORIGIN);
+});
+
+test('ADR 0023: the loading ring shows in the dock until the frame says ready', async () => {
+  await boot();
+  await tick();
+  const dock = document.querySelector('.project-team-dock');
+  expect(dock.querySelector('.loader')?.textContent).toContain('Opening team chat');
+  const f = document.querySelector('iframe.team-chat-frame');
+  Object.defineProperty(f, 'contentWindow', { value: { postMessage: vi.fn() }, configurable: true });
+  const ev = new window.MessageEvent('message', { data: { type: 'torii:ready', slug: 'studio' }, origin: ORIGIN });
+  Object.defineProperty(ev, 'source', { value: f.contentWindow });
+  window.dispatchEvent(ev);
+  expect(dock.querySelector('.loader')).toBeNull();
+});
+
+test('ADR 0023: on a reload the page says Loading project until the store has it', async () => {
+  Object.assign(storeState, { loading: true, has: false });
+  await boot();
+  expect(text()).toContain('Loading project');
+  expect(text()).not.toContain('No project with that slug');
+  expect(document.querySelector('.loader [class="loader-ring"], .loader svg')).not.toBeNull();
+  Object.assign(storeState, { loading: false, has: true });
+  for (const fn of [...storeState.subs]) fn();
+  await tick();
+  expect(text()).toContain('2 people');
+});
+
+test('ADR 0023: not found only once loading has finished', async () => {
+  Object.assign(storeState, { loading: true, has: false });
+  await boot();
+  expect(text()).toContain('Loading project');
+  storeState.loading = false;
+  for (const fn of [...storeState.subs]) fn();
+  expect(text()).toContain('No project with that slug.');
+  expect(text()).not.toContain('Loading project');
 });

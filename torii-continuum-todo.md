@@ -1,12 +1,21 @@
 # Torii Continuum — Master TODO
 
 
+## v0.2.212-alpha: the team chat feels like part of Continuum
+
+- [x] Open at the latest message, New messages line kept; read only while shown (`torii:visible`, `&hidden=1`).
+- [x] Unread badges on the Team tab and sidebar (`torii:unread`); instant Team tab with an "Opening team chat" ring until `torii:ready`.
+- [x] "Loading project" ring on reload, no false "No project with that slug"; no estimated "not joined yet".
+- [x] Search button (inline and in More); voice notes (`allow="microphone"`, Suite ADR 0006); same avatar colours as Teams.
+- [ ] Merge, tag, deploy (owner approval), then the `continuum_host` and `teams_app` stages from Suite v0.9.73-alpha.
+- [ ] Human check on a phone: hold the mic in the Team tab, allow, send a voice note.
+
 ## v0.2.211-alpha: the project chat looks like Continuum
 
 - [x] Teams frame gets `&mode=` and `torii:theme` (follows the theme toggle); Teams torii.22 uses Continuum's colours when framed (Teams ADR 0021).
 - [x] One header: the strip shows Teams' own counts (`torii:members`) and opens Your computers in the frame (`torii:open-computers`); phone More menu is a popover above the frame.
 - [x] Merged, tagged, deployed 2026-11-12 (owner approved; run 43135791810, then `teams_app` from Suite v0.9.70-alpha, run 43135883878). Live: Continuum 0.2.211-alpha, Teams torii.22.
-- [ ] Later: open at the latest message, not the New messages line; phone reload says "No project with that slug" before the store loads; Cordn extras (search, voice notes, group icon).
+- [x] Later items done in v0.2.212-alpha (open at the latest message, Loading project, search, voice notes, group icon).
 
 ## v0.2.210-alpha: GLiClass Edge stages
 

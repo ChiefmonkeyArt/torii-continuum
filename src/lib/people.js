@@ -55,10 +55,12 @@ export function displayName(hex) {
   return p?.display_name || p?.name || shortNpub(toNpub(hex));
 }
 
-function initials(hex) {
-  const p = profiles.get(hex);
-  const n = (p?.display_name || p?.name || '').trim();
-  return (n ? [...n][0] : hex[0]).toUpperCase();
+/**
+ * torii-teams ADR 0023 §2: the same face as Teams before a picture loads,
+ * the key's first six hex digits as a colour (Teams `pubkeyToHexColor`).
+ */
+export function faceColour(hex) {
+  return typeof hex === 'string' && /^[0-9a-f]{6}/i.test(hex) ? `#${hex.slice(0, 6).toLowerCase()}` : 'hsl(var(--muted))';
 }
 
 function avatarUrl(hex) {
@@ -72,13 +74,12 @@ function avatarUrl(hex) {
   return avatars.get(hex);
 }
 
-/** Round avatar: initials immediately, the image once it loads. */
+/** Round avatar: Teams' colour immediately, the image once it loads. */
 export function avatarEl(hex, size = 32) {
   const el = h('span', {
     class: 'person-avatar',
     'aria-hidden': 'true',
-    style: `width:${size}px;height:${size}px;border-radius:50%;flex:0 0 ${size}px;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;background:hsl(var(--primary) / .14);color:hsl(var(--primary));font-size:${Math.round(size * 0.42)}px;font-weight:600;`,
-    text: initials(hex),
+    style: `width:${size}px;height:${size}px;border-radius:50%;flex:0 0 ${size}px;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;background:${faceColour(hex)};`,
   });
   avatarUrl(hex).then((url) => {
     if (!url) return;

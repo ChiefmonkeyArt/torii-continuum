@@ -68,11 +68,17 @@ async function persistServer() {
   } catch (_e) { /* best-effort mirror — localStorage stays the in-browser cache */ }
 }
 
+// Teams ADR 0023 / adr-seamless-team-chat §1: true while the server copy is
+// on its way, so a project page says "Loading project", not "No project".
+let hydrating = 0;
+export function storeLoading() { return hydrating > 0; }
+
 // Pull the authoritative server copy over the cached state, coerce its shape
 // defensively (mirroring initStore's schema-evolution guards), and notify
 // subscribers so views re-render against the freshest document.
 export async function hydrateFromServer() {
   if (!serverStoreAvailable()) return;
+  hydrating++;
   try {
     const r = await getStore();
     if (!r.ok || !r.data?.state || typeof r.data.state !== 'object') return;
@@ -85,8 +91,10 @@ export async function hydrateFromServer() {
     // inject prototype seed data.
     if (!Array.isArray(next.marketTasks)) next.marketTasks = [];
     state = next;
-    notify();
-  } catch (_e) { /* best-effort hydration */ }
+  } catch (_e) { /* best-effort hydration */ } finally {
+    hydrating--;
+    notify(); // also when it failed: waiting views can stop waiting
+  }
 }
 
 export function initStore() {

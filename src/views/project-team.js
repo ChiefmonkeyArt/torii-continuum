@@ -10,7 +10,12 @@
  * "not joined yet" count comes from the frame (who is really in the chat)
  * once it reports, with the signed list's estimate until then. On a phone,
  * Your computers and Open in full window sit in a More menu.
+ *
+ * torii-teams ADR 0023 (docs/adr-seamless-team-chat.md): the "not joined yet"
+ * count waits for the frame (no estimate first); Search opens the chat's own
+ * search; the dock shows the loading ring until the frame says it is ready.
  */
+import { renderProjectMissing } from './project-missing.js';
 import { h, clear } from './util.js';
 import * as store from '../data/store.js';
 import { navigate } from '../router.js';
@@ -21,7 +26,8 @@ import { parseNpub } from '../lib/npub.js';
 import { readSessionMarker } from '../auth.js';
 import { avatarEl, loadProfiles, setPeopleApi } from '../lib/people.js';
 import { openTeamFor, startProjectChat, takeNewProject } from '../lib/team-nav.js';
-import { startTeamsFrame, dockTeamsFrame, teamsOrigin, chatPath, openTeamsComputers, teamMembers, TEAM_MEMBERS_EVENT } from '../lib/teams-frame.js';
+import { startTeamsFrame, dockTeamsFrame, teamsOrigin, chatPath, openTeamsComputers, openTeamsSearch, teamMembers, teamReady, READY_WAIT_MS, TEAM_MEMBERS_EVENT, TEAM_READY_EVENT } from '../lib/teams-frame.js';
+import { loaderEl } from '../components/loader.js';
 import { teamMe, teamHandoff, projectRoster, putProjectRoster, teamProfiles, teamAvatarBlob } from '../data/agent.js';
 
 const MAX_FACES = 5;
@@ -37,14 +43,11 @@ export function renderProjectTeam(mount, slug, deps = {}) {
   const go = deps.go || navigate;
   const getSigner = deps.signer || (() => (typeof window !== 'undefined' ? window.nostr : null));
   const p = store.getProject(slug);
-  clear(mount);
   if (!p) {
-    mount.appendChild(h('div', { class: 'empty' }, [
-      h('div', { text: 'No project with that slug.' }),
-      h('button', { style: 'margin-top: 12px', onClick: () => go('/projects') }, ['Back to projects']),
-    ]));
+    renderProjectMissing(mount, slug, () => renderProjectTeam(mount, slug, deps), { go });
     return;
   }
+  clear(mount);
   setChatContext({ label: `${p.content.name} · Team`, where: 'project-team:' + slug });
   setPeopleApi(api);
 
@@ -82,7 +85,7 @@ export function renderProjectTeam(mount, slug, deps = {}) {
     // the project hydrates, and an earlier render must not use it up.
     if (!members.length) return drawStart(takeNewProject(slug));
     takeNewProject(slug);
-    drawChat(members, new Set(r.data?.teams?.added || []));
+    drawChat(members);
   }
 
   function drawStart(auto) {
@@ -109,9 +112,8 @@ export function renderProjectTeam(mount, slug, deps = {}) {
     if (auto) start();
   }
 
-  function drawChat(members, added) {
+  function drawChat(members) {
     const humans = members.filter((m) => m.role !== 'agent');
-    const notJoined = humans.filter((m) => m.role !== 'owner' && !added.has(m.pubkey)).length;
     const faces = h('span', { class: 'project-team-faces', 'aria-hidden': 'true' });
     loadProfiles(humans.map((m) => m.pubkey)).finally(() => {
       for (const m of humans.slice(0, MAX_FACES)) faces.append(avatarEl(m.pubkey, 26));
@@ -120,7 +122,8 @@ export function renderProjectTeam(mount, slug, deps = {}) {
     const setCount = (waiting) => {
       countEl.textContent = `${humans.length} ${humans.length === 1 ? 'person' : 'people'}${waiting ? ` · ${waiting} not joined yet` : ''}`;
     };
-    setCount(teamMembers(slug)?.waiting ?? notJoined);
+    // ADR 0023 §6: only the frame's count (who is really in); no guess first.
+    setCount(teamMembers(slug)?.waiting ?? 0);
     const onMembers = (e) => {
       if (!countEl.isConnected) { window.removeEventListener(TEAM_MEMBERS_EVENT, onMembers); return; }
       if (e.detail?.slug === slug) setCount(e.detail.waiting);
@@ -132,9 +135,10 @@ export function renderProjectTeam(mount, slug, deps = {}) {
     // the docked frame, which sits over the whole page (teams-frame.js).
     const closeMenu = () => { try { menu.hidePopover?.(); } catch { /* not open */ } };
     const [computers, computersMore] = extra(() => h('button', { class: 'ghost', type: 'button', hidden: true, onClick: () => { closeMenu(); openTeamsComputers(); } }, ['Your computers']));
+    const [search, searchMore] = extra(() => h('button', { class: 'ghost', type: 'button', hidden: true, onClick: () => { closeMenu(); openTeamsSearch(); } }, ['Search']));
     const [open, openMore] = extra(() => h('a', { class: 'team-chat-open', target: '_blank', rel: 'noopener noreferrer', text: 'Open in full window', hidden: true }));
     openMore.addEventListener('click', closeMenu);
-    const menu = h('div', { class: 'project-team-more-menu', popover: 'auto', role: 'menu' }, [computersMore, openMore]);
+    const menu = h('div', { class: 'project-team-more-menu', popover: 'auto', role: 'menu' }, [searchMore, computersMore, openMore]);
     const more = h('button', { class: 'ghost project-team-more', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false', hidden: true, onClick: () => {
       const r = more.getBoundingClientRect();
       menu.style.top = `${Math.round(r.bottom + 4)}px`;
@@ -143,13 +147,21 @@ export function renderProjectTeam(mount, slug, deps = {}) {
     } }, ['More']);
     menu.addEventListener('toggle', (e) => more.setAttribute('aria-expanded', String(e.newState === 'open')));
     const dock = h('div', { class: 'team-chat-dock project-team-dock' });
+    // ADR 0023 §5: our loading ring until the frame says the chat is ready
+    // (the frame stays transparent over it); an older Teams: after a wait.
+    const waitRing = loaderEl('Opening team chat');
+    if (!teamReady(slug)) dock.append(waitRing);
+    const dropRing = () => { waitRing.remove(); window.removeEventListener(TEAM_READY_EVENT, onReady); clearTimeout(ringTimer); };
+    const onReady = (e) => { if (!dock.isConnected || e.detail?.slug === slug) dropRing(); };
+    window.addEventListener(TEAM_READY_EVENT, onReady);
+    const ringTimer = setTimeout(dropRing, READY_WAIT_MS);
     body.append(
       h('div', { class: 'project-team-head' }, [
         faces,
         countEl,
         h('span', { style: 'flex: 1;' }),
         h('button', { class: 'ghost', type: 'button', onClick: () => openTeamFor(slug, go) }, ['Add people']),
-        h('span', { class: 'project-team-extras' }, [computers, open]),
+        h('span', { class: 'project-team-extras' }, [search, computers, open]),
         more,
         menu,
       ]),
@@ -159,9 +171,9 @@ export function renderProjectTeam(mount, slug, deps = {}) {
       if (!dock.isConnected) return;
       const url = teamsOrigin();
       if (url) for (const a of [open, openMore]) { a.href = `${url}${chatPath(slug)}`; a.hidden = false; }
-      if (running) for (const b of [computers, computersMore]) b.hidden = false;
+      if (running) for (const b of [search, searchMore, computers, computersMore]) b.hidden = false;
       more.hidden = !url && !running;
-      if (!running || !dockTeamsFrame(dock, { projectSlug: slug })) dock.append(line("Couldn't start the team chat here. Use Open in full window."));
+      if (!running || !dockTeamsFrame(dock, { projectSlug: slug })) { dropRing(); dock.append(line("Couldn't start the team chat here. Use Open in full window.")); }
     }).catch(() => {});
   }
 

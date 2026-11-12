@@ -115,3 +115,7 @@ chat membership).
 ## Amendment (v0.2.211-alpha, 2026-11-12)
 
 Teams ADR 0021 (torii-teams `docs/torii/adr-0021-continuum-look.md`, Accepted 2026-11-12): framed Teams uses Continuum's colours and follows its mode (`&mode=`, `torii:theme`). Continuum's strip is the only header: it shows the counts Teams reports (`torii:members`, numbers only) in place of its own estimate, and Your computers opens the panel inside the frame (`torii:open-computers`). At 640 px or less, Your computers and Open in full window move into a More popover.
+
+## Amendment (v0.2.212-alpha, 2026-11-12)
+
+`docs/adr-seamless-team-chat.md` (Accepted 2026-11-12, with Teams ADR 0023): the Team tab opens at the latest message, shows unread counts on the tab and the sidebar, has a Search button and voice notes, waits behind a loading ring until the frame says it is ready, and a reload shows "Loading project" rather than "No project with that slug". The strip shows only the counts Teams reports, never an estimate.

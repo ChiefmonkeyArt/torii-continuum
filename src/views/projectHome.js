@@ -1,4 +1,6 @@
 /** Project home page — milestones, todos, sessions, files. */
+import { renderProjectMissing } from './project-missing.js';
+import { unreadBadge, warmTeamsFrame } from '../lib/teams-frame.js';
 import { h, clear, timeAgo, formatBytes } from './util.js';
 import * as store from '../data/store.js';
 import { navigate } from '../router.js';
@@ -12,12 +14,16 @@ export function renderProjectHome(mount, slug, opts = {}) {
   const S = demoSource(opts, store);
   const p = S.getProject(slug);
   if (!p) {
-    clear(mount);
-    mount.appendChild(h('div', { class: 'empty' }, [
-      h('div', { class: 'big', text: '⛩' }),
-      h('div', { text: 'No project with that slug.' }),
-      h('button', { style: 'margin-top: 12px', onClick: () => navigate(demoPath(opts, '/projects')) }, ['Back to projects']),
-    ]));
+    if (demo) {
+      clear(mount);
+      mount.appendChild(h('div', { class: 'empty' }, [
+        h('div', { class: 'big', text: '⛩' }),
+        h('div', { text: 'No project with that slug.' }),
+        h('button', { style: 'margin-top: 12px', onClick: () => navigate(demoPath(opts, '/projects')) }, ['Back to projects']),
+      ]));
+      return;
+    }
+    renderProjectMissing(mount, slug, () => renderProjectHome(mount, slug, opts));
     return;
   }
   setChatContext({ label: p.content.name, where: 'project:' + slug });
@@ -226,14 +232,18 @@ renderTodos.refresh = function refresh(slug) {
  * The active link is marked with aria-current="page".
  */
 export function renderProjectTabs(slug, active, opts = {}) {
-  const tab = (id, label, path) => {
+  const tab = (id, label, path, extra = null) => {
     const attrs = { class: `view-tab ${active === id ? 'active' : ''}`, href: `#${demoPath(opts, path)}` };
     if (active === id) attrs['aria-current'] = 'page';
-    return h('a', attrs, [label]);
+    return h('a', attrs, [label, extra]);
   };
+  // torii-teams ADR 0023 §4, §5: the Team tab shows unread messages, and any
+  // project page points the hidden chat at this project so the tab is instant.
+  const demo = isDemo(opts);
+  if (!demo) warmTeamsFrame(slug);
   return h('nav', { class: 'view-tabs', 'aria-label': 'Project views' }, [
     tab('workspace', 'Workspace', `/projects/${slug}`),
-    tab('team', 'Team', `/projects/${slug}/team`),
+    tab('team', 'Team', `/projects/${slug}/team`, demo ? null : unreadBadge(slug)),
     tab('overview', 'Overview', `/projects/${slug}/overview`),
     tab('board', 'Board', `/projects/${slug}/board`),
   ]);

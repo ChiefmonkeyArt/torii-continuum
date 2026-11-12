@@ -4,6 +4,7 @@
  */
 
 import { navigate, currentRoute } from './router.js';
+import { unreadBadge } from './lib/teams-frame.js';
 import { listProjects, subscribe } from './data/store.js';
 import { sessionLibrary, historyTitle } from './chat.js';
 import { isSessionLive, startLogin, cancelLogin, endSession, readSessionMarker } from './auth.js';
@@ -152,6 +153,7 @@ export function renderSidebar() {
     a.className = 'nav-item project-nav-link';
     a.href = demoAware('#/projects/' + encodeURIComponent(project.content.slug));
     a.textContent = project.content.name || project.content.slug;
+    a.prepend(unreadBadge(project.content.slug)); // torii-teams ADR 0023 §4 (floats right)
     projectLinks.append(a);
   }
   if (!projectLinks.childElementCount) projectLinks.textContent = 'Your projects will appear here.';
