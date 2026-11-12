@@ -72,7 +72,7 @@ test('Team tab: the project chat docked full width, people count, Add people and
   expect(text()).toContain('2 people · 1 not joined yet'); // the agent is not counted
   const frames = document.querySelectorAll('iframe.team-chat-frame');
   expect(frames.length).toBe(1);
-  expect(frames[0].getAttribute('src')).toBe(`${ORIGIN}/chat/p/studio?embed=1`);
+  expect(frames[0].getAttribute('src')).toBe(`${ORIGIN}/chat/p/studio?embed=1&mode=dark`);
   expect(frames[0].style.position).toBe('fixed');
   const full = document.querySelector('a.team-chat-open');
   expect(full.hidden).toBe(false);
@@ -136,4 +136,32 @@ test('no Teams on this node: one line, no frame and no signing', async () => {
 test('the assistant bar is hidden on the Team tab only', () => {
   const css = readFileSync(new URL('../styles/workspace.css', import.meta.url), 'utf8');
   expect(css).toContain('body:has(.project-team-page) .chat-dock { display: none; }');
+});
+
+// torii-teams ADR 0021: Continuum's strip is the chat's only header.
+test('ADR 0021: Your computers in the strip and in More; the count follows the frame', async () => {
+  await boot();
+  await tick();
+  const comps = [...document.querySelectorAll('button')].filter((b) => b.textContent === 'Your computers');
+  expect(comps).toHaveLength(2); // inline, and in More for phones
+  expect(comps.every((b) => !b.hidden)).toBe(true);
+  const more = document.querySelector('button.project-team-more');
+  expect(more.hidden).toBe(false);
+  expect(more.getAttribute('aria-haspopup')).toBe('menu');
+  const menu = document.querySelector('.project-team-more-menu');
+  expect(menu.getAttribute('popover')).toBe('auto'); // top layer: above the docked frame
+  expect(menu.querySelectorAll('a.team-chat-open')).toHaveLength(1);
+  more.click(); // no popover API in jsdom: must not throw
+  const f = document.querySelector('iframe.team-chat-frame');
+  const post = vi.fn();
+  Object.defineProperty(f, 'contentWindow', { value: { postMessage: post }, configurable: true });
+  f.dispatchEvent(new window.Event('load'));
+  comps[0].click();
+  expect(post).toHaveBeenCalledWith({ type: 'torii:open-computers' }, ORIGIN);
+  expect(text()).toContain('2 people · 1 not joined yet');
+  const ev = new window.MessageEvent('message', { data: { type: 'torii:members', slug: 'studio', joined: 2, waiting: 0 }, origin: ORIGIN });
+  Object.defineProperty(ev, 'source', { value: f.contentWindow });
+  window.dispatchEvent(ev);
+  expect(text()).toContain('2 people');
+  expect(text()).not.toContain('not joined yet');
 });

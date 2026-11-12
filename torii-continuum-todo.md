@@ -1,5 +1,13 @@
 # Torii Continuum — Master TODO
 
+
+## v0.2.211-alpha: the project chat looks like Continuum
+
+- [x] Teams frame gets `&mode=` and `torii:theme` (follows the theme toggle); Teams torii.22 uses Continuum's colours when framed (Teams ADR 0021).
+- [x] One header: the strip shows Teams' own counts (`torii:members`) and opens Your computers in the frame (`torii:open-computers`); phone More menu is a popover above the frame.
+- [ ] Merge, tag, deploy with owner approval, with Suite v0.9.70-alpha (pins torii.22).
+- [ ] Later: open at the latest message, not the New messages line; phone reload says "No project with that slug" before the store loads; Cordn extras (search, voice notes, group icon).
+
 ## v0.2.210-alpha: GLiClass Edge stages
 
 - [x] Stages `gliclass`, `gliclass_bench`, `gliclass_remove` (with Suite v0.9.65-alpha, Suite ADR 0004); removal flags written after enable flags.

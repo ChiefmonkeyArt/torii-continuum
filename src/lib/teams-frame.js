@@ -13,12 +13,20 @@
  *                 owner team token for the same pubkey.
  *   frame → here  `torii:roster-synced` (ADR 0015): after a roster-changed
  *                 pass, `{slug, left, error}`; counts only, no keys.
+ *   frame → here  `torii:members` (torii-teams ADR 0021 §4): `{slug, joined,
+ *                 waiting}` for the strip; counts only, no keys.
  *   here → frame  `torii:roster-changed` (member list saved) and
  *                 `torii:navigate` (show a project; path checked on both ends).
+ *   here → frame  `torii:theme {mode}` when light/dark changes, and
+ *                 `torii:open-computers` (ADR 0021 §2, §3). The frame address
+ *                 also carries `&mode=` so its first paint matches.
  */
 import { h } from '../views/util.js';
 
 export const ROSTER_CHANGED_EVENT = 'continuum:roster-changed';
+/** torii-teams ADR 0021 §4: fired on `window` with `{slug, joined, waiting}`. */
+export const TEAM_MEMBERS_EVENT = 'continuum:team-members';
+const members = new Map(); // slug -> {joined, waiting}, from the frame
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const HIDDEN = 'position:fixed;left:-12000px;top:0;width:960px;height:720px;visibility:hidden;pointer-events:none;border:0;';
 
@@ -44,6 +52,19 @@ export function chatPath(slug) {
 
 export function teamsOrigin() { return st?.origin ?? null; }
 
+/** Continuum's light or dark (shell.js sets `data-theme`; dark is the default). */
+export function themeMode(doc = document) {
+  return doc.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
+
+/** The frame address: always `embed=1`, plus the mode for a matching first paint. */
+export function frameSrc(origin, path, mode) {
+  return `${origin}${path}?embed=1&mode=${mode === 'light' ? 'light' : 'dark'}`;
+}
+
+/** Last counts the frame reported for `slug`, or null. */
+export function teamMembers(slug) { return members.get(slug) ?? null; }
+
 /**
  * Start the frame once (idempotent). Resolves true when a frame is running.
  * @param {{teamMe:Function, teamHandoff:Function}} api
@@ -58,7 +79,7 @@ export function startTeamsFrame(api, { doc = document, win = window } = {}) {
     if (!origin) { declined = Boolean(r?.ok); return false; }
     const frame = h('iframe', {
       class: 'team-chat-frame',
-      src: `${origin}/chat?embed=1`,
+      src: frameSrc(origin, '/chat', themeMode(doc)),
       title: 'Team chat',
       allow: 'clipboard-write',
       sandbox: 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads',
@@ -75,6 +96,7 @@ export function startTeamsFrame(api, { doc = document, win = window } = {}) {
       if (e.source !== frame.contentWindow || e.origin !== origin) return;
       const ask = e.data;
       if (ask?.type === 'torii:roster-synced') return settle(ask);
+      if (ask?.type === 'torii:members') return noteMembers(ask, win);
       if (busy) return;
       if (!ask || ask.type !== 'torii:session-request' || ask.pubkey !== s.pubkey) return;
       busy = true;
@@ -90,6 +112,19 @@ export function startTeamsFrame(api, { doc = document, win = window } = {}) {
     win.addEventListener('message', onAsk);
     win.addEventListener(ROSTER_CHANGED_EVENT, onRoster);
     s.offs.push(() => win.removeEventListener('message', onAsk), () => win.removeEventListener(ROSTER_CHANGED_EVENT, onRoster));
+    // ADR 0021 §2: follow the theme toggle without reloading the frame.
+    const Obs = win.MutationObserver || globalThis.MutationObserver;
+    if (Obs) {
+      let mode = themeMode(doc);
+      const obs = new Obs(() => {
+        const next = themeMode(doc);
+        if (next === mode) return;
+        mode = next;
+        frame.contentWindow?.postMessage({ type: 'torii:theme', mode }, origin);
+      });
+      obs.observe(doc.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+      s.offs.push(() => obs.disconnect());
+    }
     doc.body.appendChild(frame);
     st = s;
     return true;
@@ -104,6 +139,21 @@ function settle(d) {
   if (!set) return;
   waits.delete(d.slug);
   for (const done of [...set]) done({ left: d.left, error: d.error });
+}
+
+function noteMembers(d, win) {
+  if (typeof d.slug !== 'string' || !SLUG_RE.test(d.slug)) return;
+  if (![d.joined, d.waiting].every((n) => Number.isInteger(n) && n >= 0 && n < 10000)) return;
+  const v = { joined: d.joined, waiting: d.waiting };
+  members.set(d.slug, v);
+  win.dispatchEvent(new win.CustomEvent(TEAM_MEMBERS_EVENT, { detail: { slug: d.slug, ...v } }));
+}
+
+/** Open Your computers in the frame (torii-teams ADR 0021 §3). */
+export function openTeamsComputers() {
+  if (!st?.loaded) return false;
+  st.frame.contentWindow?.postMessage({ type: 'torii:open-computers' }, st.origin);
+  return true;
 }
 
 /** True while a Teams frame is running on this page. */
@@ -133,6 +183,7 @@ export function stopTeamsFrame() {
   st.offs.forEach((off) => off());
   st.frame.remove();
   st = null;
+  members.clear();
   for (const set of waits.values()) for (const done of [...set]) done(null);
   waits.clear();
 }
@@ -141,7 +192,7 @@ export function stopTeamsFrame() {
 export function navigateTeamsFrame(slug) {
   if (!st) return;
   const path = chatPath(slug);
-  if (!st.loaded) { st.frame.src = `${st.origin}${path}?embed=1`; return; }
+  if (!st.loaded) { st.frame.src = frameSrc(st.origin, path, themeMode(st.frame.ownerDocument)); return; }
   st.frame.contentWindow?.postMessage({ type: 'torii:navigate', path }, st.origin);
 }
 

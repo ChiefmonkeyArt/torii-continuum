@@ -4,6 +4,10 @@
 
 VPS: Continuum 0.2.196-alpha on `https://continuum.chiefmonkey.art/continuum/` (main domain redirects; `/api/` on both). Suite checkout v0.9.37-alpha. Teams app 0.6.1-torii.7 (images and files on the node's own server at `https://teams.chiefmonkey.art/files/`, node-only CSP; torii-teams ADR 0007). Deployed 2026-11-05 (owner-approved): `deploy-continuum-vps.yml` then `suite-stages-vps.yml` stage teams_app. Live checks: MANIFEST torii.7, node file `files`, CSP `connect-src 'self' blob: https://continuum.chiefmonkey.art wss://relay.chiefmonkey.art`, `PUT /files/upload` 401 without a session.
 
+## v0.2.211-alpha: the project chat looks like Continuum (2026-11-12)
+
+Teams ADR 0021 (Accepted 2026-11-12); amends `docs/adr-project-team-chat.md`. `src/lib/teams-frame.js`: `frameSrc` adds `?embed=1&mode=<light|dark>` (`themeMode()` from `data-theme`); a MutationObserver on `data-theme` posts `torii:theme {mode}`; `torii:members {slug, joined, waiting}` from the frame origin updates `teamMembers()` and fires `TEAM_MEMBERS_EVENT`; `openTeamsComputers()` posts `torii:open-computers`. `src/views/project-team.js`: the count follows the frame once reported; Your computers and Open in full window inline on desktop, in a `popover="auto"` More menu at 640 px or less (top layer, because the docked frame is fixed above `#app`). `src/styles/theme.css` comment: Teams keeps hex copies in `src/lib/themes/builtin.ts` (CONTINUUM_THEME); change both. Needs Teams torii.22 (Suite v0.9.70-alpha). Tests: teams-frame + project-team (23).
+
 ## v0.2.210-alpha: GLiClass Edge stages (2026-11-11)
 
 Deployed 2026-11-11 (owner approved; run 43036613732). Stages ran from Suite v0.9.68-alpha after three fix releases (v0.9.66 apt update, v0.9.67 no apt, v0.9.68 NumPy 2.3.5 for the x86-64-v1 CPU); run 43043337336 installed and benchmarked it. Numbers in the Suite handoff.

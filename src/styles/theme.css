@@ -7,6 +7,10 @@
  *   for display/body and the platform monospace for code.
  *
  * Both dark (default) and light variants supplied.
+ *
+ * The project chat (Torii Teams, framed on a project's Team tab) carries a
+ * copy of these colours: torii-teams `src/lib/themes/builtin.ts`
+ * CONTINUUM_THEME (ADR 0021). Change both together.
  */
 
 :root,

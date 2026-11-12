@@ -125,11 +125,24 @@ body:has(.project-team-page) .chat-dock { display: none; }
 .main:has(> .project-team-page) { padding-bottom: 16px; }
 .project-team-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 14px 0 10px; }
 .project-team-faces { display: inline-flex; }
+.project-team-count { font-size: 12.5px; }
+/* torii-teams ADR 0021 §3: one line on a phone; the two extras go in More. */
+.project-team-extras { display: contents; }
+.project-team-more { display: none; }
+.project-team-more-menu { position: fixed; inset: auto; margin: 0; display: none; gap: 2px; min-width: 190px; padding: 6px; color: hsl(var(--foreground)); background: hsl(var(--popover)); border: 1px solid hsl(var(--popover-border)); border-radius: var(--radius); box-shadow: var(--shadow-soft); }
+.project-team-more-menu:popover-open { display: grid; }
+.project-team-more-menu > * { justify-content: flex-start; text-align: left; padding: 8px 10px; color: hsl(var(--foreground)); }
+.project-team-more-menu > [hidden] { display: none; }
+@media (max-width: 640px) {
+  .project-team-head { flex-wrap: nowrap; }
+  .project-team-extras { display: none; }
+  .project-team-more:not([hidden]) { display: inline-flex; }
+}
 .project-team-faces > * { box-shadow: 0 0 0 2px hsl(var(--background)); }
 .project-team-faces > * + * { margin-left: -6px; }
 .project-team-dock { height: max(420px, calc(100dvh - 190px)); }
 @media (max-width: 720px) {
-  .project-team-dock { height: max(380px, calc(100dvh - 270px)); }
+  .project-team-dock { height: max(380px, calc(100dvh - 230px)); } /* one-line strip (torii-teams ADR 0021) */
 }
 .project-team-line { margin: 16px 0; font-size: 13px; }
 .project-team-start { max-width: 560px; margin-top: 16px; }

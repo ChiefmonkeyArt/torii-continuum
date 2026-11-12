@@ -60,7 +60,7 @@ test('starts once, hidden and inert, for the owner of a node with Teams', async 
   expect(a.teamMe).toHaveBeenCalledTimes(1);
   expect(dom.window.document.querySelectorAll('iframe').length).toBe(1);
   const f = frameOf();
-  expect(f.getAttribute('src')).toBe(`${ORIGIN}/chat?embed=1`);
+  expect(f.getAttribute('src')).toBe(`${ORIGIN}/chat?embed=1&mode=dark`);
   expect(f.getAttribute('aria-hidden')).toBe('true');
   expect(f.getAttribute('referrerpolicy')).toBe('no-referrer');
   expect(f.inert).toBe(true);
@@ -120,7 +120,7 @@ test('relays a saved member list and navigates once loaded', async () => {
   const f = frameOf();
   // Before load: navigating sets the src instead of messaging.
   navigateTeamsFrame('studio');
-  expect(f.getAttribute('src')).toBe(`${ORIGIN}/chat/p/studio?embed=1`);
+  expect(f.getAttribute('src')).toBe(`${ORIGIN}/chat/p/studio?embed=1&mode=dark`);
   f.dispatchEvent(new dom.window.Event('load'));
   const post = spyPost(f);
   dom.window.dispatchEvent(new dom.window.CustomEvent(ROSTER_CHANGED_EVENT, { detail: { slug: 'studio' } }));
@@ -195,4 +195,53 @@ test('waitForRosterSynced: times out to null', async () => {
   const { startTeamsFrame, waitForRosterSynced } = await boot();
   await startTeamsFrame(api(), { doc: dom.window.document, win: dom.window });
   expect(await waitForRosterSynced('studio', { timeoutMs: 5 })).toBeNull();
+});
+
+// torii-teams ADR 0021: the project chat looks like Continuum.
+test('ADR 0021: light mode goes in the address; the toggle is sent, only on change', async () => {
+  const { startTeamsFrame } = await boot();
+  vi.stubGlobal('MutationObserver', dom.window.MutationObserver);
+  const root = dom.window.document.documentElement;
+  root.setAttribute('data-theme', 'light');
+  await startTeamsFrame(api(), { doc: dom.window.document, win: dom.window });
+  const f = frameOf();
+  expect(f.getAttribute('src')).toBe(`${ORIGIN}/chat?embed=1&mode=light`);
+  const post = spyPost(f);
+  root.setAttribute('data-theme', 'dark');
+  await tick();
+  expect(post).toHaveBeenCalledWith({ type: 'torii:theme', mode: 'dark' }, ORIGIN);
+  root.setAttribute('data-theme', 'dark');
+  root.setAttribute('class', 'x'); // other attributes are not watched
+  await tick();
+  expect(post).toHaveBeenCalledTimes(1);
+});
+
+test('ADR 0021: torii:members from the frame only, counts checked', async () => {
+  const { startTeamsFrame, teamMembers, TEAM_MEMBERS_EVENT } = await boot();
+  await startTeamsFrame(api(), { doc: dom.window.document, win: dom.window });
+  const f = frameOf();
+  spyPost(f);
+  const heard = vi.fn();
+  dom.window.addEventListener(TEAM_MEMBERS_EVENT, (e) => heard(e.detail));
+  ask(f, { type: 'torii:members', slug: 'studio', joined: 2, waiting: 0 });
+  expect(teamMembers('studio')).toEqual({ joined: 2, waiting: 0 });
+  expect(heard).toHaveBeenCalledWith({ slug: 'studio', joined: 2, waiting: 0 });
+  ask(f, { type: 'torii:members', slug: 'studio', joined: 9, waiting: 9 }, 'https://evil.x');
+  ask(f, { type: 'torii:members', slug: 'studio', joined: 9, waiting: 9 }, ORIGIN, {});
+  for (const bad of [{ slug: '../x', joined: 1, waiting: 0 }, { slug: 'studio', joined: -1, waiting: 0 }, { slug: 'studio', joined: 1, waiting: 0.5 }, { slug: 'studio', joined: '1', waiting: 0 }])
+    ask(f, { type: 'torii:members', ...bad });
+  expect(heard).toHaveBeenCalledTimes(1);
+  expect(teamMembers('studio')).toEqual({ joined: 2, waiting: 0 });
+});
+
+test('ADR 0021: Your computers is sent to the loaded frame only', async () => {
+  const { startTeamsFrame, openTeamsComputers } = await boot();
+  expect(openTeamsComputers()).toBe(false);
+  await startTeamsFrame(api(), { doc: dom.window.document, win: dom.window });
+  const f = frameOf();
+  const post = spyPost(f);
+  expect(openTeamsComputers()).toBe(false); // not loaded yet
+  f.dispatchEvent(new dom.window.Event('load'));
+  expect(openTeamsComputers()).toBe(true);
+  expect(post).toHaveBeenCalledWith({ type: 'torii:open-computers' }, ORIGIN);
 });
