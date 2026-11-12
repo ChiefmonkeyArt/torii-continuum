@@ -5,7 +5,7 @@
 
 - [x] Teams frame gets `&mode=` and `torii:theme` (follows the theme toggle); Teams torii.22 uses Continuum's colours when framed (Teams ADR 0021).
 - [x] One header: the strip shows Teams' own counts (`torii:members`) and opens Your computers in the frame (`torii:open-computers`); phone More menu is a popover above the frame.
-- [ ] Merge, tag, deploy with owner approval, with Suite v0.9.70-alpha (pins torii.22).
+- [x] Merged, tagged, deployed 2026-11-12 (owner approved; run 43135791810, then `teams_app` from Suite v0.9.70-alpha, run 43135883878). Live: Continuum 0.2.211-alpha, Teams torii.22.
 - [ ] Later: open at the latest message, not the New messages line; phone reload says "No project with that slug" before the store loads; Cordn extras (search, voice notes, group icon).
 
 ## v0.2.210-alpha: GLiClass Edge stages
