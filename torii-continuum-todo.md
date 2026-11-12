@@ -7,7 +7,7 @@
 - [x] Unread badges on the Team tab and sidebar (`torii:unread`); instant Team tab with an "Opening team chat" ring until `torii:ready`.
 - [x] "Loading project" ring on reload, no false "No project with that slug"; no estimated "not joined yet".
 - [x] Search button (inline and in More); voice notes (`allow="microphone"`, Suite ADR 0006); same avatar colours as Teams.
-- [ ] Merge, tag, deploy (owner approval), then the `continuum_host` and `teams_app` stages from Suite v0.9.73-alpha.
+- [x] Merged, tagged, deployed 2026-11-12 (owner approved; Continuum run 43257357533, then `continuum_host,teams_app` from Suite v0.9.73-alpha, run 43257465254). Live: Continuum 0.2.212-alpha, Teams torii.25, microphone policies checked.
 - [ ] Human check on a phone: hold the mic in the Team tab, allow, send a voice note.
 
 ## v0.2.211-alpha: the project chat looks like Continuum
