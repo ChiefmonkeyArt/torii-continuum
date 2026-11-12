@@ -4,6 +4,12 @@
  * showing only this project (torii-teams ADR 0017). People and roles stay on
  * the Team page ("Add people"). The floating assistant bar is hidden here
  * (styles/workspace.css, `.project-team-page`).
+ *
+ * torii-teams ADR 0021: this strip is the chat's only header. The frame has
+ * none of its own inside Continuum, so Your computers lives here, and the
+ * "not joined yet" count comes from the frame (who is really in the chat)
+ * once it reports, with the signed list's estimate until then. On a phone,
+ * Your computers and Open in full window sit in a More menu.
  */
 import { h, clear } from './util.js';
 import * as store from '../data/store.js';
@@ -15,7 +21,7 @@ import { parseNpub } from '../lib/npub.js';
 import { readSessionMarker } from '../auth.js';
 import { avatarEl, loadProfiles, setPeopleApi } from '../lib/people.js';
 import { openTeamFor, startProjectChat, takeNewProject } from '../lib/team-nav.js';
-import { startTeamsFrame, dockTeamsFrame, teamsOrigin, chatPath } from '../lib/teams-frame.js';
+import { startTeamsFrame, dockTeamsFrame, teamsOrigin, chatPath, openTeamsComputers, teamMembers, TEAM_MEMBERS_EVENT } from '../lib/teams-frame.js';
 import { teamMe, teamHandoff, projectRoster, putProjectRoster, teamProfiles, teamAvatarBlob } from '../data/agent.js';
 
 const MAX_FACES = 5;
@@ -110,23 +116,51 @@ export function renderProjectTeam(mount, slug, deps = {}) {
     loadProfiles(humans.map((m) => m.pubkey)).finally(() => {
       for (const m of humans.slice(0, MAX_FACES)) faces.append(avatarEl(m.pubkey, 26));
     });
-    const count = `${humans.length} ${humans.length === 1 ? 'person' : 'people'}${notJoined ? ` · ${notJoined} not joined yet` : ''}`;
-    const open = h('a', { class: 'team-chat-open', target: '_blank', rel: 'noopener noreferrer', text: 'Open in full window', hidden: true });
+    const countEl = h('span', { class: 'muted project-team-count' });
+    const setCount = (waiting) => {
+      countEl.textContent = `${humans.length} ${humans.length === 1 ? 'person' : 'people'}${waiting ? ` · ${waiting} not joined yet` : ''}`;
+    };
+    setCount(teamMembers(slug)?.waiting ?? notJoined);
+    const onMembers = (e) => {
+      if (!countEl.isConnected) { window.removeEventListener(TEAM_MEMBERS_EVENT, onMembers); return; }
+      if (e.detail?.slug === slug) setCount(e.detail.waiting);
+    };
+    window.addEventListener(TEAM_MEMBERS_EVENT, onMembers);
+    // Each control twice: inline on wide screens, in More on a phone (CSS).
+    const extra = (make) => [make(), make()];
+    // The menu is a popover: the browser's top layer is the only place above
+    // the docked frame, which sits over the whole page (teams-frame.js).
+    const closeMenu = () => { try { menu.hidePopover?.(); } catch { /* not open */ } };
+    const [computers, computersMore] = extra(() => h('button', { class: 'ghost', type: 'button', hidden: true, onClick: () => { closeMenu(); openTeamsComputers(); } }, ['Your computers']));
+    const [open, openMore] = extra(() => h('a', { class: 'team-chat-open', target: '_blank', rel: 'noopener noreferrer', text: 'Open in full window', hidden: true }));
+    openMore.addEventListener('click', closeMenu);
+    const menu = h('div', { class: 'project-team-more-menu', popover: 'auto', role: 'menu' }, [computersMore, openMore]);
+    const more = h('button', { class: 'ghost project-team-more', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false', hidden: true, onClick: () => {
+      const r = more.getBoundingClientRect();
+      menu.style.top = `${Math.round(r.bottom + 4)}px`;
+      menu.style.right = `${Math.max(8, Math.round(window.innerWidth - r.right))}px`;
+      try { menu.togglePopover?.(); } catch { /* not supported */ }
+    } }, ['More']);
+    menu.addEventListener('toggle', (e) => more.setAttribute('aria-expanded', String(e.newState === 'open')));
     const dock = h('div', { class: 'team-chat-dock project-team-dock' });
     body.append(
       h('div', { class: 'project-team-head' }, [
         faces,
-        h('span', { class: 'muted', style: 'font-size: 12.5px;', text: count }),
+        countEl,
         h('span', { style: 'flex: 1;' }),
         h('button', { class: 'ghost', type: 'button', onClick: () => openTeamFor(slug, go) }, ['Add people']),
-        open,
+        h('span', { class: 'project-team-extras' }, [computers, open]),
+        more,
+        menu,
       ]),
       dock,
     );
     Promise.resolve(startTeamsFrame(api)).then((running) => {
       if (!dock.isConnected) return;
       const url = teamsOrigin();
-      if (url) { open.href = `${url}${chatPath(slug)}`; open.hidden = false; }
+      if (url) for (const a of [open, openMore]) { a.href = `${url}${chatPath(slug)}`; a.hidden = false; }
+      if (running) for (const b of [computers, computersMore]) b.hidden = false;
+      more.hidden = !url && !running;
       if (!running || !dockTeamsFrame(dock, { projectSlug: slug })) dock.append(line("Couldn't start the team chat here. Use Open in full window."));
     }).catch(() => {});
   }

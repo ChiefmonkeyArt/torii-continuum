@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.211-alpha: the project chat looks like Continuum (2026-11-12)
+
+The Team tab's chat now uses Continuum's own colours and switches with Continuum's light and dark mode. There is one header instead of two: Continuum's strip shows the team count straight from the chat and opens Your computers. On a phone the extra buttons sit in a More menu. Needs Teams torii.22 (Teams ADR 0021).
+
 ## v0.2.210-alpha: stages for the optional choice model (2026-11-11)
 
 Three new Suite stages, run with the owner's approval: `gliclass` installs GLiClass Edge (a small model that picks one of several options, offline on the CPU), `gliclass_bench` measures it on the server against Jev 1.13's recorded answers, and `gliclass_remove` takes it off and keeps it off. Continuum does not use the model yet. Needs Suite v0.9.65-alpha (Suite ADR 0004).

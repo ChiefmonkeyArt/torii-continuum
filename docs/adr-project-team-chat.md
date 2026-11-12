@@ -111,3 +111,7 @@ chat membership).
 - Found in the local review: the route renders twice while the project
   hydrates, so the new-project mark is taken only when the Team tab is about
   to draw "Start team chat" (covered by the tests above).
+
+## Amendment (v0.2.211-alpha, 2026-11-12)
+
+Teams ADR 0021 (torii-teams `docs/torii/adr-0021-continuum-look.md`, Accepted 2026-11-12): framed Teams uses Continuum's colours and follows its mode (`&mode=`, `torii:theme`). Continuum's strip is the only header: it shows the counts Teams reports (`torii:members`, numbers only) in place of its own estimate, and Your computers opens the panel inside the frame (`torii:open-computers`). At 640 px or less, Your computers and Open in full window move into a More popover.
