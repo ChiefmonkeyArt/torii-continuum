@@ -1,6 +1,12 @@
 # Torii Continuum — Master TODO
 
 
+## v0.2.213-alpha: the Continuum logo, the wave through the torii
+
+- [x] Painted 2C logo on the sign-in card and About hero; drawn torii SVG removed.
+- [x] Flat 2C favicon; same image as the sidebar brand mark.
+- [x] Merge, tag, deploy (owner approved 2026-11-17).
+
 ## v0.2.212-alpha: the team chat feels like part of Continuum
 
 - [x] Open at the latest message, New messages line kept; read only while shown (`torii:visible`, `&hidden=1`).

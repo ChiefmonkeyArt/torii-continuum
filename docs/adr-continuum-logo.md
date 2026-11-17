@@ -1,6 +1,6 @@
 # The Continuum logo: the wave through the torii
 
-Date: 2026-11-17. Status: **Proposed**. Request (owner, 2026-11-16/17: "these
+Date: 2026-11-17. Status: **Accepted** 2026-11-17 after the local review ("Accept, ship and deploy Continuum v0.2.213-alpha"). Request (owner, 2026-11-16/17: "these
 shisa are really the logo for teams... I'd also like to work on another logo
 for just continuum... with a Japanese theme"; chose concept 2, colourway 2C,
 "with the dark top"; "apply that and the favicon where needed").
