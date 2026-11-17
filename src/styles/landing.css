@@ -69,32 +69,19 @@
   }
 }
 
-/* Ornate Myōjin-style torii — inline SVG, no external assets. Anatomy
- * is faithful (kasagi, shimaki, gakuzuka + plaque, nuki, kusabi wedges,
- * daiwa rings, uchikorobi pillars, nemaki base bands). Palette stays on
- * the amber ↔ deep-bronze tokens — ornate, not gaudy. */
-.landing-torii {
-  position: relative;
-  width: 260px;
+/* The Continuum logo (docs/adr-continuum-logo.md): painted WebP, 440x278. */
+.landing-logo {
+  display: block;
+  width: 300px;
   max-width: 100%;
+  height: auto;
   margin: 0 auto;
-  display: flex;
-  justify-content: center;
+  user-select: none;
+  -webkit-user-drag: none;
   filter: drop-shadow(0 20px 40px hsl(38 92% 58% / 0.18));
 }
-.landing-torii-svg {
-  width: 100%;
-  height: auto;
-  max-width: 260px;
-  display: block;
-}
 @media (max-width: 780px) {
-  .landing-torii {
-    width: 200px;
-  }
-  .landing-torii-svg {
-    max-width: 200px;
-  }
+  .landing-logo { width: 230px; }
 }
 
 .landing-copy { max-width: 640px; }
@@ -368,11 +355,15 @@
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-.login-mark {
-  width: 92px;
-  margin: 0 auto 4px auto;
+.login-logo {
+  display: block;
+  width: 220px;
+  height: auto;
+  margin: 0 auto 6px auto;
+  user-select: none;
+  -webkit-user-drag: none;
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.35));
 }
-.login-mark .landing-torii-svg { width: 92px; height: auto; }
 
 /* Premium wordmark: large display "Continuum" over a vermilion accent rule and
  * a tracked-out subtitle. */
@@ -558,7 +549,7 @@
   .login-scene { padding: 24px 14px; }
   .login-card { padding: 30px 22px 22px; border-radius: 20px; }
   .login-brand { font-size: 34px; }
-  .login-mark, .login-mark .landing-torii-svg { width: 78px; }
+  .login-logo { width: 184px; }
 }
 
 /* Respect reduced-motion: no ken-burns drift, no modal entrance transform. */

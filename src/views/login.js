@@ -20,7 +20,7 @@ import { startLogin, cancelLogin } from '../auth.js';
 import { renderLoginStatus } from '../components/login-status.js';
 import { isAgentConfigured, versionInfo } from '../data/agent.js';
 import { describeVersionState } from '../data/release.js';
-import { toriiSvg } from './landing.js';
+import continuumLogo from '../assets/continuum-logo.webp';
 
 export function renderLogin(mount) {
   clear(mount);
@@ -60,7 +60,12 @@ export function renderLogin(mount) {
   }, [agentReachable ? 'Sign in with nostr extension' : 'Login (requires self-hosted agent)']);
 
   const card = h('section', { class: 'login-card glass' }, [
-    h('div', { class: 'login-mark', 'aria-hidden': 'true' }, [toriiSvg()]),
+    // The Continuum logo: the wave through the torii (docs/adr-continuum-logo.md).
+    // Decorative; the wordmark below names the app.
+    h('img', {
+      class: 'login-logo', src: continuumLogo, alt: '', 'aria-hidden': 'true',
+      width: '440', height: '278', decoding: 'async', draggable: 'false',
+    }),
 
     h('div', { class: 'login-wordmark' }, [
       h('h1', { class: 'login-brand', text: 'Continuum' }),
