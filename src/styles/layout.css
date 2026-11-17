@@ -32,14 +32,12 @@
   cursor: pointer;
 }
 .brand-mark {
-  width: 34px; height: 34px; border-radius: 10px;
-  background: hsl(var(--primary) / .12);
-  border: 1px solid hsl(var(--primary) / .35);
-  display: grid; place-items: center;
-  color: hsl(var(--primary));
-  font-size: 18px;
-  line-height: 1;
-  font-family: var(--font-display);
+  /* The Continuum mark (docs/adr-continuum-logo.md): reuses the cached favicon. */
+  width: 34px; height: 34px;
+  flex: none;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 .brand-name {
   font-family: var(--font-display);

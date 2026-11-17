@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.213-alpha: the Continuum logo, the wave through the torii (2026-11-17)
+
+Continuum has its own painted logo: a torii with a dark purple top bar and an endless orange-and-purple wave looping through it. It shows on the sign-in card, the About page and, as a flat version, in the sidebar and the browser tab. The Teams shisa stay as the Teams logo.
+
 ## v0.2.212-alpha: the team chat feels like part of Continuum (2026-11-12)
 
 The Team tab opens at the latest message, with a "New messages" line above anything that arrived while you were elsewhere. Unread counts show on the Team tab and in the sidebar. A Search button opens the chat's search, voice notes work, and faces use the same colours as the chat. Reloading a project on a phone now shows "Loading project" with a small animated ring instead of "No project with that slug". Needs Teams torii.25 and Suite v0.9.73-alpha.

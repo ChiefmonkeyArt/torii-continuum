@@ -87,7 +87,7 @@ export function renderSidebar() {
 
   sidebarEl.innerHTML = `
     <div class="brand" role="button" aria-label="Continuum home">
-      <div class="brand-mark">⛩</div>
+      <img class="brand-mark" src="${import.meta.env.BASE_URL}favicon.svg" alt="" aria-hidden="true" width="34" height="34" decoding="async" draggable="false">
       <div>
         <div class="brand-name">Continuum</div>
         <div class="brand-sub">project engine</div>
