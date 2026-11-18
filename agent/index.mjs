@@ -46,6 +46,7 @@ import { createConsent } from './lib/consent.mjs';
 import { createPortability } from './lib/portability.mjs';
 import { buildWorkingValues } from './lib/workingvalues.mjs';
 import { createSecretStore } from './lib/secretstore.mjs';
+import { createTeamAi, MODELS as AI_MODELS } from './lib/team-ai.mjs';
 import { createProjectStore } from './lib/projectstore.mjs';
 import { extractStoreActions } from './lib/store-actions.mjs';
 import { createNwcClient, createLiveNwcTransport } from './core/nwc.mjs';
@@ -337,6 +338,16 @@ async function resolveConstitutionVersions(ownerNpub) {
 //   A21: the secrets dir is pinned to AGENT_ROOT so launching from a different
 //   working directory can never silently relocate the encrypted secret blobs.
 const secretStore = createSecretStore(cfg, { dir: join(AGENT_ROOT, 'memory', 'secrets'), log: app.log });
+// Project AI member (docs/adr-team-ai-member.md): memory/team-ai/. A test that
+// brings its own roster store gets none unless it passes one.
+const teamAi = deps.teamAi !== undefined ? deps.teamAi
+  : deps.rosterStore ? null
+  : createTeamAi({
+    cfg, secretStore, rosterStore, teamsState, router, chatModel: chatModelSettings.current,
+    dir: join(MEMORY_ROOT, 'team-ai'), log: app.log,
+    profiles: (pks) => teamProfiles.getProfiles(pks),
+  });
+app.addHook('onClose', async () => { await teamAi?.stop(); });
 const routstrProvider = createRoutstrProvider(cfg, { log: app.log });
 const projectStore = deps.projectStore ?? createProjectStore({ secretStore, log: app.log });
 void projectStore.load().catch((e) => app.log.warn(`[projectstore] boot load failed: ${e.message}`));
@@ -1141,7 +1152,30 @@ app.get('/api/projects/:slug/roster', { preHandler: requireRole('read') }, async
   const out = { roster: stored?.roster ?? null, event: stored?.event ?? null, role: req.team.role };
   if (req.team.owner) out.projection = projectRoster(stored?.roster ?? null);
   out.teams = await teamsState.forRoster(req.params.slug, (stored?.roster?.members ?? []).map((m) => m.pubkey));
+  // The project AI, when it is listed here: Teams shows its badge and model.
+  const aiPk = teamAi?.pubkey;
+  if (aiPk && stored?.roster?.members?.some((m) => m.pubkey === aiPk && m.role === 'agent')) {
+    const i = await teamAi.info(req.params.slug);
+    out.ai = { pubkey: aiPk, name: i.name, model: i.model, label: i.label };
+  }
   return out;
+});
+
+// Project AI member (docs/adr-team-ai-member.md). Owner only.
+// GET /api/projects/:slug/ai  — { enabled, ready, pubkey, npub, name, model, label, local_available }
+// PUT /api/projects/:slug/ai  — { model: 'local'|'routstr' }
+app.get('/api/projects/:slug/ai', { preHandler: requireAdmin }, async (req, reply) => {
+  if (!PROJECT_SLUG_RE.test(String(req.params.slug || ''))) return reply.code(400).send({ error: 'bad project slug' });
+  if (!teamAi) return { enabled: false };
+  return teamAi.info(req.params.slug);
+});
+app.put('/api/projects/:slug/ai', { preHandler: requireAdmin, config: rateLimitConfig(rosterMax, '/api/projects/:slug/ai') }, async (req, reply) => {
+  if (!PROJECT_SLUG_RE.test(String(req.params.slug || ''))) return reply.code(400).send({ error: 'bad project slug' });
+  if (!teamAi) return reply.code(409).send({ error: 'the project AI is off on this node', code: 'off' });
+  const model = req.body?.model;
+  if (!AI_MODELS.includes(model)) return reply.code(400).send({ error: 'model must be local or routstr', code: 'bad_model' });
+  await teamAi.settings.set(req.params.slug, { model });
+  return teamAi.info(req.params.slug);
 });
 
 app.put(
@@ -1305,7 +1339,11 @@ app.get('/api/team/profiles', { preHandler: requireTeamCaller, config: rateLimit
   if (!list.length || list.length > 50 || !list.every((p) => HEX64_RE.test(p))) {
     return reply.code(400).send({ error: 'p must be 1-50 comma-separated hex pubkeys' });
   }
-  return { profiles: await teamProfiles.getProfiles(list) };
+  const aiPk = teamAi?.pubkey;
+  const ev = aiPk && list.includes(aiPk) ? teamAi.profileEvent() : null;
+  const got = await teamProfiles.getProfiles(ev ? list.filter((p) => p !== aiPk) : list);
+  if (ev) got[aiPk] = { pubkey: aiPk, name: 'Continuum AI', display_name: 'Continuum AI', nip05: '', avatar: false, event: ev };
+  return { profiles: got };
 });
 
 app.get('/api/team/avatar/:hex', { preHandler: requireTeamCaller, config: rateLimitConfig(teamsSignalMax * 4, '/api/team/avatar') }, async (req, reply) => {
@@ -2248,7 +2286,7 @@ app.post(
     app, cfg, auth, wallet, routstr, router, ollama, projectSources,
     releaseChecker, updater, memoryCache, memory, reflector, chatSkill, audit,
     genesis, memstore, sessionStore, consent, portability, secretStore,
-    routstrProvider, projectStore, onboarding,
+    routstrProvider, projectStore, onboarding, teamAi,
   };
 }
 
@@ -2261,7 +2299,7 @@ const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(imp
 if (isMain) {
   const mainCfg = loadConfig();
   const {
-    app, auth, wallet, memoryCache, memory, memstore, routstr,
+    app, auth, wallet, memoryCache, memory, memstore, routstr, teamAi,
   } = await buildApp(mainCfg);
 
   const port = mainCfg.server.port;
@@ -2286,6 +2324,8 @@ try {
   // Start after binding so readiness/login never waits for remote catalogues.
   if (mainCfg.model_router?.strategy !== 'ollama_only') void routstr.startDiscovery();
   routstr.startPaymentRecovery(); // Refund-only recovery, never inference or funding.
+  // The project AI member joins chats after the agent is up; it never blocks start.
+  void teamAi?.start().catch((e) => app.log.warn({ evt: 'team_ai.start_failed', err: String(e?.message || e).slice(0, 200) }));
   app.log.info(`torii-continuum-agent listening on http://${host}:${port}`);
   app.log.info(
     auth.isClaimed()

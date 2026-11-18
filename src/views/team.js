@@ -19,7 +19,7 @@ import { setChatContext } from '../chat.js';
 import { isDemo, demoSource, demoBanner, goToLogin } from '../demo/demo-mode.js';
 import { renderProjectRosters } from './team-roster.js';
 import { takeTeamProject } from '../lib/team-nav.js';
-import { projectRoster, putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob, createInvite, listInvites, revokeInvite, decideInvite, pendingInvites } from '../data/agent.js';
+import { projectRoster, putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob, createInvite, listInvites, revokeInvite, decideInvite, pendingInvites, projectAi, putProjectAi } from '../data/agent.js';
 
 
 let storeUnsub = null;
@@ -59,7 +59,7 @@ export function renderTeam(mount, opts = {}) {
     drawnKey = key;
     clear(rosterHolder);
     rosterHolder.appendChild(renderProjectRosters({
-      api: { projectRoster, putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob, createInvite, listInvites, revokeInvite, decideInvite, pendingInvites },
+      api: { projectRoster, putProjectRoster, peopleSearch, teamProfiles, teamAvatarBlob, createInvite, listInvites, revokeInvite, decideInvite, pendingInvites, projectAi, putProjectAi },
       initialSlug: chatProject,
       projects: () => S.listProjects(),
       demo,

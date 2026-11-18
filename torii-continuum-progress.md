@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.214-alpha: a project AI member in the team chat (2026-11-18)
+
+Owners can add "Continuum AI" to a project's team chat from the Team page. It answers when an Owner or Maintainer @mentions it, using the local model by default (questions stay on the server) or Routstr if the owner picks it. Its messages carry an "AI · Local · model" label in Teams, and anyone else who mentions it is told it won't answer them. It keeps working when people join while the owner is away.
+
 ## v0.2.213-alpha: the Continuum logo, the wave through the torii (2026-11-17)
 
 Continuum has its own painted logo: a torii with a dark purple top bar and an endless orange-and-purple wave looping through it. It shows on the sign-in card, the About page and, as a flat version, in the sidebar and the browser tab. The Teams shisa stay as the Teams logo.

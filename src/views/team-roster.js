@@ -65,6 +65,8 @@ export function teamsStatus(teams, hex) {
  * @param {() => void} [deps.onDemo]
  */
 const peopleCount = (n) => (n === 1 ? '1 person' : `${n} people`);
+// The project AI is on the roster but isn't one of the people.
+const humans = (members, aiHex) => (members || []).filter((m) => !aiHex || m?.pubkey !== aiHex).length;
 
 export function renderProjectRosters(deps) {
   const { api, projects } = deps;
@@ -117,6 +119,10 @@ export function renderProjectRosters(deps) {
   if (canInvite) card.appendChild(waitingBox);
   card.appendChild(body);
   card.appendChild(status);
+  const aiBox = h('div', { class: 'team-ai', style: 'margin-top: 14px; max-width: 640px;' });
+  const canAi = !deps.demo && typeof api.projectAi === 'function';
+  if (canAi) card.appendChild(aiBox);
+  let ai = null; // { enabled, npub, model, label, local_available } for this project
   const invitesBox = h('div', { class: 'team-invites', style: 'margin-top: 14px; max-width: 640px;' });
   if (canInvite) card.appendChild(invitesBox);
 
@@ -136,10 +142,72 @@ export function renderProjectRosters(deps) {
     }
     stored = r.data || null;
     if (!quiet) rows = rosterRows(stored?.roster || null);
-    await loadProfiles(rows.map((x) => hexOf(x.npub)).filter(Boolean));
-    if (!quiet) setStatus(stored?.roster ? `${peopleCount(stored.roster.members.length)} on this project.` : 'Only you so far. Add someone or share a group link.');
+    // The AI first (in parallel with names) so the people count leaves it out.
+    await Promise.all([loadProfiles(rows.map((x) => hexOf(x.npub)).filter(Boolean)), loadAi()]);
+    if (!quiet) setStatus(stored?.roster ? `${peopleCount(humans(stored.roster.members, ai?.pubkey))} on this project.` : 'Only you so far. Add someone or share a group link.');
     draw();
     await loadInvites();
+  }
+
+  // ── project AI (docs/adr-team-ai-member.md) ───────────────────────────
+  const isAiRow = (row) => Boolean(ai?.npub) && row.npub === ai.npub;
+
+  async function loadAi() {
+    if (!canAi) return;
+    const forSlug = slug;
+    const r = await api.projectAi(forSlug);
+    if (forSlug !== slug) return;
+    ai = r.ok ? r.data : null;
+    draw();
+    drawAi();
+  }
+
+  function drawAi() {
+    clear(aiBox);
+    if (!ai?.enabled || !ai.npub) return;
+    const listed = rows.some(isAiRow);
+    aiBox.appendChild(h('strong', { text: 'Project AI' }));
+    aiBox.appendChild(h('div', { class: 'muted', style: 'font-size: 12.5px; margin: 4px 0 8px;', text: 'Answers when someone @mentions it in this chat. Only Owners and Maintainers can ask.' }));
+    const model = h('select', { 'aria-label': 'Model for the project AI' }, [
+      h('option', { value: 'local', text: ai.local_available ? 'Local, stays on this server' : 'Local (off on this server)' }),
+      h('option', { value: 'routstr', text: 'Routstr, paid' }),
+    ]);
+    model.value = ai.model || 'local';
+    const note = h('div', { class: 'muted team-ai-note', style: 'font-size: 12px; margin-top: 4px;' });
+    const fillNote = () => {
+      note.textContent = model.value === 'routstr'
+        ? 'Questions and recent messages leave this server for Routstr.'
+        : (ai.local_available ? 'Questions stay on this server.' : 'Turn on the local model, or pick Routstr.');
+      note.style.color = model.value === 'routstr' ? 'var(--accent-warn, #b7791f)' : '';
+    };
+    fillNote();
+    model.addEventListener('change', async () => {
+      fillNote();
+      const r = await api.putProjectAi(slug, model.value);
+      if (r.ok) { ai = { ...ai, ...r.data }; setStatus(`Project AI uses ${ai.label}.`); } else setStatus(r.reason || 'Could not change the model.', 'error');
+    });
+    const toggle = h('button', { class: listed ? 'ghost' : 'primary', onClick: () => setAi(!listed) }, [listed ? 'Take out of the chat' : 'Add to the chat']);
+    aiBox.appendChild(h('div', { style: 'display: flex; gap: 8px; align-items: center; flex-wrap: wrap;' }, [
+      h('span', { class: 'pill team-ai-badge', text: 'AI' }),
+      h('span', { style: 'font-size: 13px;', text: ai.name || 'Continuum AI' }),
+      model,
+      toggle,
+    ]));
+    aiBox.appendChild(note);
+  }
+
+  async function setAi(on) {
+    if (busy || !ai?.npub) return;
+    if (on) {
+      if (!rows.some(isAiRow)) rows.push({ npub: ai.npub, role: 'agent', of: ownerNpub() || toNpub(knownOwnerHex()) });
+      removed.delete(hexOf(ai.npub));
+    } else {
+      rows = rows.filter((row) => !isAiRow(row));
+      removed.add(hexOf(ai.npub));
+    }
+    const ok = await save();
+    if (!ok) rows = rosterRows(stored?.roster || null);
+    drawAi();
   }
 
   // ── invite links ──────────────────────────────────────────────────────
@@ -282,7 +350,8 @@ export function renderProjectRosters(deps) {
 
   function draw() {
     clear(body);
-    rows.forEach((row, i) => body.appendChild(drawRow(row, i)));
+    // The project AI has its own box below (docs/adr-team-ai-member.md).
+    rows.forEach((row, i) => { if (!isAiRow(row)) body.appendChild(drawRow(row, i)); });
     if (picking && !deps.demo && api.peopleSearch) {
       const picker = renderPeoplePicker({
         search: api.peopleSearch,
@@ -412,7 +481,7 @@ export function renderProjectRosters(deps) {
       rows = rosterRows(stored.roster);
       draw();
       removed = new Set();
-      setStatus(`Saved. ${peopleCount(stored.roster.members.length)} on this project.`);
+      setStatus(`Saved. ${peopleCount(humans(stored.roster.members, ai?.pubkey))} on this project.`);
       // ADR 0015: with removals and a running frame, wait for its answer.
       const wait = gone.length && teamsFrameRunning() ? confirmRemoval(slug, gone) : null;
       // Tell an embedded Teams frame to refresh now rather than on its next poll.

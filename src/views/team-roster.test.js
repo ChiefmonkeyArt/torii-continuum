@@ -409,3 +409,42 @@ test('removal: no frame running, or nobody removed, means no wait', async () => 
   expect(guards.length).toBe(0);
   expect(document.body.textContent).toContain('Saved. 2 people on this project.');
 });
+
+// ── project AI (docs/adr-team-ai-member.md) ───────────────────────────────
+const AIHEX = hex('e');
+const aiInfo = (over = {}) => ({ ok: true, data: { enabled: true, ready: true, pubkey: AIHEX, npub: toNpub(AIHEX), name: 'Continuum AI', model: 'local', label: 'Local · m', local_available: true, ...over } });
+
+test('project AI: add signs a roster with it as the owner\'s agent; its row stays hidden', async () => {
+  const signEvent = vi.fn(async (e) => ({ ...e, pubkey: OWNER, id: 'f'.repeat(64), sig: 'e'.repeat(128) }));
+  const projectAi = vi.fn(async () => aiInfo());
+  const { api } = await boot({ signer: { signEvent, getPublicKey: async () => OWNER }, inv: { projectAi, putProjectAi: vi.fn() } });
+  expect(projectAi).toHaveBeenCalledWith('studio');
+  expect(document.body.textContent).toContain('Only Owners and Maintainers can ask.');
+  expect(document.body.textContent).toContain('Questions stay on this server.');
+  button('Add to the chat').click();
+  await tick();
+  const ev = api.putProjectRoster.mock.calls.at(-1)[1];
+  expect(ev.tags).toContainEqual(['p', AIHEX, 'agent', OWNER]);
+  expect(document.querySelectorAll('.team-roster-row').length).toBe(2);
+});
+
+test('project AI: listed AI has no member row; Routstr warns and saves', async () => {
+  const withAi = { ...stored, roster: { ...stored.roster, members: [...stored.roster.members, { pubkey: AIHEX, role: 'agent', of: OWNER }] } };
+  const putProjectAi = vi.fn(async (_s, model) => aiInfo({ model, label: 'Routstr · x' }));
+  await boot({ data: withAi, signer: null, inv: { projectAi: vi.fn(async () => aiInfo({ local_available: false })), putProjectAi } });
+  expect(document.querySelectorAll('.team-roster-row').length).toBe(2);
+  expect(document.body.textContent).toContain('3 people on this project'); // the AI isn't a person
+  expect(button('Take out of the chat')).toBeTruthy();
+  expect(document.body.textContent).toContain('Local (off on this server)');
+  const sel = document.querySelector('.team-ai select');
+  sel.value = 'routstr';
+  sel.dispatchEvent(new dom.window.Event('change'));
+  await tick();
+  expect(putProjectAi).toHaveBeenCalledWith('studio', 'routstr');
+  expect(document.body.textContent).toContain('leave this server for Routstr');
+});
+
+test('project AI: no box when the node has it off, or in the demo', async () => {
+  await boot({ signer: null, inv: { projectAi: vi.fn(async () => ({ ok: true, data: { enabled: false } })), putProjectAi: vi.fn() } });
+  expect(document.querySelector('.team-ai').textContent).toBe('');
+});
