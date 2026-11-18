@@ -558,6 +558,18 @@ export async function putProjectRoster(slug, event) {
   return req('PUT', `/api/projects/${encodeURIComponent(slug)}/roster`, { event });
 }
 
+// Project AI member (docs/adr-team-ai-member.md). Owner-only.
+
+/** GET /api/projects/:slug/ai — { enabled, ready, pubkey, npub, name, model, label, local_available }. */
+export async function projectAi(slug) {
+  return req('GET', `/api/projects/${encodeURIComponent(slug)}/ai`);
+}
+
+/** PUT /api/projects/:slug/ai — { model: 'local'|'routstr' }. */
+export async function putProjectAi(slug, model) {
+  return req('PUT', `/api/projects/${encodeURIComponent(slug)}/ai`, { model });
+}
+
 // Invite links (Teams repo docs/torii/adr-0009-invite-links.md). Owner-only.
 // The agent returns the link secret once, on create; it stores only a hash.
 

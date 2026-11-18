@@ -1,6 +1,14 @@
 # Torii Continuum — Master TODO
 
 
+## v0.2.214-alpha: a project AI member in the team chat
+
+- [x] AI member on the roster as the owner's agent; answers @mentions from Owners and Maintainers.
+- [x] Local or Routstr per project, labelled in Teams (torii.28).
+- [x] Opens Teams join seals so later joiners don't stop the AI reading.
+- [x] Merge, tag, Suite pin, deploy (owner approved 2026-11-18).
+- [ ] Later: let Contributors ask, tools/actions, answering without an @mention (each needs its own decision).
+
 ## v0.2.213-alpha: the Continuum logo, the wave through the torii
 
 - [x] Painted 2C logo on the sign-in card and About hero; drawn torii SVG removed.

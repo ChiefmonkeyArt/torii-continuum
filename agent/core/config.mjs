@@ -175,6 +175,11 @@ export function loadConfig(path) {
   // is dropped (no link) rather than refusing to start the agent.
   cfg.teams ??= {};
   cfg.teams.app_url = normalizeTeamsAppUrl(cfg.teams.app_url);
+  // Project AI member (docs/adr-team-ai-member.md): the node's chat coordinator
+  // and the relay it listens on, also written by install-teams-app.sh. Either
+  // one invalid leaves the AI member off.
+  cfg.teams.coordinator = /^[0-9a-f]{64}$/.test(String(cfg.teams.coordinator || '')) ? cfg.teams.coordinator : null;
+  cfg.teams.relay = normalizeTeamsRelay(cfg.teams.relay);
   cfg.cashu ??= { mints: [], low_balance_warn_sats: 500, hard_floor_sats: 100 };
   // Hard cap on a single Lightning-QR top-up mint quote (v0.2.83-alpha). Applied
   // to both the Cashu mint-quote and the NWC-issued invoice paths so neither can
@@ -366,6 +371,17 @@ export function persistAdminNpub(configPath, npub) {
  * @param {unknown} raw
  * @returns {string|null}
  */
+/** A bare ws(s):// relay URL, or null. Plain ws only on loopback. */
+export function normalizeTeamsRelay(raw) {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 300) return null;
+  let u;
+  try { u = new URL(raw); } catch { return null; }
+  if (u.username || u.password || u.search || u.hash) return null;
+  if (u.protocol === 'wss:') return u.href.replace(/\/$/, '');
+  if (u.protocol === 'ws:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]')) return u.href.replace(/\/$/, '');
+  return null;
+}
+
 export function normalizeTeamsAppUrl(raw) {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > 253 + 8) return null;
   let u;

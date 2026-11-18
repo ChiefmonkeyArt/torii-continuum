@@ -88,6 +88,11 @@ server:
 #   # name search. wss:// only, at most 8 each. An empty list turns that off.
 #   profile_relays: ["wss://relay.example"]
 #   search_relays: []
+#   # The project AI member (docs/adr-team-ai-member.md). The node's Teams chat
+#   # server: its pubkey (64 hex) and its relay (wss://, or ws:// on loopback
+#   # only). Suite's install-teams-app.sh writes both. Without them the AI is off.
+#   coordinator: "<64-hex chat server pubkey>"
+#   relay: "ws://127.0.0.1:7777"
 
 # ─────────────────────────────────────────────────────────────
 # Cashu wallet (on-VPS, pay-per-request float)
