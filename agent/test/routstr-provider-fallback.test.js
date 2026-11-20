@@ -55,6 +55,19 @@ const ask = (r, extra = {}) => r.chat({ messages: [{ role: 'user', content: 'gm'
 const prov = (baseUrl, ids, mints = null) => ({ baseUrl, name: baseUrl.slice(8), mints,
   models: ids.map(id => ({ id, max_cost_sats: 10 })) });
 
+test('cheap bearer request has refundable admission headroom, never above the configured ceiling',async()=>{
+  for(const [price,expected] of [[0.00001,2],[10,10]]) {
+    let allocated=0;
+    const p=prov(A,['m']); p.models[0].pricing_sats={request:0,prompt:price,completion:price};
+    const t=await setup({catalog:[p],provider:()=>allocated>=expected?sse('gm'):json({},402)});
+    try {
+      const send=t.pay.wallet.send;
+      t.pay.wallet.send=async(s,o)=>{allocated=s;return send(s,o);};
+      assert.equal((await ask(t.r)).ok,true); assert.equal(allocated,expected); assert.equal(t.calls.length,1);
+    } finally {await t.done();}
+  }
+});
+
 test('fully refunded rejection: exactly one alternative for the unchanged selected model', async () => {
   for (const status of [400,401,402,404,408,422,429]) {
     const t = await setup({ catalog: [prov(A,['m','f']),prov(B,['m','f'])],
@@ -76,6 +89,7 @@ test('blocked, unpaid, partially refunded or exhausted rejections never cascade'
       t.pay.wallet.receive=async()=>{if(pending)throw Error('fixture'); return {ok:true,added_sats:refunded};};
       const reply=await ask(t.r);
       assert.equal(reply.ok,false); assert.equal(reply.upstream_status,status); assert.match(reply.reason,new RegExp(`HTTP ${status}`));
+      if(status===402) assert.equal(reply.code,pending?'payment_recovery_required':'provider_payment_required');
       assert.equal(t.calls.length,count); assert.ok(t.calls.every(c=>c.model==='m'));
     } finally {await t.done();}
   }

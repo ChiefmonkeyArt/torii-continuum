@@ -411,29 +411,30 @@ function num(x) {
  * UNDER-payment is a hard 402). Returns null when the model has no pricing, so
  * the caller can fall back to the configured `max_sats_per_request`.
  */
-export function estimateSatsForModel(model, maxTokensOut, messages) {
-  const satsCost = estimateTokenCost(model, maxTokensOut, messages);
+export function estimateSatsForModel(model, maxTokensOut, messages, bearerAdmission = false) {
+  const satsCost = estimateTokenCost(model, maxTokensOut, messages, bearerAdmission);
   if (satsCost == null) return null;
   return Math.max(1, Math.ceil(satsCost * 1.2));
 }
 
 /** Raw (unmargined) sats cost, or null when the model advertises no pricing. */
-function estimateTokenCost(model, maxTokensOut, messages) {
+function estimateTokenCost(model, maxTokensOut, messages, bearerAdmission = false) {
   const p = model?.pricing_sats;
   if (!p) return null;
-  const promptTokens = estimatePromptTokens(messages);
+  const promptTokens = estimatePromptTokens(messages, bearerAdmission, model?.id);
   const completionTokens = typeof maxTokensOut === 'number' ? maxTokensOut : 2048;
   return p.request + promptTokens * p.prompt + completionTokens * p.completion;
 }
 
 /** Rough token count for a message list (~4 chars/token for English). */
-function estimatePromptTokens(messages) {
+function estimatePromptTokens(messages, bearerAdmission = false, modelId = '') {
   if (!Array.isArray(messages)) return 0;
-  let chars = 0, images = 0;
+  let chars = bearerAdmission ? String(modelId || '').length + 32 : 0, images = 0;
   for (const m of messages) {
     const st = contentStats(m?.content);
     chars += st.chars; images += st.images;
+    if (bearerAdmission) chars += String(m?.role || '').length;
   }
   // Each image is priced as ~1,600 prompt tokens so a picture can't underpay.
-  return Math.max(16, Math.ceil(chars / 4) + images * IMAGE_TOKEN_ESTIMATE);
+  return Math.max(16, Math.ceil(chars / (bearerAdmission ? 3 : 4)) + images * IMAGE_TOKEN_ESTIMATE);
 }

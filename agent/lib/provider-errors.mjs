@@ -32,6 +32,7 @@ export const ERROR_CODES = Object.freeze({
   UPSTREAM_EMPTY: 'upstream_empty',
   NETWORK: 'network',
   INSUFFICIENT_FUNDS: 'insufficient_funds',
+  PROVIDER_PAYMENT_REQUIRED: 'provider_payment_required',
   TOKEN_ALREADY_SPENT: 'token_already_spent',
   UPSTREAM_4XX: 'upstream_4xx',
   BAD_REQUEST: 'bad_request',
@@ -58,6 +59,7 @@ const RETRYABLE = new Set([
   ERROR_CODES.UPSTREAM_EMPTY,
   ERROR_CODES.NETWORK,
   ERROR_CODES.INSUFFICIENT_FUNDS,
+  ERROR_CODES.PROVIDER_PAYMENT_REQUIRED,
   ERROR_CODES.TOKEN_ALREADY_SPENT,
   ERROR_CODES.UPSTREAM_BAD_JSON,
 ]);
@@ -142,8 +144,8 @@ export function classifyHttpFailure({ status, body = '', provider = 'upstream' }
     const msg = jsonErrorMessage(body);
     detail = `${provider} upstream error http ${status}${msg ? `: ${msg}` : ''}`;
   } else if (status === 402) {
-    code = ERROR_CODES.INSUFFICIENT_FUNDS;
-    detail = `${provider} requires payment (http 402)`;
+    code = ERROR_CODES.PROVIDER_PAYMENT_REQUIRED;
+    detail = `${provider} rejected the payment for this request (HTTP 402). This does not mean your wallet is empty.`;
   } else {
     code = ERROR_CODES.UPSTREAM_4XX;
     const msg = jsonErrorMessage(body);
@@ -195,7 +197,8 @@ export function inferCodeFromReason(reason) {
   if (/html/.test(l)) return ERROR_CODES.UPSTREAM_HTML;
   if (/^network:|network error|unreachable|econnrefused|enotfound/.test(l)) return ERROR_CODES.NETWORK;
   if (/token[_ ]already[_ ]spent/.test(l)) return ERROR_CODES.TOKEN_ALREADY_SPENT;
-  if (/insufficient|payment required|\b402\b|cashu|hard_floor/.test(l)) return ERROR_CODES.INSUFFICIENT_FUNDS;
+  if (/payment required|\b402\b/.test(l)) return ERROR_CODES.PROVIDER_PAYMENT_REQUIRED;
+  if (/insufficient balance across (all )?mints/.test(l)) return ERROR_CODES.INSUFFICIENT_FUNDS;
   if (/no content in stream|empty stream/.test(l)) return ERROR_CODES.UPSTREAM_EMPTY;
   if (/http 5\d\d/.test(l)) return ERROR_CODES.UPSTREAM_5XX;
   return null;

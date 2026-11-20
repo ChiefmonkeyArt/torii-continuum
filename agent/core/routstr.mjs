@@ -514,7 +514,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       // router can downgrade to the free local model and the SPA can offer top-up.
       return {
         ok: false,
-        code: send.code || ERROR_CODES.INSUFFICIENT_FUNDS,
+        code: send.code || (/insufficient balance across all mints/.test(send.reason || '') ? ERROR_CODES.INSUFFICIENT_FUNDS : 'wallet_funding_unavailable'),
         reason: `wallet: ${send.reason}`,
         retryable: true,
       };
@@ -751,7 +751,10 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
           result.settled = true;
         }
       }
-      const explanation = failureKind === 'upstream_4xx' && upstreamStatus
+      if (upstreamStatus === 402 && !settlement.pending) result.code = ERROR_CODES.PROVIDER_PAYMENT_REQUIRED;
+      const explanation = upstreamStatus === 402
+        ? 'The provider rejected the payment allocated to this request (HTTP 402). This does not mean your wallet is empty.'
+        : failureKind === 'upstream_4xx' && upstreamStatus
         ? `The provider rejected this chat request (HTTP ${upstreamStatus}).`
         : failureExplanation(failureKind, { firstByteMs, idleMs: idleLimitMs });
       result.reason = `${explanation} ${result.settled ? '' : 'No second payment was sent. '}${settlement.pending
@@ -804,9 +807,12 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     // clamp every estimate to this ceiling and reject non-finite/negative
     // values so a bad catalog cannot clear the wallet.
     const ceiling = estimateSats(cfg, 'chat');
-    const est = estimateSatsForModel(model, maxTokens, messages);
+    const est = estimateSatsForModel(model, maxTokens, messages, !!bearerPayments);
     if (typeof est === 'number' && Number.isFinite(est) && est >= 0) {
-      return Math.min(est, ceiling);
+      // Bearer deposits must cover the node's admission estimate, not just
+      // final usage. Keep one refundable sat of headroom inside the existing
+      // ceiling (including one-sat probes); retain the original retry limits.
+      return Math.min(est + (bearerPayments ? 1 : 0), ceiling);
     }
     return ceiling;
   }

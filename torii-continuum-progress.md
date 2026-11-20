@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.218-alpha: distinguish wallet balance from provider payment
+
+Normal chat mistook the provider's 402 in a refund-status message for an empty wallet. Separated wallet, mint and provider errors and increased admission headroom within the existing limit. Tests exercise the frontend decision, provider return path, true local shortfall and capped funding. No second paid diagnostic.
+
 ## v0.2.217-alpha: bounded provider diagnostic
 
 The single-deposit DeepSeek diagnostic now records HTTP status and a recognized provider error code, not response text. The existing maximum total wallet debit is two sats including fees. Normal chat routing and wallet settings are unchanged.

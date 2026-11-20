@@ -1,5 +1,7 @@
 # Torii Continuum — Strategy & Next Steps
 
+Funding messages must identify which balance failed: the owner's wallet and a provider's per-request allowance are not interchangeable. Preserve operator caps and never suggest a top-up to fix provider admission or payment recovery.
+
 Keep historical funding recovery out of the primary chat and wallet controls without dropping claims. Prefer another host for the same selected model over asking the owner to switch models; retry rejected payments only under the custody limits in the provider-fallback ADR.
 
 Local inference is an explicit choice, not a paid-chat replacement. The separately sandboxed QVAC owner chat is text-only and has no access to tools or wallet workflows; see `docs/adr-qvac-local-chat.md`.
