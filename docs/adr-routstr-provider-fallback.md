@@ -1,5 +1,11 @@
 # Routstr falls back automatically
 
+### 2026-11-20: provider funding is not the owner's wallet balance
+
+The [owner-turn diagnostic](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/44742874555) recorded a provider 402, not a local insufficient-funds result. Treat these as distinct. Only the wallet deciding its total cannot cover the amount should offer Top Up. An incompatible mint, protected floor, unresolved refund, or rejected provider deposit is not evidence that the owner's wallet needs money. Structured errors take precedence over fallback text. Do not discard settlement details.
+
+For a priced ephemeral-bearer request, budget using three characters per prompt token plus request overhead and the requested completion limit, with the existing price margin and one additional refundable sat of headroom. The existing per-request cap still clamps the allocation; fallback limits, the 1-sat diagnostic allocation, 2-sat gross diagnostic guard, and payment recovery rules stay unchanged. This is an estimate, not a guarantee of acceptance by a third party. No paid acceptance test authorized for this change.
+
 ### 2026-11-20 amendment: a rejected request is not necessarily a broken model
 
 The [production diagnostic](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/44737977194) recorded `upstream_4xx` on the owner's selected `deepseek-v4-flash` with no pending refund. The historical record did not distinguish the exact HTTP status, so it cannot establish whether pricing, credentials, model availability or request handling was at fault. Both public [NonKYC](https://api.nonkycai.com/v1/models) and [OTRTA](https://routstr.otrta.me/v1/models) catalogs advertised the exact model at investigation time; listings are not evidence of a paid reply.

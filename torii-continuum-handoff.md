@@ -1,5 +1,9 @@
 # Continuum — Session Handover
 
+## Provider 402 follow-up (2026-11-20)
+
+Rollback `v0.2.217-alpha`. The previous one-shot DeepSeek probe succeeded on Non-KYC AI; the subsequent normal owner turn got provider HTTP 402. No evidence that the wallet total was insufficient. Preserve all claims, the owner model and spending limits. Use the release PR receipt for live deployment; an actual new paid reply is not part of automated acceptance.
+
 ## Single approved diagnostic (2026-11-20)
 
 Rollback `v0.2.216-alpha`. Run only the `deepseek_recovery` target once under its durable run guard. The PR receipt records the result; no second payment or test run is authorized.

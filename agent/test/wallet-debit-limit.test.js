@@ -23,6 +23,8 @@ for (const fee of [0, 1, 2, NaN, 'unknown']) test(`total debit cap includes mint
       }),
     });
     await wallet.receive(getEncodedToken({ mint, proofs: [proof] }));
+    assert.equal((await wallet.send(1,{mints:['https://other.example']})).code,'wallet_funding_unavailable');
+    assert.equal((await wallet.send(9,{mints:['https://other.example']})).code,'insufficient_funds');
     const result = await wallet.send(1, { maxDebitSats: 2 });
     assert.equal(result.ok, fee < 2);
     assert.equal(sends, fee < 2 ? 1 : 0);

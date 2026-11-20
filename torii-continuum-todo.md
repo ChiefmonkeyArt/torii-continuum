@@ -1,5 +1,10 @@
 # Torii Continuum — Master TODO
 
+## v0.2.218-alpha
+
+- [x] Separate owner-wallet shortfalls from provider 402s and mint restrictions; test capped admission headroom.
+- [ ] Monitor the next independently initiated normal chat. The previous one-shot diagnostic authorization is exhausted.
+
 ## v0.2.217-alpha
 
 Capture the owner-approved one-shot result on the release PR. If the provider returns no recognized code, report that rather than printing the body or spending again.

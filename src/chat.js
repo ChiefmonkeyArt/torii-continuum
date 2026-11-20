@@ -131,11 +131,11 @@ const ROUTSTR_FOCUS_TOPUP_KEY = 'continuum.routstr.focusTopUp';
  */
 export function isInsufficientFundsReply(result) {
   if (!result || typeof result !== 'object') return false;
-  if (result.code === 'insufficient_funds') return true;
-  if (result.data && result.data.code === 'insufficient_funds') return true;
+  const code = result.code || result.data?.code;
+  if (code) return code === 'insufficient_funds';
   const reason = typeof result.reason === 'string' ? result.reason.toLowerCase() : '';
   if (!reason) return false;
-  return /insufficient balance|insufficient funds|insufficient_funds|hard_floor|need \+\d+ floor|\b402\b/.test(reason);
+  return /insufficient balance across all mints|insufficient balance across mints/.test(reason);
 }
 
 export function mountChat(root) {

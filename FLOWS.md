@@ -1,5 +1,7 @@
 # v0.2.189 reliability acceptance
 
+Payment acceptance: a provider HTTP 402 or restricted-mint/fee/floor failure must not show an empty-wallet Top Up action. Local total shortfall can offer Top Up. Retain refund state, selected model and request caps.
+
 QVAC regression: signed-in Routstr → Local AI · QVAC → short question → streamed plain text; unavailable never sends to Routstr. Close or change session to clear the dialog. General chat, wallet top-up and project AI routes retain their original model settings.
 
 Baseline: public v0.2.188 sign-in inspected in a fresh browser; authenticated

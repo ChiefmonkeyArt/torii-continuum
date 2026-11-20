@@ -37,16 +37,19 @@ describe('isInsufficientFundsReply — reason text fallback', () => {
     expect(isInsufficientFundsReply({ ok: false, reason })).toBe(true);
   });
 
-  it('matches the "need +N floor" fragment', () => {
-    expect(isInsufficientFundsReply({ ok: false, reason: 'wallet: need +100 floor' })).toBe(true);
+  it('does not equate a protected reserve with an empty wallet', () => {
+    expect(isInsufficientFundsReply({ ok: false, reason: 'wallet: need +100 floor' })).toBe(false);
   });
 
   it('matches a hard_floor marker', () => {
-    expect(isInsufficientFundsReply({ ok: false, reason: 'blocked by hard_floor guard' })).toBe(true);
+    expect(isInsufficientFundsReply({ ok: false, reason: 'blocked by hard_floor guard' })).toBe(false);
   });
 
-  it('matches a bare 402 payment-required marker', () => {
-    expect(isInsufficientFundsReply({ ok: false, reason: 'routstr: 402 payment required' })).toBe(true);
+  it('never turns a provider 402 or pending refund into a wallet top-up', () => {
+    for (const code of [undefined,'provider_payment_required','payment_recovery_required']) {
+      expect(isInsufficientFundsReply({ ok:false, code, reason:'The provider rejected this chat request (HTTP 402).' })).toBe(false);
+    }
+    expect(isInsufficientFundsReply({code:'wallet_funding_unavailable',reason:'insufficient balance across all mints'})).toBe(false);
   });
 
   it('is case-insensitive', () => {

@@ -65,9 +65,9 @@ test('classifyHttpFailure NEVER forwards the raw upstream body', () => {
   assert.ok(!r.reason.includes('<'), 'must not carry markup');
 });
 
-test('classifyHttpFailure: 402 maps to insufficient_funds (retryable to the free model)', () => {
+test('classifyHttpFailure: provider 402 is not a wallet balance diagnosis', () => {
   const r = classifyHttpFailure({ status: 402, body: 'payment required', provider: 'routstr' });
-  assert.equal(r.code, ERROR_CODES.INSUFFICIENT_FUNDS);
+  assert.equal(r.code, ERROR_CODES.PROVIDER_PAYMENT_REQUIRED);
   assert.equal(r.retryable, true);
 });
 

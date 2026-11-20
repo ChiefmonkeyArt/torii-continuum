@@ -198,8 +198,9 @@ export function createRoutstrPayment(cfg, wallet, deps = {}) {
           reason: 'An earlier payment is awaiting recovery. No new payment was sent.' };
       }
       sent = await wallet.send(sats, Array.isArray(mints) && mints.length ? { mints } : undefined);
-      if (!sent.ok) return { ok: false, code: sent.code || 'insufficient_funds', safe_to_retry: true,
-        reason: 'Wallet cannot fund this request.' };
+      if (!sent.ok) return { ok: false, code: sent.code || 'wallet_funding_unavailable', safe_to_retry: true,
+        reason: sent.code === 'insufficient_funds' ? 'Wallet balance is below the requested amount.' :
+          'Wallet could not fund this payment on a mint the provider accepts. This does not mean your wallet is empty.' };
       name = PREFIX + randomBytes(10).toString('hex');
       const record = validate({ base, sats, token: sent.token, key: keyFor(sent.token) });
       active.add(name);

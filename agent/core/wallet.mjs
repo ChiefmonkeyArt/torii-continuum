@@ -397,8 +397,10 @@ export async function createWallet(cfg, log, deps = {}) {
       };
     }
 
+    // A per-mint shortage or protected floor is not an empty wallet.
+    const total = (await balance()).total;
     return {
-      ok: false,
+      ok: false, code: total < sats ? 'insufficient_funds' : 'wallet_funding_unavailable',
       reason: allowed
         ? `insufficient balance on the mints this provider accepts for ${sats} sats (need +${floor} floor)`
         : `insufficient balance across all mints for ${sats} sats (need +${floor} floor)`,
