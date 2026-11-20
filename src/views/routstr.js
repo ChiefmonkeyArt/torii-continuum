@@ -12,6 +12,7 @@ import {
 } from '../data/agent.js';
 import { renderQR } from './qr.js';
 import { renderLiveModelPicker } from './routstr-model-picker.js';
+import { openLocalChat } from './qvac-local.js';
 import { satsBurst } from '../effects/sats-burst.js';
 import { isSessionLive, startLogin } from '../auth.js';
 import { isDemo, demoSource, demoBanner, demoIntercept } from '../demo/demo-mode.js';
@@ -207,6 +208,7 @@ export function renderRoutstr(mount, opts = {}) {
     ]),
   ]);
   mount.appendChild(header);
+  if (live) header.appendChild(h('button', { type: 'button', onClick: () => openLocalChat() }, ['Local AI · QVAC']));
 
   // Pending Top-Ups recovery card (Item 3): a placeholder at the very top of the
   // Wallet section, populated asynchronously and only when the caller has

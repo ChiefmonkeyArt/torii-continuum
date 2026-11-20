@@ -661,6 +661,10 @@ export async function discardDraft(file) {
 
 // ─── Chat ───────────────────────────────────────────────────
 
+export function localChat(question, onEvent) {
+  return req('POST', '/api/local-chat', { question, stream: true }, { timeoutMs: CHAT_CLIENT_TIMEOUT_MS, onEvent });
+}
+
 export async function chat({ message, context, attachments, history, onEvent }) {
   // Longer than any other call: a chat turn legitimately waits on a model.
   // See CHAT_CLIENT_TIMEOUT_MS for the agent/nginx ordering this has to respect.

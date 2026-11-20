@@ -1,5 +1,7 @@
 # v0.2.189 reliability acceptance
 
+QVAC regression: signed-in Routstr → Local AI · QVAC → short question → streamed plain text; unavailable never sends to Routstr. Close or change session to clear the dialog. General chat, wallet top-up and project AI routes retain their original model settings.
+
 Baseline: public v0.2.188 sign-in inspected in a fresh browser; authenticated
 Routstr supplied by owner screenshot. Further private UI checks use synthetic
 signer/API fixtures, never a real wallet or paid chat.

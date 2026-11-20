@@ -1,5 +1,7 @@
 # Torii Continuum — Strategy & Next Steps
 
+Local inference is an explicit choice, not a paid-chat replacement. The separately sandboxed QVAC owner chat is text-only and has no access to tools or wallet workflows; see `docs/adr-qvac-local-chat.md`.
+
 ## Next priority after the Teams MVP: FIPS on by default (owner, 2026-11-04)
 
 High priority, after the Teams MVP: FIPS becomes the default network path for every app: Plebeian (market), Torii Quest, Torii Continuum and the marketplace. Each app gets its own ADR before its behaviour changes. Changes to PlebeianApp/market need the owner's explicit approval (read-only analysis until then). The FIPS trial teardown only frees port 7334 for the real Teams FIPS install; it does not remove or pause FIPS.

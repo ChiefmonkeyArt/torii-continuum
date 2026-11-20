@@ -34,6 +34,10 @@ on:
         required: false
         default: ''
         type: string
+      install_qvac:
+        description: 'Explicit opt-in: install local QVAC Llama 1B; leaves normal chat and payments unchanged'
+        type: boolean
+        default: false
       benchmark:
         description: 'Explicitly approved paid streaming comparison: up to 6 calls, 12 sats allocated plus mint fees; briefly stops chat'
         required: false
@@ -232,6 +236,27 @@ jobs:
           echo "Payment activation health check failed; previous mode restored" >&2
           exit 1
           REMOTE
+
+      - name: Check out approved QVAC installer from the deployed tag
+        if: inputs.install_qvac == true
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          path: qvac-tag
+          sparse-checkout: ops/qvac
+          persist-credentials: false
+      - name: Install optional isolated local AI
+        if: inputs.install_qvac == true
+        env:
+          SSH_HOST: ${{ secrets.VPS_DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          remote=(ssh -i ~/.ssh/id_ed25519_torii -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes "$SSH_HOST")
+          stage=$("${remote[@]}" sudo -n mktemp -d /run/continuum-qvac-install.XXXXXXXX)
+          [[ "$stage" =~ ^/run/continuum-qvac-install\.[a-zA-Z0-9]{8}$ ]]
+          trap '"${remote[@]}" sudo -n rm -rf -- "$stage"' EXIT
+          tar -C qvac-tag/ops/qvac -cf - install.sh deps.lock worker.py continuum-qvac.socket continuum-qvac@.service | "${remote[@]}" sudo -n tar -C "$stage" -xf -
+          "${remote[@]}" sudo -n bash "$stage/install.sh"
 
       - name: Isolate explicitly approved provider
         if: inputs.quarantine_provider != ''
