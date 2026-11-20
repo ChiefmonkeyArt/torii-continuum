@@ -1,5 +1,11 @@
 # Routstr falls back automatically
 
+### 2026-11-20 amendment: a rejected request is not necessarily a broken model
+
+The [production diagnostic](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/44737977194) recorded `upstream_4xx` on the owner's selected `deepseek-v4-flash` with no pending refund. The historical record did not distinguish the exact HTTP status, so it cannot establish whether pricing, credentials, model availability or request handling was at fault. Both public [NonKYC](https://api.nonkycai.com/v1/models) and [OTRTA](https://routstr.otrta.me/v1/models) catalogs advertised the exact model at investigation time; listings are not evidence of a paid reply.
+
+In bearer mode only, a 400/401/402/404/408/422/429 before any reply may use **one other origin for the identical model** only if the entire deposit was returned and no claim or dust remains. Existing mint, quarantine, time, attempt and spending gates still apply. Partial settlement stops that turn and rests the rejected pair for a later, independently initiated message. Open claims, forbidden/policy responses (403/451) and partial replies never trigger this new retry. Store only numeric HTTP status, not provider bodies, credentials or chat content. No operator-funded production acceptance probe.
+
 Date: 2026-11-11. Status: **Accepted** 2026-11-11 (owner request: "take out the
 local ai llm for now and make it optional... we are better off (for now) making
 a more routstr solution so that it doesn't just try and use the main provider

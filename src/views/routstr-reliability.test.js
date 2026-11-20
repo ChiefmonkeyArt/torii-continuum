@@ -17,7 +17,7 @@ vi.mock('../data/agent.js', async importOriginal => ({
 vi.mock('../chat.js', () => ({ setChatContext: vi.fn() }));
 vi.mock('../router.js', () => ({ currentRoute: () => ({ pattern: '/routstr' }) }));
 vi.mock('../auth.js', () => ({ isSessionLive: () => true, startLogin: vi.fn(), getSession: () => null }));
-import { walletBalance } from '../data/agent.js';
+import { walletBalance, walletPendingQuotes } from '../data/agent.js';
 import * as store from '../data/store.js';
 import { renderRoutstr, paymentRecoveryLabel } from './routstr.js';
 const tick = () => new Promise(r => setTimeout(r, 0));
@@ -66,6 +66,16 @@ describe('live wallet clarity', () => {
     renderRoutstr(mount); renderRoutstr(mount); await tick();
     resolve({ ok: true, data: { total_sats: 999 } }); await tick();
     expect(mount.querySelector('.bal-num').textContent).toBe('12');
+  });
+  test('old quotes are fetched only when Advanced opens and remain recoverable there', async () => {
+    walletPendingQuotes.mockClear();
+    walletPendingQuotes.mockResolvedValueOnce({ok:true,data:{quotes:[{quote:'old',mint:'https://mint.example',amount_sats:369,age_seconds:122*86400}]}});
+    const mount=document.createElement('main'); document.body.append(mount);
+    renderRoutstr(mount); await tick();
+    expect(mount.textContent).not.toContain('Pending top-ups'); expect(walletPendingQuotes).not.toHaveBeenCalled();
+    const advanced=mount.querySelector('details.routstr-advanced');
+    advanced.open=true; advanced.dispatchEvent(new Event('toggle')); await tick();
+    expect(advanced.textContent).toContain('369 sats'); expect(walletPendingQuotes).toHaveBeenCalledTimes(1);
   });
   test('missing recovery information is never presented as ready', () => {
     expect(paymentRecoveryLabel(null)).toContain('unavailable');

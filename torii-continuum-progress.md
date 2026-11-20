@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.216-alpha: old top-ups and normal chat
+
+Moved invoice recovery into collapsed Advanced, without changing any wallet record. The normal Routstr path now distinguishes provider rejections and can try one other host for the identical model after a verified complete refund. The first failed turn's exact HTTP status was not recorded by the previous version. New offline regression cases cover both answering and stopping safely.
+
 ## v0.2.215-alpha: optional QVAC (2026-11-20)
 
 The same Llama model and prompt produced identical text on both runtimes. Median first text/full reply: QVAC 5.70/13.41 s, Ollama 0.52/16.49 s. Optional local chat is a separate authenticated, unprivileged, offline text path. DeepSeek, the wallet, Teams, GLiClass and normal chat routing are unchanged. Tests, footprint and acceptance criteria: `docs/adr-qvac-local-chat.md`.

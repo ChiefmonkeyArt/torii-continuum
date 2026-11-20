@@ -678,6 +678,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     }, Math.max(5, Math.min(watchdogTickMs, Math.floor(firstByteMs / 4))));
     let result;
     let failureKind = null;
+    let upstreamStatus = null;
     let first = null;
     try {
       if (now() - started >= firstByteMs) {
@@ -690,6 +691,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
         body: JSON.stringify({ model, messages, max_tokens: maxTokens, stream: true, stream_options: { include_usage: true } }),
       }));
       if (!res.ok) {
+        upstreamStatus = res.status;
         try { await res.body?.cancel(); } catch {}
         failureKind = res.status >= 500 ? 'upstream_5xx' : 'upstream_4xx';
         throw new Error('provider request failed');
@@ -736,7 +738,20 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       result.settled = true;
     }
     if (!result.ok) {
-      const explanation = failureExplanation(failureKind, { firstByteMs, idleMs: idleLimitMs });
+      if (upstreamStatus !== null) result.upstream_status = upstreamStatus;
+      // A rejected bearer request can be provider-specific. Never send another
+      // deposit for this path unless the entire allocation is back in custody.
+      if (first === null && !settlement.pending && [400,401,402,404,408,422,429].includes(upstreamStatus)) {
+        result.rest_pair = true;
+        if (!settlement.dust_msats && settlement.refunded >= sats) {
+          result.retryable = true;
+          result.same_model_only = true;
+          result.settled = true;
+        }
+      }
+      const explanation = failureKind === 'upstream_4xx' && upstreamStatus
+        ? `The provider rejected this chat request (HTTP ${upstreamStatus}).`
+        : failureExplanation(failureKind, { firstByteMs, idleMs: idleLimitMs });
       result.reason = `${explanation} ${result.settled ? '' : 'No second payment was sent. '}${settlement.pending
         ? 'Payment recovery is pending; your claim is retained. Check Routstr.'
         : settlement.refunded > 0
@@ -871,6 +886,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
           attempted_models: [wanted],
           reason: attempt.ok ? null : attempt.reason, code: attempt.ok ? null : attempt.code || null,
           failure_kind: attempt.failure_kind || null,
+          upstream_status: attempt.upstream_status ?? null,
           refund_pending: attempt.refund_pending === true,
         });
         return attempt;
@@ -890,7 +906,10 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     const satsTurnAllowance = estimateSats(cfg, 'chat') * candidates.length;
     let attempt = null;
     let reservedSats = 0;
+    let alternateFor = null, declinedHost = null;
     for (const cand of candidates) {
+      if (alternateFor !== null &&
+          (cand.model.id !== alternateFor || new URL(cand.baseUrl).origin === declinedHost)) continue;
       attemptedModels.push(cand.model.id);
       if (budget && !worthAttempting(budget.remainingMs())) {
         attempt = providerFailure(ERROR_CODES.BUDGET_EXHAUSTED, `routstr skipped: ${describeBudget(budget)}`);
@@ -927,6 +946,14 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
         }
         break;
       }
+      // At most one different host for the same model following a refunded 4xx.
+      // Do not broaden this into a model-ladder retry, even if that host fails.
+      if (attempt.rest_pair) health.fail(cand.baseUrl, cand.model.id);
+      if (alternateFor !== null) break;
+      if (attempt.same_model_only) {
+        alternateFor = cand.model.id;
+        declinedHost = new URL(cand.baseUrl).origin;
+      }
       if (isProviderFault(attempt.failure_kind || attempt.code)) {
         health.fail(cand.baseUrl, cand.model.id);
         const other = candidates.some(c => c !== cand && !health.resting(c.baseUrl, c.model.id));
@@ -953,6 +980,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       reason: attempt && !attempt.ok ? attempt.reason : null,
       code: attempt && !attempt.ok ? attempt.code || null : null,
       failure_kind: attempt?.failure_kind || null,
+      upstream_status: attempt?.upstream_status ?? null,
       refund_pending: attempt?.refund_pending === true,
     });
 
