@@ -1,5 +1,7 @@
 # v0.2.189 reliability acceptance
 
+Normal bearer chat: eligible selected-model candidates → recent settled success first, resting hosts last → bounded request → settlement. Explicit 402 minimums only inform later turns within the cap. A signer mismatch blocks saving history, not provider routing; never bypass the identity check.
+
 Payment acceptance: a provider HTTP 402 or restricted-mint/fee/floor failure must not show an empty-wallet Top Up action. Local total shortfall can offer Top Up. Retain refund state, selected model and request caps.
 
 QVAC regression: signed-in Routstr → Local AI · QVAC → short question → streamed plain text; unavailable never sends to Routstr. Close or change session to clear the dialog. General chat, wallet top-up and project AI routes retain their original model settings.

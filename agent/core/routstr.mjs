@@ -39,6 +39,7 @@ import { isQuarantined } from './provider-quarantine.mjs';
 import { validModelId } from './chat-model-settings.mjs';
 import { messagesHaveImages } from '../lib/chat-attachments.mjs';
 import { createProviderHealth, isProviderFault } from './provider-health.mjs';
+import { routeMemory, readMinimum } from './routstr-route-memory.mjs';
 import { mintsOverlap } from '../lib/mint-url.mjs';
 import {
   ERROR_CODES, isRetryableCode, classifyHttpFailure, classifyThrownError, providerFailure, looksLikeHtml,
@@ -336,6 +337,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
   const refundRetryMs = deps.refundRetryMs ?? REFUND_RETRY_MS;
   // Slow providers rest for a while (ADR §2).
   const health = deps.health || createProviderHealth({ now });
+  const routes = routeMemory(resolve(agentRoot(), dirname(cfg.logging?.cost_log || 'memory/costs.jsonl'), 'chat-route.json'),now);
 
   // Routstr Core v0.1.0 (RIP-03): providers are discovered, not hard-coded.
   // Deterministic bootstrap endpoints lead (explicit `providers`, then
@@ -679,6 +681,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     let result;
     let failureKind = null;
     let upstreamStatus = null;
+    let minimum = 0;
     let first = null;
     try {
       if (now() - started >= firstByteMs) {
@@ -694,6 +697,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
         upstreamStatus = res.status;
         // Only the operator-approved bounded probe installs this observer.
         try { await deps.observeRejectedCompletion?.(res); } catch {}
+        if (res.status===402 && !deps.observeRejectedCompletion) minimum=await readMinimum(res);
         try { await res.body?.cancel(); } catch {}
         failureKind = res.status >= 500 ? 'upstream_5xx' : 'upstream_4xx';
         throw new Error('provider request failed');
@@ -740,6 +744,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       result.settled = true;
     }
     if (!result.ok) {
+      if (minimum>sats && !settlement.pending) routes.learn(baseUrl,model,minimum);
       if (upstreamStatus !== null) result.upstream_status = upstreamStatus;
       // A rejected bearer request can be provider-specific. Never send another
       // deposit for this path unless the entire allocation is back in custody.
@@ -864,7 +869,8 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     }
 
     // Resting providers go last, so the next turn avoids a slow one (ADR §2).
-    candidates = health.order(candidates);
+    const remember = !!(requested && skill==='chat' && bearerPayments && !deps.observeRejectedCompletion);
+    candidates = health.order(remember ? await routes.prefer(candidates) : candidates);
 
     // Fallback models follow, each on any provider that serves it.
     const tried = new Set(candidates.map(c => c.model.id));
@@ -874,6 +880,11 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       let extra = await resolveCandidates(id);
       if (imageTurn) extra = extra.filter(c => acceptsImages(c.model));
       for (const c of health.order(extra)) candidates.push({ ...c, fallback: true });
+    }
+    if (bearerPayments && candidates.length) {
+      candidates = candidates.filter(c=>routes.quote(c.baseUrl,c.model.id)<=estimateSats(cfg,'chat'));
+      if (!candidates.length) return providerFailure(ERROR_CODES.PROVIDER_PAYMENT_REQUIRED,
+        'The available providers require more than your per-request limit. No payment was sent.');
     }
     candidates = candidates.slice(0, MAX_TURN_ATTEMPTS);
 
@@ -918,12 +929,16 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
     for (const cand of candidates) {
       if (alternateFor !== null &&
           (cand.model.id !== alternateFor || new URL(cand.baseUrl).origin === declinedHost)) continue;
-      attemptedModels.push(cand.model.id);
       if (budget && !worthAttempting(budget.remainingMs())) {
         attempt = providerFailure(ERROR_CODES.BUDGET_EXHAUSTED, `routstr skipped: ${describeBudget(budget)}`);
         break;
       }
-      const sats = satsFor(cand.model, messages);
+      const minimum = bearerPayments ? routes.quote(cand.baseUrl,cand.model.id) : 0;
+      if (minimum > estimateSats(cfg,'chat')) {
+        attempt ??= providerFailure(ERROR_CODES.PROVIDER_PAYMENT_REQUIRED,'The provider requires more than your per-request limit. No payment was sent to it.');
+        continue;
+      }
+      const sats = Math.max(minimum,satsFor(cand.model, messages));
       // Reserve a total sats allowance for the whole turn: halt before the
       // accumulated reservations exceed the operator's monetary allowance.
       if (reservedSats + sats > satsTurnAllowance) {
@@ -933,6 +948,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
         );
         break;
       }
+      attemptedModels.push(cand.model.id);
       reservedSats += sats;
       // A stream that keeps arriving may use the turn, less the refund margin.
       const streamMs = budget ? Math.max(0, budget.remainingMs() - SETTLE_MARGIN_MS) : 0;
@@ -942,6 +958,7 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
         { onDelta: relay, telemetry, streamMs, mints: cand.mints });
       if (attempt.ok) {
         health.ok(cand.baseUrl, cand.model.id);
+        if (remember && cand.model.id===requested && !attempt.refund_pending) await routes.success(cand.baseUrl,cand.model.id);
         const first = candidates[0];
         if (cand !== first || (requested && cand.model.id !== requested)) {
           // Say who answered and who did not (never a silent switch).

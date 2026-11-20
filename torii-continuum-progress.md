@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.219-alpha: keep the proven route
+
+Reproduced the 52-minute gap and loss of a successful alternate with simulated payments. Persist an opaque recent success and use explicit provider minimums only within existing caps. No paid acceptance request.
+
 ## v0.2.218-alpha: distinguish wallet balance from provider payment
 
 Normal chat mistook the provider's 402 in a refund-status message for an empty wallet. Separated wallet, mint and provider errors and increased admission headroom within the existing limit. Tests exercise the frontend decision, provider return path, true local shortfall and capped funding. No second paid diagnostic.
