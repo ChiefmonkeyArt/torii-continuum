@@ -1,5 +1,9 @@
 # Continuum — Session Handover
 
+## Main chat and wallet screen (2026-11-20)
+
+Rollback checkpoint `v0.2.215-alpha` (`139c8a4`). Top-up recovery remains available under Advanced. Normal chat still uses the same selected DeepSeek model; QVAC is unchanged. See `docs/adr-routstr-provider-fallback.md` for the exact payment guards. Use the PR receipt for deployment evidence; a real paid completion requires the owner's own turn or explicit separate test authorization.
+
 ## QVAC handoff (2026-11-20)
 
 Rollback checkpoint `v0.2.214-alpha` (`56cc486`). Install the new option only through a tagged deploy with `install_qvac=true`. The app smoke gate and Unix socket smoke gate are independent. The PR receipt records main/tag/VPS alignment after deployment. Owner check: Routstr → Local AI · QVAC → Ask locally. Normal chat is unchanged; do not send a paid test. See `docs/adr-qvac-local-chat.md` for timings, resource limits and disable instructions.

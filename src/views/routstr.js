@@ -210,12 +210,8 @@ export function renderRoutstr(mount, opts = {}) {
   mount.appendChild(header);
   if (live) header.appendChild(h('button', { type: 'button', onClick: () => openLocalChat() }, ['Local AI · QVAC']));
 
-  // Pending Top-Ups recovery card (Item 3): a placeholder at the very top of the
-  // Wallet section, populated asynchronously and only when the caller has
-  // unminted quotes on disk. Empty/errored → the slot stays empty.
+  // Keep recovery available on demand without treating old quotes as an alarm.
   const pendingSlot = h('div', { class: 'pending-topups-slot' });
-  mount.appendChild(pendingSlot);
-  if (live) mountPendingTopUps(pendingSlot, demo);
 
   // Primary controls only. Optional Lightning funding is under Advanced.
   const walletCards = h('div', { class: 'grid-2' }, [
@@ -252,12 +248,18 @@ export function renderRoutstr(mount, opts = {}) {
   ]);
   const advanced = h('details', { class: 'routstr-advanced' }, [
     h('summary', { text: 'Advanced · Lightning, usage and preferences' }),
+    pendingSlot,
     h('div', { class: 'grid-2', style: 'margin-top:16px;' }, [
       renderNwcCard(live, demo), renderUsage(c),
     ]),
     settings,
   ]);
   mount.appendChild(advanced);
+  if (live) advanced.addEventListener('toggle', function loadQuotes() {
+    if (!advanced.open) return;
+    advanced.removeEventListener('toggle', loadQuotes);
+    mountPendingTopUps(pendingSlot, demo);
+  });
   // Start only after the live nodes exist; a fast response cannot update an old
   // mount. Never display a cached browser amount as a freshly verified balance.
   if (live) { startBalancePoll(mount); startUsagePoll(mount); }

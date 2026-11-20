@@ -55,6 +55,42 @@ const ask = (r, extra = {}) => r.chat({ messages: [{ role: 'user', content: 'gm'
 const prov = (baseUrl, ids, mints = null) => ({ baseUrl, name: baseUrl.slice(8), mints,
   models: ids.map(id => ({ id, max_cost_sats: 10 })) });
 
+test('fully refunded rejection: exactly one alternative for the unchanged selected model', async () => {
+  for (const status of [400,401,402,404,408,422,429]) {
+    const t = await setup({ catalog: [prov(A,['m','f']),prov(B,['m','f'])],
+      provider: url => url.startsWith(A) ? json({},status) : sse('gm') });
+    try {
+      t.pay.wallet.receive = async () => ({ok:true,added_sats:10});
+      const reply = await ask(t.r);
+      assert.equal(reply.ok,true,reply.reason); assert.equal(reply.content,'gm');
+      assert.deepEqual(t.calls.map(c=>[c.base,c.model]), [[A,'m'],[B,'m']]);
+    } finally { await t.done(); }
+  }
+});
+
+test('blocked, unpaid, partially refunded or exhausted rejections never cascade', async () => {
+  for (const [status, refunded, pending, count] of [[403,10,false,1],[451,10,false,1],[402,0,true,1],[402,5,false,1],[429,10,false,2]]) {
+    const t = await setup({ catalog:[prov(A,['m','f']),prov(B,['m','f']),prov('https://c.example',['m'])],
+      provider: () => json({},status) });
+    try {
+      t.pay.wallet.receive=async()=>{if(pending)throw Error('fixture'); return {ok:true,added_sats:refunded};};
+      const reply=await ask(t.r);
+      assert.equal(reply.ok,false); assert.equal(reply.upstream_status,status); assert.match(reply.reason,new RegExp(`HTTP ${status}`));
+      assert.equal(t.calls.length,count); assert.ok(t.calls.every(c=>c.model==='m'));
+    } finally {await t.done();}
+  }
+});
+
+test('a partially refunded rejection stops this turn; a later owner turn prefers the other host', async () => {
+  const t=await setup({catalog:[prov(A,['m']),prov(B,['m'])],provider:url=>url.startsWith(A)?json({},402):sse('gm')});
+  try {
+    assert.equal((await ask(t.r)).ok,false);
+    assert.deepEqual(t.calls.map(c=>c.base),[A]);
+    assert.equal((await ask(t.r)).ok,true);
+    assert.deepEqual(t.calls.map(c=>c.base),[A,B]);
+  } finally {await t.done();}
+});
+
 test('mint keys normalise and unknown lists never exclude', () => {
   assert.equal(mintKey('https://Mint.Minibits.cash/Bitcoin/'), 'https://mint.minibits.cash/Bitcoin');
   assert.equal(mintKey('ftp://x'), null);

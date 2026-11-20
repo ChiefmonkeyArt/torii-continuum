@@ -1,5 +1,7 @@
 # Torii Continuum — Strategy & Next Steps
 
+Keep historical funding recovery out of the primary chat and wallet controls without dropping claims. Prefer another host for the same selected model over asking the owner to switch models; retry rejected payments only under the custody limits in the provider-fallback ADR.
+
 Local inference is an explicit choice, not a paid-chat replacement. The separately sandboxed QVAC owner chat is text-only and has no access to tools or wallet workflows; see `docs/adr-qvac-local-chat.md`.
 
 ## Next priority after the Teams MVP: FIPS on by default (owner, 2026-11-04)

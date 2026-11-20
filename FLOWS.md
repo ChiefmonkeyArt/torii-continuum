@@ -12,7 +12,8 @@ signer/API fixtures, never a real wallet or paid chat.
 - Top Up opens Lightning invoice dialog; Cancel closes it; Cashu fallback remains.
 - Model search/save/refresh retains the real API and DeepSeek selection.
 - Advanced expands NWC, usage and local preferences; local guides aren't caps.
-- Recovery panel remains visible when pending top-ups exist; no auto-redeem.
+- Old top-ups are absent from the main wallet screen. Expanding Advanced loads the recovery controls once; it never redeems or deletes a quote by itself.
+- Main chat: a fully refunded eligible rejection can reach one other host for the same model; pending or partial settlement cannot trigger that retry. No paid probe in release acceptance.
 - Auth failure, balance failure and missing values never imply zero/ready.
 
 ## Local acceptance evidence (2026-10-29)
