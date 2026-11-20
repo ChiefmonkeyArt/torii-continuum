@@ -692,6 +692,8 @@ export function createRoutstr(cfg, wallet, log, deps = {}) {
       }));
       if (!res.ok) {
         upstreamStatus = res.status;
+        // Only the operator-approved bounded probe installs this observer.
+        try { await deps.observeRejectedCompletion?.(res); } catch {}
         try { await res.body?.cancel(); } catch {}
         failureKind = res.status >= 500 ? 'upstream_5xx' : 'upstream_4xx';
         throw new Error('provider request failed');

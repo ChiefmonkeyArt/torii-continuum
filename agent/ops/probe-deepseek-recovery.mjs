@@ -9,6 +9,27 @@ import { createWallet } from '../core/wallet.mjs';
 import { isQuarantined } from '../core/provider-quarantine.mjs';
 
 export const PROBE_MODEL = 'deepseek-v4-flash';
+const known = new Set(`missing_api_key invalid_api_key key_not_found expired_api_key api_key_expired invalid_token unauthorized authentication_error authentication_failed invalid_authentication_error insufficient_balance insufficient_quota payment_required model_not_found invalid_request_error rate_limit_exceeded upstream_unavailable upstream_rate_limit`.split(' '));
+// Never return free text, headers, tokens, or an unknown provider-supplied string.
+export async function safeProviderCode(response) {
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  let bytes=0, parts=[];
+  try {
+    for (;;) {
+      const {value,done}=await reader.read();
+      if (done) break;
+      bytes+=value.byteLength;
+      if (bytes>8192) return null;
+      parts.push(value);
+    }
+    const body=JSON.parse(Buffer.concat(parts).toString('utf8'));
+    const code=(body?.detail?.error ?? body?.error ?? body?.detail ?? body)?.code;
+    if (Number.isInteger(code) && code>=400 && code<=599) return code;
+    return typeof code==='string' && known.has(code.toLowerCase()) ? code : null;
+  } catch { return null; }
+  finally { try { await reader.cancel(); } catch {} reader.releaseLock(); }
+}
 export async function runRecoveryProbe(cfg, { approved = false, log, emit = console.log,
   walletFactory = createWallet, routerFactory = createRoutstr, discover = discoverProviders,
   catalog = fetchProviderCatalog, now = Date.now } = {}) {
@@ -29,20 +50,23 @@ export async function runRecoveryProbe(cfg, { approved = false, log, emit = cons
   const wallet = await walletFactory(probeCfg, log);
   const before = (await wallet.balance()).total;
   let attempts = 0, deposits = 0, firstDelta = null;
-  const guardedWallet = { ...wallet, send: async sats => {
+  const guardedWallet = { ...wallet, send: async (sats, options) => {
     if (attempts || sats !== 1) throw new Error('approved single-deposit test limit reached');
     attempts++;
-    const sent = await wallet.send(sats, { maxDebitSats: 2 });
+    const sent = await wallet.send(sats, { ...(options?.mints ? {mints:options.mints} : {}), maxDebitSats: 2 });
     if (sent?.ok) deposits++;
     return sent;
   } };
-  const router = routerFactory(probeCfg, guardedWallet, log, { fetchCatalog: async () => [provider] });
+  let httpStatus=null, providerCode=null;
+  const router = routerFactory(probeCfg, guardedWallet, log, { fetchCatalog: async () => [provider],
+    observeRejectedCompletion: async res => { httpStatus=res.status; providerCode=await safeProviderCode(res); } });
   const started = now();
   try {
     const result = await router.chat({ messages, max_tokens: 128, onDelta() { firstDelta ??= now() - started; } });
     const after = (await wallet.balance()).total;
     const report = { event: 'approved_deepseek_recovery_probe', model: PROBE_MODEL,
       provider: provider.baseUrl, ok: result.ok, code: result.code || null,
+      http_status: httpStatus, provider_error_code: providerCode,
       failure_kind: result.failure_kind || null, duration_ms: now() - started,
       first_delta_ms: firstDelta, response_chars: result.ok ? String(result.content || '').length : 0,
       deposit_attempts: attempts, deposits, max_total_debit_sats: 2, net_wallet_change_sats: after - before,

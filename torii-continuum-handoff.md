@@ -1,5 +1,9 @@
 # Continuum — Session Handover
 
+## Single approved diagnostic (2026-11-20)
+
+Rollback `v0.2.216-alpha`. Run only the `deepseek_recovery` target once under its durable run guard. The PR receipt records the result; no second payment or test run is authorized.
+
 ## Main chat and wallet screen (2026-11-20)
 
 Rollback checkpoint `v0.2.215-alpha` (`139c8a4`). Top-up recovery remains available under Advanced. Normal chat still uses the same selected DeepSeek model; QVAC is unchanged. See `docs/adr-routstr-provider-fallback.md` for the exact payment guards. Use the PR receipt for deployment evidence; a real paid completion requires the owner's own turn or explicit separate test authorization.
