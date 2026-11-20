@@ -1,5 +1,9 @@
 # Torii Continuum — Master TODO
 
+## v0.2.217-alpha
+
+Capture the owner-approved one-shot result on the release PR. If the provider returns no recognized code, report that rather than printing the body or spending again.
+
 ## v0.2.216-alpha: main chat
 
 - [x] Remove the stale top-up notice from the main screen without deleting its recovery record.

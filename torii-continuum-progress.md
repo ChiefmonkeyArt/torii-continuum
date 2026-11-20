@@ -1,5 +1,9 @@
 # Torii Continuum — Progress log
 
+## v0.2.217-alpha: bounded provider diagnostic
+
+The single-deposit DeepSeek diagnostic now records HTTP status and a recognized provider error code, not response text. The existing maximum total wallet debit is two sats including fees. Normal chat routing and wallet settings are unchanged.
+
 ## v0.2.216-alpha: old top-ups and normal chat
 
 Moved invoice recovery into collapsed Advanced, without changing any wallet record. The normal Routstr path now distinguishes provider rejections and can try one other host for the identical model after a verified complete refund. The first failed turn's exact HTTP status was not recorded by the previous version. New offline regression cases cover both answering and stopping safely.
