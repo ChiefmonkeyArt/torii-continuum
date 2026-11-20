@@ -1,0 +1,11 @@
+[Unit]
+Description=Continuum private local AI socket
+[Socket]
+ListenStream=/run/continuum-qvac.sock
+SocketMode=0660
+SocketGroup=continuum
+Accept=yes
+MaxConnections=1
+RemoveOnStop=yes
+[Install]
+WantedBy=sockets.target

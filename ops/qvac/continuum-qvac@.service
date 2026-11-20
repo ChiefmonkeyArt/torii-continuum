@@ -1,0 +1,30 @@
+[Unit]
+Description=Continuum isolated QVAC text request
+[Service]
+ExecStart=/opt/continuum-qvac/env/bin/python -I -B /opt/continuum-qvac/worker.py
+StandardInput=socket
+StandardOutput=inherit
+StandardError=null
+DynamicUser=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+InaccessiblePaths=-/apps -/srv -/etc/torii -/opt/torii -/opt/torii-suite -/run/credentials
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+Environment=HOME=/tmp XDG_CACHE_HOME=/tmp/cache
+WorkingDirectory=/tmp
+UMask=0077
+Nice=10
+TasksMax=64
+MemoryMax=3500M
+RuntimeMaxSec=105
+TimeoutStopSec=2
+LimitCORE=0

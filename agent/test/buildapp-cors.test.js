@@ -34,6 +34,26 @@ function silentCfg() {
   };
 }
 
+test('local route authenticates before inference and sends only bounded text to QVAC', async () => {
+  const seen = [];
+  const { app } = await buildApp(silentCfg(), {
+    auth: { verifySessionToken: () => ({ ok: true, npub: 'fixture' }) },
+    askQvac: async (q, opts) => { seen.push(q); opts.onDelta('hello'); return 'hello'; },
+  });
+  try {
+    const request = { method: 'POST', url: '/api/local-chat', payload: { question: 'gm' } };
+    assert.equal((await app.inject(request)).statusCode, 401);
+    request.headers = { authorization: 'Bearer fixture' };
+    assert.equal((await app.inject({ ...request, payload: { question: ' ' } })).statusCode, 400);
+    assert.deepEqual(seen, []);
+    const result = (await app.inject(request)).json();
+    assert.equal(result.reply, 'hello'); assert.equal(result.sats_spent, 0);
+    const stream = await app.inject({ ...request, payload: { question: 'gm', stream: true } });
+    assert.match(stream.body, /"type":"delta"/); assert.match(stream.body, /"type":"done"/);
+    assert.deepEqual(seen, ['gm','gm']);
+  } finally { await app.close(); }
+});
+
 test('A22: importing buildApp does NOT listen or bind a port', async () => {
   const ctx = await buildApp(silentCfg());
   try {

@@ -30,6 +30,7 @@ import { createChatModelSettings, validModelId } from './core/chat-model-setting
 import { createGitHubConnection, registerGitHubRoutes } from './core/github-connection.mjs';
 import { createFips, registerFipsRoutes } from './core/fips.mjs';
 import { createOllama } from './core/ollama.mjs';
+import { askQvac, localQuestion } from './lib/qvac-local.mjs';
 import { createModelRouter } from './core/model-router.mjs';
 import { createChatSkill } from './skills/chat.mjs';
 import { parseHistory } from './lib/chat-history.mjs';
@@ -900,6 +901,29 @@ app.get(
 app.get('/api/health/secrets', { preHandler: requireAdmin }, async () => {
   const report = await secretStore.health();
   return { ok: report.ok, count: report.count, undecryptable: report.undecryptable };
+});
+
+// Isolated owner-only local chat. Not part of the paid router or action pipeline.
+app.post('/api/local-chat', { preHandler: requireAdmin, bodyLimit: 16384 }, async (req, reply) => {
+  const q = localQuestion(req.body?.question);
+  if (!q) return reply.code(400).send({ error: 'Use a short text question (up to 2 KB).' });
+  reply.header('Cache-Control', 'no-store');
+  const channel = req.body?.stream === true ? openChatStream(reply) : null;
+  const ctl = new AbortController(), cancel = () => ctl.abort();
+  reply.raw.once('close', cancel);
+  try {
+    const answer = await (deps.askQvac ?? askQvac)(q, { signal: ctl.signal, onDelta: delta => channel?.emit({ type: 'delta', delta }) });
+    const data = { reply: answer, provider: 'qvac', model: 'Llama 3.2 1B', sats_spent: 0 };
+    if (!channel) return data;
+    channel.emit({ type: 'done', ...data });
+  } catch (err) {
+    const data = { error: err.message, code: 'local_unavailable' };
+    if (!channel) return reply.code(503).send(data);
+    channel.emit({ type: 'error', ...data });
+  } finally {
+    reply.raw.off('close', cancel); channel?.end();
+  }
+  return reply;
 });
 
 // 1 MB for this route only, matching nginx's client_max_body_size, so the

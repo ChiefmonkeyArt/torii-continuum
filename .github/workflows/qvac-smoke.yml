@@ -1,0 +1,26 @@
+name: Optional QVAC installation test
+on:
+  pull_request:
+    paths: ['ops/qvac/**', '.github/workflows/qvac-smoke.yml']
+permissions:
+  contents: read
+jobs:
+  offline-reply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install and test via the isolated service on this disposable runner
+        run: |
+          set -euo pipefail
+          sudo useradd --system --user-group --no-create-home continuum
+          sudo env "PATH=$PATH" unshare --mount --propagation private bash -ec '
+            mount -t tmpfs -o size=3G tmpfs /tmp
+            bash ops/qvac/install.sh
+            bash ops/qvac/install.sh
+          '

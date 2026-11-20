@@ -1,5 +1,11 @@
 # Torii Continuum — Master TODO
 
+## v0.2.215-alpha: optional QVAC
+
+- [x] Compare QVAC and Ollama on the same VPS/model, check cleanup candidates and measure installed footprint.
+- [x] Add isolated owner-only QVAC chat, deploy opt-in, and fail-closed tests.
+- [ ] Verify the tagged deploy and installed socket; record the live receipt on the PR.
+
 
 ## v0.2.214-alpha: a project AI member in the team chat
 
