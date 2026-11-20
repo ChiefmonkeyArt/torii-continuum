@@ -1,5 +1,10 @@
 # Torii Continuum — Master TODO
 
+## v0.2.219-alpha
+
+- [x] Reproduce and test selected-model route continuity, restart, bounded minimums and over-cap refusal using simulated payments.
+- [ ] Live post-release paid chat remains unverified. The read-only incident receipt does not disclose the rejecting hosts' required amounts.
+
 ## v0.2.218-alpha
 
 - [x] Separate owner-wallet shortfalls from provider 402s and mint restrictions; test capped admission headroom.

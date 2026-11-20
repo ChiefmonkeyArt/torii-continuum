@@ -1,5 +1,11 @@
 # Routstr falls back automatically
 
+### 2026-11-20: prefer a proven route over a repeating price-only search
+
+The [incident receipt](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/44755333547) records a successful normal reply, then two same-model attempts ending in 402 after 52 minutes. The router previously forgot successful hosts as soon as the failing hosts' short cooldown elapsed. Prefer the last settled, successful bearer host for the selected chat model for 24 hours, including across restart. Only reorder current eligible candidates; a resting route still goes last. Store only a fingerprint and timestamp. No vendor pin, discovery bypass, model change or hard-coded deposit.
+
+A settled 402 with an explicit, recognized msat minimum can inform a later independent request to that same host/model for ten minutes. Round up to sats and skip an above-cap route without paying. Do not grant extra retries, raise limits, parse arbitrary payment instructions, or retain the error body. No minimum is inferred from an unexplained 402. Cold starts without evidence still rely on discovery; external availability is not guaranteed.
+
 ### 2026-11-20: provider funding is not the owner's wallet balance
 
 The [owner-turn diagnostic](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/44742874555) recorded a provider 402, not a local insufficient-funds result. Treat these as distinct. Only the wallet deciding its total cannot cover the amount should offer Top Up. An incompatible mint, protected floor, unresolved refund, or rejected provider deposit is not evidence that the owner's wallet needs money. Structured errors take precedence over fallback text. Do not discard settlement details.

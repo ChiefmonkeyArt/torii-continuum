@@ -32,7 +32,7 @@ function payFixture() {
   return { records, store, wallet, fetchFn, sent };
 }
 
-async function setup({ catalog, provider, chatModel = 'm', ownerModel = null, fallback = { enabled: true, chat: ['f'] }, mode = 'ephemeral_bearer' }) {
+async function setup({ catalog, provider, now, chatModel = 'm', ownerModel = null, fallback = { enabled: true, chat: ['f'] }, mode = 'ephemeral_bearer' }) {
   const dir = await mkdtemp(join(tmpdir(), 'routstr-fallback-'));
   const pay = payFixture();
   const calls = [];
@@ -42,18 +42,43 @@ async function setup({ catalog, provider, chatModel = 'm', ownerModel = null, fa
     calls.push({ base: url.replace('/v1/chat/completions', ''), model: body.model, cashu: init.headers['X-Cashu'] });
     return provider(url, body, init);
   };
-  const r = createRoutstr({ session_secret: 'a'.repeat(64), routstr: { payment_mode: mode,
+  const restart = () => createRoutstr({ session_secret: 'a'.repeat(64), routstr: { payment_mode: mode,
     discovery: { enabled: false }, models: { chat: chatModel }, fallback,
     limits: { max_sats_per_request: 10, timeout_ms: 500, first_byte_ms: 200, idle_ms: 200 } },
     logging: { cost_log: join(dir, 'costs.jsonl') } }, pay.wallet, { info() {}, warn() {} }, {
-    fetchCatalog: async () => catalog, getChatModel: () => ownerModel,
+    now, fetchCatalog: async () => catalog, getChatModel: () => ownerModel,
     payment: { store: pay.store, fetchFn: pay.fetchFn }, watchdogTickMs: 5, refundRetryMs: 5,
   });
-  return { r, pay, calls, done: async () => { globalThis.fetch = saved; await rm(dir, { recursive: true, force: true }); } };
+  return { r: restart(), restart, pay, calls, done: async () => { globalThis.fetch = saved; await rm(dir, { recursive: true, force: true }); } };
 }
 const ask = (r, extra = {}) => r.chat({ messages: [{ role: 'user', content: 'gm' }], ...extra });
 const prov = (baseUrl, ids, mints = null) => ({ baseUrl, name: baseUrl.slice(8), mints,
   models: ids.map(id => ({ id, max_cost_sats: 10 })) });
+
+test('a successful alternate stays first after 52 minutes and a daemon restart', async () => {
+  let clock=Date.now();
+  const t=await setup({catalog:[prov(A,['m']),prov(B,['m'])], now:()=>clock,
+    provider:url=>url.startsWith(A)?json({},402):sse('real reply')});
+  try {
+    t.pay.wallet.receive=async()=>({ok:true,added_sats:10});
+    assert.equal((await ask(t.r)).ok,true);
+    clock+=52*60000;
+    assert.equal((await ask(t.restart())).ok,true);
+    assert.deepEqual(t.calls.map(c=>c.base),[A,B,B]);
+  } finally { await t.done(); }
+});
+
+test('later independent turns use explicit provider minimum, not a second same-turn payment',async()=>{
+  const p=prov(A,['m']); p.models[0].pricing_sats={request:0,prompt:0,completion:0};
+  const amounts=[];
+  const t=await setup({catalog:[p],provider:()=>amounts.at(-1)>=4?sse('ok'):
+    json({detail:{error:{code:'insufficient_balance',message:'Insufficient balance: 3100 mSats required. 2000 available. (reserved: 0)'}}},402)});
+  try {
+    const send=t.pay.wallet.send; t.pay.wallet.send=(s,o)=>{amounts.push(s);return send(s,o);};
+    assert.equal((await ask(t.r)).ok,false);assert.deepEqual(amounts,[2]);
+    assert.equal((await ask(t.r)).ok,true);assert.deepEqual(amounts,[2,4]);
+  } finally {await t.done();}
+});
 
 test('cheap bearer request has refundable admission headroom, never above the configured ceiling',async()=>{
   for(const [price,expected] of [[0.00001,2],[10,10]]) {
@@ -66,6 +91,16 @@ test('cheap bearer request has refundable admission headroom, never above the co
       assert.equal((await ask(t.r)).ok,true); assert.equal(allocated,expected); assert.equal(t.calls.length,1);
     } finally {await t.done();}
   }
+});
+
+test('an explicit above-cap quote cannot cause another deposit on a later turn',async()=>{
+  const p=prov(A,['m']); p.models[0].pricing_sats={request:0,prompt:0,completion:0};
+  const t=await setup({catalog:[p],provider:()=>json({detail:{type:'minimum_balance_required',amount_required_msat:10001}},402)});
+  try {
+    assert.equal((await ask(t.r)).ok,false);
+    const next=await ask(t.r); assert.equal(next.ok,false);assert.match(next.reason,/limit/);
+    assert.equal(t.pay.sent.length,1);
+  } finally {await t.done();}
 });
 
 test('fully refunded rejection: exactly one alternative for the unchanged selected model', async () => {

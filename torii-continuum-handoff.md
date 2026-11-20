@@ -1,5 +1,9 @@
 # Continuum — Session Handover
 
+## DeepSeek route continuity
+
+Rollback: `v0.2.218-alpha`. The [read-only VPS incident](https://github.com/ChiefmonkeyArt/torii-quest/actions/runs/44755333547) distinguishes the successful 13:44 reply from the 14:36 rejection. The new receipt learns from successful eligible chats, not from a catalog listing. Leave wallet claims and the separate signer/history guard intact.
+
 ## Provider 402 follow-up (2026-11-20)
 
 Rollback `v0.2.217-alpha`. The previous one-shot DeepSeek probe succeeded on Non-KYC AI; the subsequent normal owner turn got provider HTTP 402. No evidence that the wallet total was insufficient. Preserve all claims, the owner model and spending limits. Use the release PR receipt for live deployment; an actual new paid reply is not part of automated acceptance.
