@@ -29,9 +29,10 @@ declare -A INSTALLER=(
   [gliclass]=install-gliclass.sh
   [gliclass_bench]=bench-gliclass.sh
   [gliclass_remove]=remove-gliclass.sh
+  [turn]=install-turn.sh
 )
 declare -A FLAG=([teams]=INSTALL_TEAMS [continuum_host]=INSTALL_CONTINUUM_HOST [teams_app]=INSTALL_TEAMS_APP [auctions]=INSTALL_AUCTIONS
-  [gliclass]=INSTALL_GLICLASS)
+  [gliclass]=INSTALL_GLICLASS [turn]=INSTALL_TURN)
 IFS=, read -r -a list <<< "$stages"
 for s in "${list[@]}"; do [[ -n "${INSTALLER[$s]:-}" ]] || die "unknown stage: $s"; done
 
