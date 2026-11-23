@@ -24,6 +24,11 @@ on:
         required: false
         default: false
         type: boolean
+      turn_test:
+        description: 'turn stage only: add the temporary torii-test login from the TURN_TEST_PASSWORD secret (run turn again without this to remove it)'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: deploy-vps
@@ -94,6 +99,16 @@ jobs:
           SUITE_TAG: ${{ inputs.suite_tag }}
           STAGES: ${{ inputs.stages }}
           ENABLE: ${{ inputs.enable && '1' || '0' }}
+          TURN_TEST: ${{ inputs.turn_test && '1' || '0' }}
+          TURN_TEST_PASSWORD: ${{ inputs.turn_test && secrets.TURN_TEST_PASSWORD || '' }}
         run: |
           set -euo pipefail
-          ~/vssh sudo -n bash -s -- "$SUITE_TAG" "$STAGES" "$ENABLE" < ops/lib/run-suite-stages.sh 2>&1 | bash ~/mask
+          pre=""
+          if [[ "$TURN_TEST" == 1 ]]; then
+            [[ ",$STAGES," == *",turn,"* ]] || { echo "::error::turn_test needs the turn stage"; exit 1; }
+            [[ "$TURN_TEST_PASSWORD" =~ ^[A-Za-z0-9]{24,64}$ ]] || { echo "::error::TURN_TEST_PASSWORD secret missing or invalid"; exit 1; }
+            echo "::add-mask::$TURN_TEST_PASSWORD"
+            # Sent inside the stdin script, never on a command line.
+            pre="$(printf 'export TORII_TURN_TEST_PASSWORD=%q' "$TURN_TEST_PASSWORD")"
+          fi
+          { printf '%s\n' "$pre"; cat ops/lib/run-suite-stages.sh; } | ~/vssh sudo -n bash -s -- "$SUITE_TAG" "$STAGES" "$ENABLE" 2>&1 | bash ~/mask
