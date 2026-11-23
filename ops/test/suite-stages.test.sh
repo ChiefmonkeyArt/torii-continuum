@@ -17,6 +17,9 @@ grep -q '\[gliclass_remove\]=remove-gliclass.sh' "$script" || fail "gliclass_rem
 grep -q '\[gliclass\]=INSTALL_GLICLASS' "$script" || fail "gliclass flag"
 grep -q 'gliclass_remove) set_env INSTALL_GLICLASS 0' "$script" || fail "remove keeps it off"
 grep -q 'ollama_remove) set_env INSTALL_OLLAMA 0' "$script" || fail "ollama remove keeps it off"
+# Suite ADR 0008: the TURN relay for Torii Companion calls, opt-in.
+grep -q '\[turn\]=install-turn.sh' "$script" || fail "turn installer"
+grep -q '\[turn\]=INSTALL_TURN' "$script" || fail "turn flag"
 # Removal flags are written after enable=1 flags, so a remove stage always wins.
 r="$(grep -n 'gliclass_remove) set_env' "$script" | cut -d: -f1)"; e="$(grep -n 'if \[\[ "\$enable" == 1 \]\]' "$script" | cut -d: -f1)"
 (( r > e )) || fail "removal must come after enable"
